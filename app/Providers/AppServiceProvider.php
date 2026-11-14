@@ -77,9 +77,11 @@ class AppServiceProvider extends ServiceProvider
         FilamentAsset::register([
             Js::make('barcode-scanner', resource_path('js/barcode-scanner.js')),
             Js::make('driver-offline', resource_path('js/driver-offline.js')),
-            // Maps & routes: the stops map (Leaflet + OpenStreetMap), only on the pages that show it
-            Js::make('leaflet', base_path('node_modules/leaflet/dist/leaflet.js'))->loadedOnRequest(),
-            Css::make('leaflet', base_path('node_modules/leaflet/dist/leaflet.css'))->loadedOnRequest(),
+            // Maps & routes: the stops map (Leaflet 1.9.4 + OpenStreetMap), only on the pages that show it.
+            // Kept in resources/vendor so the server does not need node_modules (composer runs
+            // filament:upgrade, which publishes these files, before any npm step).
+            Js::make('leaflet', resource_path('vendor/leaflet/leaflet.js'))->loadedOnRequest(),
+            Css::make('leaflet', resource_path('vendor/leaflet/leaflet.css'))->loadedOnRequest(),
             Js::make('trip-map', resource_path('js/trip-map.js'))->loadedOnRequest(),
             Js::make('truck-map', resource_path('js/truck-map.js'))->loadedOnRequest(),
         ]);
