@@ -3,6 +3,7 @@
 use App\Http\Controllers\AiChatController;
 use App\Http\Controllers\BoxPhotoController;
 use App\Http\Controllers\DriverOfflineController;
+use App\Http\Controllers\FuelController;
 use App\Http\Controllers\InstallQrController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\LoadingListController;
@@ -67,3 +68,6 @@ Route::middleware(['web', 'auth', 'throttle:120,1'])->post('/delivery-track', [T
 Route::middleware(['throttle:600,1'])->match(['get', 'post'], '/track/in/{token}', [TrackController::class, 'tracker'])
     ->withoutMiddleware([ValidateCsrfToken::class, VerifyCsrfToken::class, 'Illuminate\Foundation\Http\Middleware\PreventRequestForgery'])
     ->name('track.tracker');
+
+// Fuel › VAT: the month's fuel receipts for the accountant (signed-in staff, their own hub).
+Route::get('/fuel/vat-export', [FuelController::class, 'vatExport'])->middleware(['web', 'auth'])->name('fuel.vat-export');

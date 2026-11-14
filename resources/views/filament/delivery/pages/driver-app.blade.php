@@ -35,6 +35,10 @@
                 <span class="ds-sa__avatar is-green">{{ $initials }}</span>
             </header>
 
+            @if (\App\Support\Fuel\Fuel::ready())
+                <a href="{{ \App\Filament\Delivery\Pages\Fuel::getUrl() }}" class="ds-fd__home"><span aria-hidden="true">⛽</span><span><b>Add fuel</b><small>Photo of the receipt and the odometer</small></span><span class="ds-sa__chev">›</span></a>
+            @endif
+
             @if (! $trip)
                 <div class="ds-sa__empty">
                     <span class="ds-sa__empty-icon">@include('filament.scan.icon', ['name' => 'truck'])</span>

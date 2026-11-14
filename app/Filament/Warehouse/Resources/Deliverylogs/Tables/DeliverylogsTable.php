@@ -4,6 +4,7 @@ namespace App\Filament\Warehouse\Resources\Deliverylogs\Tables;
 
 use App\Filament\Tables\TripBoardColumns;
 use App\Filament\Warehouse\Pages\TripStops;
+use App\Filament\Warehouse\Pages\TripFuel;
 use App\Models\Deliverylog;
 use App\Models\Logistichub;
 use Filament\Actions\Action;
@@ -196,6 +197,13 @@ class DeliverylogsTable
                     ->button()
                     ->color('gray')
                     ->url(fn ($record): string => TripStops::getUrl(['trip' => $record->id])),
+                Action::make('fuel')
+                    ->label('Fuel')
+                    ->icon('heroicon-o-beaker')
+                    ->button()
+                    ->color('gray')
+                    ->visible(fn (): bool => \App\Support\Fuel\Fuel::ready())
+                    ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
                 ActionGroup::make([
                     Action::make('locktrip')
                         ->requiresConfirmation()

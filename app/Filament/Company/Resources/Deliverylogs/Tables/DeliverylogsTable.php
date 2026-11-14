@@ -3,6 +3,7 @@
 namespace App\Filament\Company\Resources\Deliverylogs\Tables;
 
 use App\Filament\Company\Pages\TripStops;
+use App\Filament\Company\Pages\TripFuel;
 use App\Filament\Tables\TripBoardColumns;
 use App\Models\Deliverylog;
 use App\Models\Tripinvoice;
@@ -91,6 +92,13 @@ class DeliverylogsTable
                     ->button()
                     ->color('gray')
                     ->url(fn ($record): string => TripStops::getUrl(['trip' => $record->id])),
+                Action::make('fuel')
+                    ->label('Fuel')
+                    ->icon('heroicon-o-beaker')
+                    ->button()
+                    ->color('gray')
+                    ->visible(fn (): bool => \App\Support\Fuel\Fuel::ready())
+                    ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
                 Action::make('releasetruct')
                     ->requiresConfirmation()
                     ->label('Released Truck')
