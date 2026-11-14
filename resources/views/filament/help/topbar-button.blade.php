@@ -1,0 +1,1 @@
+<button type="button" class="ds-help-q" x-data x-on:click="$dispatch('open-help')" title="{{ $tl ? 'Tulong para sa page na ito' : 'Help for this page' }}" aria-label="{{ $tl ? 'Tulong para sa page na ito' : 'Help for this page' }}">?</button>

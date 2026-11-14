@@ -1,0 +1,335 @@
+<?php
+
+namespace App\Filament\Resources\Deliverylogs\RelationManagers;
+
+use App\Filament\Actions\BulkPrintReceipts;
+use App\Filament\Exports\TripinvoiceExporter;
+use App\Filament\Pages\Routeinvoice;
+use App\Filament\Tables\DeliveryAttemptColumns;
+use App\Filament\Tables\TruckSpotColumn;
+use App\Models\Consolidator;
+use App\Models\Deliverylog;
+use App\Models\Invoice;
+use App\Models\Logistichub;
+use App\Models\Tripinvoice;
+use App\Services\TripAssignment;
+use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkAction;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\ExportAction;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TextInput;
+use Filament\Notifications\Notification;
+use Filament\Resources\RelationManagers\RelationManager;
+use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Columns\Summarizers\Count;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\RecordActionsPosition;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Grouping\Group;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
+
+class TripinvoicesRelationManager extends RelationManager
+{
+    protected static string $relationship = 'tripinvoices';
+
+    public function form(Schema $schema): Schema
+    {
+        return $schema
+            ->components([
+                TextInput::make('trip_number')
+                    ->required()
+                    ->maxLength(255),
+            ]);
+    }
+
+    public function table(Table $table): Table
+    {
+        return $table
+            ->modifyQueryUsing(fn (Builder $query) => $query->withCount(['deliveryAttempts', 'deliveryReversals'])->with([...DeliveryAttemptColumns::eagerLoad(), 'invdata.consolidator:id,code,company_name', 'invdata.routearea', 'invdata.container', 'invoiceissue.boxissue', 'deliverylog']))
+            ->defaultGroup('invdata.receiver_name')
+            ->groups([
+                Group::make('invdata.receiver_name')
+                    ->label('Receiver Name'),
+                Group::make('invdata.boxtype')
+                    ->label('Box Type'),
+                Group::make('invdata.routearea.description')
+                    ->label('Route Area'),
+                Group::make('invdata.container.batch_no')
+                    ->label('Batch No'),
+                Group::make('invdata.receiver_barangay')
+                    ->label('Barangay'),
+                Group::make('invdata.receiver_city')
+                    ->label('City'),
+                Group::make('invdata.receiver_province')
+                    ->label('Province'),
+
+            ])
+            ->collapsedGroupsByDefault()
+            // ->poll('5s')
+            ->deferLoading()
+            ->recordTitleAttribute('id')
+            ->columns([
+                TruckSpotColumn::make(),
+                TextColumn::make('invdata.consolidator.company_name')
+                    ->label('Company'),
+                TextColumn::make('deliverylog.trip_number')
+                    ->label('Trip Number'),
+                //  ->searchable(),
+                TextColumn::make('invdata.invoice')
+                    ->sortable()
+                    ->searchable(isIndividual: true, isGlobal: false)
+                    ->label('Invoice No.'),
+                DeliveryAttemptColumns::column(),
+                TextColumn::make('problem')
+                    ->badge()
+                    ->color('danger')
+                    ->label('Problem')
+                    ->getStateUsing(fn ($record) => $record->invoiceissue->pluck('boxissue.issue_type')->filter()->unique()->join(', ') ?: null),
+                IconColumn::make('invdata.is_resolved')
+                    ->label('Resolved')
+                    ->icon(fn ($state) => $state ? 'heroicon-o-check-circle' : null)
+                    ->color('success'),
+                TextColumn::make('invdata.batchno')
+                    ->label('Batch No')
+                    ->sortable(),
+                TextColumn::make('invdata.is_priority')
+                    ->label('Priority')
+                    // ->badge()
+                    ->formatStateUsing(fn ($state) => $state ? 'PRIORITY' : null)
+                    ->color(fn ($state) => $state ? 'success' : null),
+                TextColumn::make('invdata.container.batch_year')
+                    ->label('Batch Year')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('invdata.sender_name')
+                    ->sortable()
+                    ->label('Sender'),
+                TextColumn::make('invdata.receiver_name')
+                    ->sortable()
+                    ->label('Receiver'),
+                TextColumn::make('invdata.receiver_address')
+                    ->label('Address'),
+                TextColumn::make('invdata.receiver_province')
+                    ->sortable()
+                    //   ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('Province'),
+                TextColumn::make('invdata.receiver_city')
+                    //     ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('City/Municipality'),
+                TextColumn::make('invdata.receiver_barangay')
+                    //        ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('Barangay'),
+                TextColumn::make('invdata.boxtype')
+                    ->label('Box Type')
+                    ->summarize(Count::make()->label('Total')),
+                // TextColumn::make('invoice.routearea.description')
+                //     ->label('Route Area'),
+                IconColumn::make('is_loaded')
+                    ->label('Loaded')
+                    ->color(fn (bool $state) => $state ? 'success' : 'danger')
+                    ->icon(fn (bool $state) => match ($state) {
+                        true => 'heroicon-o-check-circle',
+                        false => 'heroicon-o-x-circle',
+                    }),
+
+            ])->searchOnBlur()
+            ->persistSearchInSession()
+            ->persistColumnSearchesInSession()
+            ->filters([
+
+                Filter::make('is_loaded')
+                    ->label('Not Loaded')
+                    ->toggle()
+                    ->query(fn (Builder $query): Builder => $query->where('is_loaded', false)),
+                SelectFilter::make('company')
+                    ->label('Company')
+                    ->multiple()
+                    //  ->searchable()
+                    ->options(
+                        Consolidator::orderBy('company_name')
+                            ->pluck('company_name', 'code')
+                    )
+                    ->query(function ($query, array $data) {
+                        if (! $data['values']) {
+                            return;
+                        }
+
+                        $query->whereHas('invoice', function ($q) use ($data) {
+                            $q->whereIn('location_code', $data['values']);
+                        });
+                    }),
+
+            ])->deferFilters(false)
+            ->headerActions([
+                Action::make('Assign Invoice')
+                    ->url(fn ($livewire) => Routeinvoice::getUrl(['ownerRecord' => $livewire->ownerRecord->getKey()])),
+                ExportAction::make()
+                    ->label('Export')
+                    ->exporter(TripinvoiceExporter::class)
+                    ->color('info')
+                    ->icon('heroicon-o-arrow-down-tray'),
+
+            ])
+            ->recordActions([
+                ActionGroup::make([
+                    DeliveryAttemptColumns::action(),
+                    DeliveryAttemptColumns::undoAction(),
+                    // Print Function
+                    Action::make('Priority')
+                        ->label('Mark as Priority')
+                        ->color('warning')
+                        ->icon(Heroicon::ExclamationTriangle)
+                        ->action(function ($record) {
+                            $record->invoice()->update([
+                                'is_priority' => true,
+                            ]);
+                            Notification::make()
+                                ->title('Invoice marked as priority')
+                                ->success()
+                                ->send();
+                        }),
+                    Action::make('Unpriority')
+                        ->label('Mark as Unpriority')
+                        ->color('danger')
+                        ->icon(Heroicon::ExclamationTriangle)
+                        ->action(function ($record) {
+                            $record->invoice()->update([
+                                'is_priority' => false,
+                            ]);
+                            Notification::make()
+                                ->title('Invoice marked as unpriority')
+                                ->success()
+                                ->send();
+                        }),
+                    Action::make('Print')
+                        ->label('Print')
+                        ->color('primary')
+                        ->icon('heroicon-o-printer')
+                        ->url(fn (Model $record) => route('invoicepdf', $record->invoice_id))
+                        ->openUrlInNewTab(),
+                    Action::make('Delete')
+                        ->label('Remove')
+                        ->action(function (Tripinvoice $record): void {
+                            try {
+                                app(TripAssignment::class)->removeFromDeliveryTrip($record);
+                            } catch (\DomainException $exception) {
+                                Notification::make()->title($exception->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            Notification::make()->title('Invoice removed from the trip')->success()->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('danger')
+                        ->icon('heroicon-o-trash'),
+
+                ]),
+
+            ], position: RecordActionsPosition::BeforeColumns)
+            ->toolbarActions([
+                BulkPrintReceipts::make(),
+                BulkActionGroup::make([
+                    BulkAction::make('delete')
+                        ->label('Remove ')
+                        ->action(function ($records) {
+                            try {
+                                foreach ($records as $record) {
+                                    app(TripAssignment::class)->removeFromDeliveryTrip($record, returned: false);
+                                }
+                            } catch (\DomainException $exception) {
+                                Notification::make()->title($exception->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            Notification::make()
+                                ->title('Invoices removed from the trip')
+                                ->success()
+                                ->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('danger')
+                        ->icon('heroicon-o-trash'),
+                    BulkAction::make('Return')
+                        ->label('Return')
+                        ->icon(Heroicon::Backward)
+                        ->action(function ($records) {
+                            try {
+                                foreach ($records as $record) {
+                                    app(TripAssignment::class)->removeFromDeliveryTrip($record, returned: true);
+                                }
+                            } catch (\DomainException $exception) {
+                                Notification::make()->title($exception->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            Notification::make()
+                                ->title('Invoices marked as returned')
+                                ->success()
+                                ->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('warning'),
+                    BulkAction::make('Move')
+                        ->label('Move to Another Trip')
+                        ->icon(Heroicon::ArrowRight)
+                        ->color('info')
+                        ->schema([
+                            Select::make('deliverylog_id')
+                                ->label('Select Target Trip')
+                                ->searchable()
+                                ->options(function () {
+                                    return Deliverylog::where('is_active', true)
+                                        ->where('logistichub_id', Auth::user()->logistichub_id)
+                                        ->get()
+                                        ->mapWithKeys(function ($record) {
+                                            //    dd($record->logistichub->hub_name);
+                                            $assignTo = $record->assigned_to ?? 'N/A';
+                                            $going_to = Logistichub::where('id', $assignTo)->value('hub_name') ?? 'N/A';
+
+                                            return [
+                                                $record->id => "{$record->trip_number} | {$going_to}",
+                                            ];
+                                        });
+                                })
+                                ->required(),
+
+                        ])
+                        ->action(function (Collection $records, array $data) {
+
+                            $deliverylogdata = Deliverylog::find($data['deliverylog_id']);
+                            if ($this->ownerRecord->assigned_to == $deliverylogdata->assigned_to) {
+                                foreach ($records as $record) {
+                                    $record->update([
+                                        'deliverylog_id' => $data['deliverylog_id'],
+                                    ]);
+                                }
+                                Notification::make()
+                                    ->title('Invoices moved successfully')
+                                    ->success()
+                                    ->send();
+                            } else {
+                                Notification::make()
+                                    ->title('Cannot move invoices to a trip assigned to a different Hub')
+                                    ->danger()
+                                    ->send();
+                            }
+                            //   $recordIds = $records->pluck('id')->toArray();
+
+                            // Redirect to the move page with the selected record IDs
+                            //  redirect()->route('filament.pages.movetripinvoice', ['recordIds' => implode(',', $recordIds)]);
+                        }),
+                ]),
+            ]);
+    }
+}
