@@ -46,9 +46,9 @@
             @endif
             <p class="ds-board__muted">
                 @if ($provider === 'google')
-                    Get a key at console.cloud.google.com → APIs &amp; Services. Turn on <b>Geocoding API</b> and <b>Directions API</b>. The key stays on the server; the map picture in the app is OpenStreetMap, so it is not shown to phones.
+                    Get a key at console.cloud.google.com → APIs &amp; Services. Turn on <b>Geocoding API</b> and <b>Routes API</b> (the older Directions API also still works). The key stays on the server; the map picture in the app is OpenStreetMap, so it is not shown to phones.
                 @else
-                    Get a free key at openrouteservice.org → Sign up → Dashboard → Tokens.
+                    Get a free key at openrouteservice.org → Sign up → Dashboard → Tokens (the same key works on api.heigit.org).
                 @endif
             </p>
         @endif

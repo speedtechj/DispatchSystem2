@@ -72,6 +72,21 @@ class ScanApp extends Page
     #[Locked]
     public ?array $spot = null;
 
+    /** Unload: the section (or waiting truck) of the box just scanned. */
+    #[Locked]
+    public ?array $route = null;
+
+    /** The box's set: "2 of 3 · 1 more still in this container". */
+    #[Locked]
+    public ?array $setInfo = null;
+
+    /** Load truck: the box is for another hub. */
+    #[Locked]
+    public ?array $wrongHub = null;
+
+    /** Unload: the list of trucks to pick from is open. */
+    public bool $truckPicker = false;
+
     /** Show the finished and closed ones on the pick list too (greyed out). */
     public bool $showFinished = false;
 
@@ -217,7 +232,7 @@ class ScanApp extends Page
 
     protected function clearResult(): void
     {
-        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot');
+        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub');
     }
 
     /** Called by the camera or the typed box number. */
@@ -229,8 +244,58 @@ class ScanApp extends Page
     /** After "too early": load that box anyway. */
     public function loadAnyway(): void
     {
-        if ($code = $this->early['code'] ?? null) {
+        if ($code = $this->early['code'] ?? $this->wrongHub['code'] ?? null) {
             $this->runScan($code, true);
+        }
+    }
+
+    // ------------------------------------------------------------------ sections, truck waiting, sets
+
+    /** Unload: take the box off the waiting truck and keep it in its section. */
+    public function putInSection(): void
+    {
+        $station = $this->station();
+        if ($this->mode !== 'unload' || ! $this->invoiceId || ! $station || ! method_exists($station, 'putInSection') || ! $station->putInSection($this->invoiceId)) {
+            return;
+        }
+        $this->route = $station->route;
+        $this->message = $station->lastMessage;
+    }
+
+    public function openTruckPicker(bool $open = true): void
+    {
+        $this->truckPicker = $open && $this->mode === 'unload';
+    }
+
+    public function truckStart(int $tripId): void
+    {
+        $station = $this->station();
+        if ($this->mode === 'unload' && $station && method_exists($station, 'startTruck') && $station->startTruck($tripId)) {
+            $this->truckPicker = false;
+            Notification::make()->title('Truck waiting: its boxes now go straight onto it')->success()->send();
+        }
+    }
+
+    public function truckPause(bool $paused): void
+    {
+        if ($this->mode === 'unload' && ($station = $this->station()) && method_exists($station, 'pauseTruck')) {
+            $station->pauseTruck($paused);
+        }
+    }
+
+    public function truckStop(): void
+    {
+        if ($this->mode === 'unload' && ($station = $this->station()) && method_exists($station, 'stopTruck')) {
+            $station->stopTruck();
+        }
+    }
+
+    /** Load truck, Done screen: why a box of a customer's set stays behind. */
+    public function splitReason(int $invoiceId, string $reason): void
+    {
+        $station = $this->station();
+        if ($station && method_exists($station, 'recordSplit')) {
+            $station->recordSplit($invoiceId, $reason);
         }
     }
 
@@ -257,6 +322,9 @@ class ScanApp extends Page
         }
         $this->early = property_exists($station, 'early') ? $station->early : null;
         $this->spot = property_exists($station, 'spot') ? $station->spot : null;
+        $this->route = property_exists($station, 'route') ? $station->route : null;
+        $this->setInfo = property_exists($station, 'setInfo') ? $station->setInfo : null;
+        $this->wrongHub = property_exists($station, 'wrongHub') ? $station->wrongHub : null;
 
         if ($this->status === 'success') {
             $this->sessionScans++;
@@ -356,11 +424,19 @@ class ScanApp extends Page
         $progress = ['loaded' => 0, 'total' => 0];
         $target = null;
         $loadNext = null;
+        $team = [];
+        $truck = null;
+        $trucks = collect();
+        $openSets = [];
         if (in_array($this->screen, ['scan', 'done'], true) && $mode && $this->choice) {
             $station = $this->station();
             $progress = $station->progress();
             $target = $station->appChoices()->firstWhere('id', $this->choice);
             $loadNext = $this->screen === 'scan' && method_exists($station, 'loadNext') ? $station->loadNext() : null;
+            $team = method_exists($station, 'team') ? $station->team() : [];
+            $truck = method_exists($station, 'truckStatus') ? $station->truckStatus() : null;
+            $trucks = $this->truckPicker && method_exists($station, 'truckChoices') ? $station->truckChoices() : collect();
+            $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
         }
 
         $todayPhotos = BoxPhoto::where('user_id', $user?->id)->whereDate('taken_at', today());
@@ -383,6 +459,11 @@ class ScanApp extends Page
             'progress' => $progress,
             'target' => $target,
             'loadNext' => $loadNext,
+            'team' => $team,
+            'truck' => $truck,
+            'trucks' => $trucks,
+            'openSets' => $openSets,
+            'splitReasons' => \App\Models\Boxes\SetSplit::REASONS,
             'box' => $this->invoiceId ? Invoice::find($this->invoiceId) : null,
             'conditions' => BoxPhoto::CONDITIONS,
             'shots' => $this->status === 'success' ? $this->shots() : collect(),

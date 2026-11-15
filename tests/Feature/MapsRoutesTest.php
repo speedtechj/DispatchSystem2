@@ -61,6 +61,11 @@ function fakeGoogle(): void
 
             return Http::response(['status' => 'ZERO_RESULTS', 'results' => []]);
         },
+        'routes.googleapis.com/*' => fn ($request) => Http::response(['routes' => [[
+            // the map's own order: keep the stops as sent, but say how far it is
+            'optimizedIntermediateWaypointIndex' => range(0, count($request['intermediates']) - 1),
+            'legs' => array_fill(0, count($request['intermediates']) + 1, ['distanceMeters' => 5000, 'duration' => '600s']),
+        ]]]),
         'maps.googleapis.com/maps/api/directions/*' => fn ($request) => Http::response(['status' => 'OK', 'routes' => [[
             // the map's own order: keep the stops as sent, but say how far it is
             'waypoint_order' => range(0, substr_count($request['waypoints'], '|') - 1),
@@ -141,7 +146,7 @@ it('sorts by straight line when the map route fails, and puts a stop without a p
 
     Invoice::where('invoice', 'X-1')->update(['receiver_address' => 'Purok 9 near chapel']);
     // Pedro's address is not found
-    Http::fake(['api.openrouteservice.org/geocode/*' => function ($request) {
+    Http::fake(['api.heigit.org/pelias/*' => function ($request) {
         if (str_contains($request['text'], 'Purok 9')) {
             return Http::response(['features' => []]);
         }
@@ -152,7 +157,7 @@ it('sorts by straight line when the map route fails, and puts a stop without a p
         }
 
         return Http::response(['features' => []]);
-    }, 'api.openrouteservice.org/optimization' => Http::response('down', 500)]);
+    }, 'api.heigit.org/vroom/*' => Http::response('down', 500)]);
 
     $route = TripSorter::sort($this->trip);
     $names = TripSorter::stops($this->trip)->pluck('name')->all();
@@ -333,4 +338,20 @@ it('saves the stops on the driver phone so Navigate works without signal', funct
         ->and($data['stops'][0]['go'])->toContain('Philippines'); // no pin yet: the address is sent
 
     expect(file_get_contents(resource_path('js/driver-offline.js')))->toContain('data-dso="nav"')->toContain('works offline with a downloaded map');
+});
+
+it('uses the older Google Directions API when Routes API is not switched on for the key', function () {
+    $start = [10.33, 123.90];
+    $points = ['a' => [10.34, 123.95], 'b' => [10.36, 124.00]];
+    Http::fake([
+        'routes.googleapis.com/*' => Http::response(['error' => ['code' => 403, 'status' => 'PERMISSION_DENIED']], 403),
+        'maps.googleapis.com/maps/api/directions/*' => Http::response(['status' => 'OK', 'routes' => [[
+            'waypoint_order' => [1, 0],
+            'legs' => [['distance' => ['value' => 7000], 'duration' => ['value' => 900]], ['distance' => ['value' => 3000], 'duration' => ['value' => 300]], ['distance' => ['value' => 9000], 'duration' => ['value' => 900]]],
+        ]]]),
+    ]);
+    $google = new ReflectionMethod(\App\Support\Maps\RoutePlanner::class, 'google');
+    $r = $google->invoke(null, $start, $points);
+    expect($r['order'])->toBe(['b', 'a'])->and($r['km'])->toBe(10.0)->and($r['minutes'])->toBe(20);
+    Http::assertSent(fn ($req) => str_contains($req->url(), 'routes.googleapis.com') && $req['optimizeWaypointOrder'] === true && $req->hasHeader('X-Goog-FieldMask'));
 });

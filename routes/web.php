@@ -71,3 +71,6 @@ Route::middleware(['throttle:600,1'])->match(['get', 'post'], '/track/in/{token}
 
 // Fuel › VAT: the month's fuel receipts for the accountant (signed-in staff, their own hub).
 Route::get('/fuel/vat-export', [FuelController::class, 'vatExport'])->middleware(['web', 'auth'])->name('fuel.vat-export');
+
+// Printable QR labels for the warehouse sections.
+Route::get('/sections/labels', App\Http\Controllers\SectionLabelsController::class)->middleware(['web', 'auth'])->name('sections.labels');

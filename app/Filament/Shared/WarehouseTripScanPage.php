@@ -98,13 +98,14 @@ abstract class WarehouseTripScanPage extends Page
         }
 
         if ($row->{$this->doneColumn()}) {
-            $this->scanResult('warning', "{$code} was already ".(static::$unloading ? 'received' : 'loaded').'.', $invoice);
+            $who = ! static::$unloading && $row->loaded_by && $row->loaded_by !== Auth::id() ? \App\Models\User::find($row->loaded_by)?->first_name : null;
+            $this->scanResult('warning', "{$code} was already ".(static::$unloading ? 'received' : 'loaded').($who ? " by {$who}" : '').'. Not counted again.', $invoice);
 
             return;
         }
 
         DB::transaction(function () use ($row, $invoice, $trip): void {
-            $row->update([$this->doneColumn() => true]);
+            $row->update([$this->doneColumn() => true] + (static::$unloading ? [] : ['loaded_by' => Auth::id(), 'loaded_at' => now()]));
 
             // The box now physically sits in the destination warehouse.
             if (static::$unloading) {

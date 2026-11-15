@@ -119,17 +119,65 @@ class RoutePlanner
         return 2 * $r * asin(min(1, sqrt($h)));
     }
 
-    /** Google Directions with "optimize" (up to 25 stops), a round trip from the start. */
+    /**
+     * Google road route with the stops put in the best order (up to 25 stops), a round trip
+     * from the start. Uses the Routes API; if that is not switched on for the key yet,
+     * the older Directions API, so nothing stops working while you switch.
+     */
     protected static function google(array $start, array $points): ?array
     {
         if (count($points) > 25) {
             return null;
         }
         $ids = array_keys($points);
+        $key = MapSettings::key('google');
+        $at = fn (array $p) => ['location' => ['latLng' => ['latitude' => $p[0], 'longitude' => $p[1]]]];
+
+        $res = Http::timeout(15)->withHeaders([
+            'X-Goog-Api-Key' => $key,
+            'X-Goog-FieldMask' => 'routes.optimizedIntermediateWaypointIndex,routes.legs.distanceMeters,routes.legs.duration',
+        ])->post('https://routes.googleapis.com/directions/v2:computeRoutes', [
+            'origin' => $at($start), 'destination' => $at($start),
+            'intermediates' => array_values(array_map($at, $points)),
+            'travelMode' => 'DRIVE', 'routingPreference' => 'TRAFFIC_UNAWARE',
+            'optimizeWaypointOrder' => true, 'regionCode' => 'ph',
+        ]);
+
+        if ($res->successful()) {
+            $route = $res->json('routes.0');
+            if (! $route) {
+                return null;
+            }
+            $order = $route['optimizedIntermediateWaypointIndex'] ?? range(0, count($ids) - 1);
+            if ($order === [-1]) {
+                $order = range(0, count($ids) - 1);
+            }
+            $legs = array_slice($route['legs'] ?? [], 0, count($ids)); // leave out the drive back
+
+            return [
+                'order' => array_map(fn ($i) => $ids[$i], $order),
+                'km' => round(array_sum(array_map(fn ($l) => $l['distanceMeters'] ?? 0, $legs)) / 1000, 1),
+                'minutes' => (int) round(array_sum(array_map(fn ($l) => (int) rtrim((string) ($l['duration'] ?? '0s'), 's'), $legs)) / 60),
+                'source' => 'google',
+            ];
+        }
+
+        // Routes API not switched on for this key (403) or not reachable: try the older Directions API
+        if (! in_array($res->status(), [403, 404], true)) {
+            $res->throw();
+        }
+
+        return static::googleDirections($start, $points, $key);
+    }
+
+    /** The older Google Directions API (Legacy at Google since March 2025). */
+    protected static function googleDirections(array $start, array $points, ?string $key): ?array
+    {
+        $ids = array_keys($points);
         $r = Http::timeout(12)->get('https://maps.googleapis.com/maps/api/directions/json', [
             'origin' => $start[0].','.$start[1], 'destination' => $start[0].','.$start[1],
             'waypoints' => 'optimize:true|'.implode('|', array_map(fn ($p) => $p[0].','.$p[1], $points)),
-            'region' => 'ph', 'key' => MapSettings::key('google'),
+            'region' => 'ph', 'key' => $key,
         ])->throw()->json();
         if (($r['status'] ?? '') !== 'OK') {
             return null;
@@ -145,7 +193,7 @@ class RoutePlanner
         ];
     }
 
-    /** OpenRouteService optimisation (up to 50 stops), from the start to the last stop. */
+    /** OpenRouteService optimisation (up to 50 stops), from the start to the last stop. api.heigit.org since 2026. */
     protected static function ors(array $start, array $points): ?array
     {
         if (count($points) > 50) {
@@ -157,7 +205,7 @@ class RoutePlanner
             $jobs[] = ['id' => $i + 1, 'location' => [$points[$id][1], $points[$id][0]]];
         }
         $r = Http::timeout(15)->withHeaders(['Authorization' => MapSettings::key('ors')])
-            ->post('https://api.openrouteservice.org/optimization', [
+            ->post('https://api.heigit.org/vroom/v0', [
                 'jobs' => $jobs,
                 'vehicles' => [['id' => 1, 'profile' => 'driving-car', 'start' => [$start[1], $start[0]]]],
                 'options' => ['g' => true],

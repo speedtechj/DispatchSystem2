@@ -3692,3 +3692,74 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-fd__kml small { color: var(--sa-muted); font-size: 0.76rem; }
 .ds-fd__kml b { font-size: 1.4rem; }
 .ds-fd__btn { display: grid; place-items: center; margin-top: auto; }
+
+/* ------------------------------------------------------------------ Warehouse sections, sets, truck waiting (Scan app) */
+.ds-sx__tile { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; padding: 0.9rem 1rem; border-radius: 1.2rem; background: var(--sx, #1d6fb8); color: #fff; text-align: center; animation: ds-sx-in .2s ease-out; }
+.ds-sx__tile small { font-size: 0.8rem; font-weight: 700; opacity: .85; }
+.ds-sx__tile strong { font-size: 3.6rem; line-height: 1; font-weight: 900; letter-spacing: -0.02em; }
+.ds-sx__tile span { font-size: 1.05rem; font-weight: 800; }
+.ds-sx__tile em { font-style: normal; font-size: 0.8rem; opacity: .9; }
+.ds-sx__tile.is-truck strong { font-size: 2.8rem; }
+@keyframes ds-sx-in { from { transform: scale(.96); opacity: .4; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ds-sx__tile { animation: none; } }
+.ds-sx__set { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.7rem 0.9rem; border-radius: 1rem; background: rgb(255 255 255 / .06); font-size: 0.92rem; }
+.ds-sx__set small { color: var(--sa-muted); font-size: 0.8rem; }
+.ds-sx__set.is-done { background: rgb(52 195 143 / .14); }
+.ds-sx__set.is-split { background: rgb(240 169 59 / .14); }
+.ds-sx__set.is-split small { color: #f6c46b; }
+.ds-sx__dots { display: flex; gap: 0.25rem; }
+.ds-sx__dots i { flex: 1; max-width: 2.2rem; height: 0.4rem; border-radius: 999px; background: rgb(255 255 255 / .15); }
+.ds-sx__dots i.is-on { background: var(--sa-ok); }
+.ds-sx__link { align-self: center; padding: 0.35rem 0.6rem; color: var(--sa-gold); font-size: 0.88rem; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.ds-sx__team { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.ds-sx__team span { padding: 0.25rem 0.65rem; border-radius: 999px; background: rgb(255 255 255 / .06); font-size: 0.8rem; color: var(--sa-muted); }
+.ds-sx__team span.is-me { color: var(--sa-gold); box-shadow: inset 0 0 0 1px rgb(246 190 0 / .4); }
+.ds-sx__team b { color: var(--sa-text); margin-left: 0.2rem; }
+.ds-sx__truck { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem 0.9rem; border-radius: 1rem; background: rgb(232 89 12 / .16); box-shadow: inset 0 0 0 1px rgb(232 89 12 / .5); }
+.ds-sx__truck.is-paused { background: rgb(255 255 255 / .05); box-shadow: inset 0 0 0 1px var(--sa-line); }
+.ds-sx__truckhead { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+.ds-sx__truckhead button { padding: 0.3rem 0.6rem; border-radius: 0.6rem; background: rgb(255 255 255 / .1); color: var(--sa-text); font-size: 0.78rem; font-weight: 700; margin-left: 0.25rem; }
+.ds-sx__truckn { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; font-size: 0.74rem; color: var(--sa-muted); }
+.ds-sx__truckn b { display: block; font-size: 1.15rem; color: var(--sa-text); }
+.ds-sx__picker { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.8rem; border-radius: 1rem; background: rgb(255 255 255 / .05); }
+.ds-sx__picker > button:not(.ds-sx__link) { display: flex; flex-direction: column; align-items: flex-start; padding: 0.65rem 0.8rem; border-radius: 0.8rem; background: rgb(255 255 255 / .07); color: var(--sa-text); text-align: left; }
+.ds-sx__picker small, .ds-sx__picker p { color: var(--sa-muted); font-size: 0.8rem; margin: 0; }
+.ds-sx__open { display: flex; flex-direction: column; gap: 0.6rem; width: 100%; padding: 0.9rem; border-radius: 1rem; background: rgb(240 169 59 / .1); box-shadow: inset 0 0 0 1px rgb(240 169 59 / .4); text-align: left; }
+.ds-sx__open > small { color: var(--sa-muted); font-size: 0.78rem; }
+.ds-sx__openrow { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.9rem; }
+.ds-sx__miss { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.5rem 0.6rem; border-radius: 0.7rem; background: rgb(255 255 255 / .05); }
+.ds-sx__miss small { color: var(--sa-muted); }
+.ds-sx__why { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.ds-sx__why button { padding: 0.3rem 0.55rem; border-radius: 999px; background: rgb(255 255 255 / .08); color: var(--sa-muted); font-size: 0.74rem; font-weight: 700; }
+.ds-sx__why button.is-on { background: var(--sa-gold); color: #0a1219; }
+
+/* ------------------------------------------------------------------ Settings · Warehouse sections */
+.ds-ws { display: flex; flex-direction: column; gap: 1rem; }
+.ds-ws__top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 0.75rem; }
+.ds-ws__wh { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: #6b7b88; }
+.ds-ws__acts { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.ds-ws select, .ds-ws input[type=text], .ds-ws textarea { min-height: 2.25rem; padding: 0.35rem 0.6rem; border-radius: 0.55rem; border: 1px solid #d5dde3; background: #fff; font-size: 0.85rem; color: inherit; width: 100%; box-sizing: border-box; }
+.dark .ds-ws select, .dark .ds-ws input[type=text], .dark .ds-ws textarea { background: #0b1d2a; border-color: rgb(255 255 255 / .12); }
+.ds-ws__list { padding: 0.25rem 0; overflow-x: auto; }
+.ds-ws__row { display: grid; grid-template-columns: 7.5rem 1.2fr 0.9fr 1.3fr 2fr 4rem 2rem; gap: 0.6rem; align-items: center; padding: 0.6rem 1rem; border-top: 1px solid rgb(0 0 0 / .06); min-width: 62rem; }
+.dark .ds-ws__row { border-color: rgb(255 255 255 / .07); }
+.ds-ws__row.is-head { border-top: 0; font-size: 0.72rem; font-weight: 700; color: #6b7b88; }
+.ds-ws__code { display: grid; grid-template-columns: 2.6rem 1fr; gap: 0.3rem; align-items: center; }
+.ds-ws__code input { text-align: center; font-weight: 900; font-size: 1.05rem !important; color: #fff !important; background: var(--c) !important; border-color: var(--c) !important; }
+.ds-ws__code select { font-size: 0.7rem !important; padding: 0.2rem !important; }
+.ds-ws__muted { color: #6b7b88; font-size: 0.8rem; margin: 0; }
+.ds-ws__del { width: 2rem; height: 2rem; border-radius: 0.5rem; color: #c8372d; }
+.ds-ws__del:hover { background: #fde8e6; }
+.ds-ws__empty { padding: 1.25rem; display: flex; flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+.ds-ws__empty p { margin: 0; color: #6b7b88; }
+.ds-ws__err { margin: 0.5rem 1rem; color: #c8372d; font-size: 0.85rem; }
+.ds-ws__two { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.ds-ws__box { padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.ds-ws__box h3 { margin: 0; font-size: 0.98rem; font-weight: 800; }
+.ds-ws__toggle { display: flex; gap: 0.7rem; align-items: flex-start; cursor: pointer; }
+.ds-ws__toggle input { margin-top: 0.25rem; width: 1.1rem; height: 1.1rem; }
+.ds-ws__toggle small { display: block; color: #6b7b88; font-size: 0.8rem; margin-top: 0.15rem; }
+@media (max-width: 900px) { .ds-ws__two { grid-template-columns: 1fr; } }
+.ds-ws__result { display: flex; gap: 0.9rem; align-items: center; margin-top: 0.75rem; padding: 0.75rem 1rem; border-radius: 0.9rem; background: color-mix(in srgb, var(--c) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 40%, transparent); }
+.ds-ws__result > strong { display: grid; place-items: center; min-width: 3rem; height: 3rem; padding: 0 0.4rem; border-radius: 0.7rem; background: var(--c); color: #fff; font-size: 1.6rem; font-weight: 900; }
+.ds-ws__result small { display: block; color: #6b7b88; font-size: 0.8rem; }

@@ -19,7 +19,28 @@ class Invoice extends Model
             'is_priority' => 'boolean',
             'is_resolved' => 'boolean',
             'wh_is_assigned' => 'boolean',
+            'sectioned_at' => 'datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        // the customer's set: all boxes for the same receiver, phone and city
+        static::saving(function (Invoice $invoice): void {
+            if (! $invoice->set_key || $invoice->isDirty(['receiver_name', 'receiver_mobile_no', 'receiver_city'])) {
+                $invoice->set_key = \App\Support\Boxes\BoxSets::keyFor($invoice->receiver_name, $invoice->receiver_mobile_no, $invoice->receiver_city);
+            }
+        });
+    }
+
+    public function whSection()
+    {
+        return $this->belongsTo(\App\Models\Boxes\WhSection::class, 'wh_section_id');
+    }
+
+    public function verifiedBy()
+    {
+        return $this->belongsTo(User::class, 'verified_by');
     }
 
     public function container()

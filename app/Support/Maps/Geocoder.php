@@ -102,7 +102,7 @@ class Geocoder
         }
 
         if ($provider === 'ors') {
-            $r = Http::timeout(8)->get('https://api.openrouteservice.org/geocode/search', [
+            $r = Http::timeout(8)->get('https://api.heigit.org/pelias/v1/search', [
                 'api_key' => $key, 'text' => $text, 'boundary.country' => 'PH', 'size' => 1,
             ])->throw()->json();
             $hit = $r['features'][0] ?? null;

@@ -132,6 +132,38 @@
                 <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button>
             </header>
 
+            @if (count($team) > 1)
+                <div class="ds-sx__team" aria-label="Who scanned">
+                    @foreach (array_slice($team, 0, 4) as $m)<span @class(['is-me' => $m['me']])>{{ $m['name'] }} <b>{{ $m['n'] }}</b></span>@endforeach
+                </div>
+            @endif
+
+            @if ($this->mode === 'unload')
+                @if ($truck)
+                    <div @class(['ds-sx__truck', 'is-paused' => $truck['paused']])>
+                        <span class="ds-sx__truckhead"><b>🚚 {{ $truck['paused'] ? 'Paused · ' : '' }}Truck {{ $truck['trip'] }} → {{ $truck['to'] }}</b>
+                            <span>
+                                <button type="button" wire:click="truckPause({{ $truck['paused'] ? 'false' : 'true' }})">{{ $truck['paused'] ? 'Resume' : 'Pause' }}</button>
+                                <button type="button" wire:click="truckStop" wire:confirm="The truck leaves now? Its boxes still in the container go to section {{ $truck['section'] ?? '' }}.">Truck leaves</button>
+                            </span>
+                        </span>
+                        <span class="ds-sx__truckn"><span><b>{{ $truck['onTruck'] }}</b> on truck</span><span><b>{{ max(0, $truck['inSection']) }}</b> in section {{ $truck['section'] ?? '' }}</span><span><b>{{ $truck['inContainer'] }}</b> still in container</span></span>
+                    </div>
+                @elseif ($truckPicker)
+                    <div class="ds-sx__picker">
+                        <strong>Which truck is waiting?</strong>
+                        @forelse ($trucks as $tk)
+                            <button type="button" wire:click="truckStart({{ $tk['id'] }})"><b>{{ $tk['name'] }}</b><small>→ {{ $tk['to'] }}{{ $tk['truck'] ? ' · '.$tk['truck'] : '' }}</small></button>
+                        @empty
+                            <p>No open warehouse trip from this warehouse. Make the trip first (Warehouse → Warehouse trips).</p>
+                        @endforelse
+                        <button type="button" class="ds-sx__link" wire:click="openTruckPicker(false)">Cancel</button>
+                    </div>
+                @elseif (! $status)
+                    <button type="button" class="ds-sx__link" wire:click="openTruckPicker">🚚 A truck is waiting for some of these boxes?</button>
+                @endif
+            @endif
+
             @if (! $status && $loadNext && $loadNext['stop'])
                 @include('filament.partials.load-next', ['next' => $loadNext, 'dark' => true])
             @endif
@@ -144,6 +176,25 @@
                         <span><strong>{{ $box->invoice }}</strong><small>{{ $def['ok'] }}</small></span>
                         @if ($box->boxtype)<em>{{ $box->boxtype }}</em>@endif
                     </div>
+                    @if ($route)
+                        <div @class(['ds-sx__tile', 'is-truck' => ($route['kind'] ?? '') === 'truck']) style="--sx: {{ $route['color'] ?? '#1d6fb8' }}">
+                            <small>{{ ($route['kind'] ?? '') === 'truck' ? 'Put it on the truck' : 'Put this box in' }}</small>
+                            <strong>{{ ($route['kind'] ?? '') === 'truck' ? '🚚' : $route['code'] }}</strong>
+                            <span>{{ ($route['kind'] ?? '') === 'truck' ? 'Truck '.$route['trip'].' → '.$route['name'] : $route['name'] }}</span>
+                            @if (! empty($route['why']))<em>{{ $route['why'] }}</em>@endif
+                            @if (! empty($route['pending']))<em>Then scan the QR on section {{ $route['code'] }}.</em>@endif
+                        </div>
+                        @if (($route['kind'] ?? '') === 'truck')
+                            <button type="button" class="ds-sx__link" wire:click="putInSection">Put in section instead</button>
+                        @endif
+                    @endif
+                    @if ($setInfo)
+                        <div @class(['ds-sx__set', 'is-'.$setInfo['kind']])>
+                            <span><b>{{ $setInfo['name'] }}</b> · box {{ $setInfo['n'] }} of {{ $setInfo['of'] }}</span>
+                            <span class="ds-sx__dots">@for ($i = 1; $i <= min(12, $setInfo['of']); $i++)<i @class(['is-on' => $i <= $setInfo['n']])></i>@endfor</span>
+                            <small>{{ $setInfo['text'] }}</small>
+                        </div>
+                    @endif
                     @if ($spot)
                         <div class="ds-ld__spot is-{{ $spot['zone'] }}"><strong>{{ \App\Models\Maps\TripStop::ZONES[$spot['zone']] ?? '' }}</strong><span>Stop {{ $spot['stop'] }} · {{ ['front' => 'deep inside, next to the cab', 'middle' => 'in the middle', 'back' => 'near the door'][$spot['zone']] ?? '' }}</span></div>
                     @endif
@@ -186,6 +237,24 @@
                         </div>
                     @endif
                     <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
+                </div>
+            @elseif ($status === 'success' && $route)
+                <div class="ds-sa__sheet is-ok" wire:key="placed-{{ $sessionScans }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-sx__tile" style="--sx: {{ $route['color'] ?? '#1d6fb8' }}"><small>Saved in</small><strong>{{ $route['code'] }}</strong><span>{{ $route['name'] }}</span></div>
+                    <p class="ds-sa__msg">{{ $message }}</p>
+                    <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
+                </div>
+            @elseif ($status === 'warning' && $wrongHub)
+                <div class="ds-sa__sheet is-bad" wire:key="wronghub-{{ $sessionScans }}-{{ $wrongHub['code'] }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-sa__hit is-shake">
+                        <span class="ds-sa__mark is-bad">⛔</span>
+                        <span><small class="ds-ld__kicker">Wrong hub</small><strong>{{ $wrongHub['code'] }} is for {{ $wrongHub['for'] }}</strong></span>
+                    </div>
+                    <p class="ds-sa__msg">This trip goes to {{ $wrongHub['trip'] }}. Not loaded. Put it back in section {{ $wrongHub['section'] }} and tell the office.</p>
+                    <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
+                    <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">The office says load it</button>
                 </div>
             @elseif ($status === 'warning' && $early)
                 <div class="ds-sa__sheet is-warn" wire:key="early-{{ $sessionScans }}-{{ $early['code'] }}">
@@ -240,6 +309,22 @@
                 <span><strong class="is-bad">{{ $today['problems'] }}</strong><small>problems today</small></span>
             </div>
             <p class="ds-sa__note">{{ $complete ? 'Everything on this '.$def['kind'].' is scanned. The office sees it right away.' : 'You can come back and finish later; every scan is already saved.' }}</p>
+            @if (count($openSets))
+                <div class="ds-sx__open">
+                    <strong>{{ count($openSets) }} {{ count($openSets) === 1 ? 'customer is' : 'customers are' }} missing boxes</strong>
+                    @foreach ($openSets as $os)
+                        <div class="ds-sx__openrow" wire:key="os-{{ $os['key'] }}">
+                            <span><b>{{ $os['name'] }}</b> · {{ $os['have'] }} of {{ $os['of'] }} on the truck</span>
+                            @foreach ($os['missing'] as $mb)
+                                <span class="ds-sx__miss"><span>{{ $mb['invoice'] }} <small>{{ $mb['where'] }}</small></span>
+                                    <span class="ds-sx__why">@foreach ($splitReasons as $rk => $rl)<button type="button" wire:click="splitReason({{ $mb['id'] }}, '{{ $rk }}')" @class(['is-on' => $mb['reason'] === $rk])>{{ $rl }}</button>@endforeach</span>
+                                </span>
+                            @endforeach
+                        </div>
+                    @endforeach
+                    <small>Find the boxes, or pick why each one stays behind. The office sees it on the trip.</small>
+                </div>
+            @endif
             <button type="button" class="ds-sa__primary" wire:click="pick({{ $choice }})">Keep scanning</button>
             <button type="button" class="ds-sa__secondary" wire:click="home">Back to start</button>
         </section>

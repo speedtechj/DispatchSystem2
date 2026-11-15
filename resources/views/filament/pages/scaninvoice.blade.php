@@ -23,6 +23,15 @@
                 </div>
             </x-scan.result>
 
+            @if ($route)
+                <div class="ds-ws__result" style="--c: {{ $route['color'] ?? '#1d6fb8' }}">
+                    <strong>{{ ($route['kind'] ?? '') === 'truck' ? '🚚' : $route['code'] }}</strong>
+                    <span><b>{{ ($route['kind'] ?? '') === 'truck' ? 'Truck '.$route['trip'].' → '.$route['name'] : 'Section '.$route['code'].' · '.$route['name'] }}</b>
+                        @if ($setInfo)<small>{{ $setInfo['name'] }} · box {{ $setInfo['n'] }} of {{ $setInfo['of'] }} · {{ $setInfo['text'] }}</small>@endif
+                        @if (! empty($route['why']))<small>{{ $route['why'] }}</small>@endif</span>
+                </div>
+            @endif
+
             @if ($missingCode)
                 <div class="ds-result__actions">
                     {{ $this->unmanifestedAction }}

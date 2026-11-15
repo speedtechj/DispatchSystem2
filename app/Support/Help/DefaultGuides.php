@@ -639,6 +639,31 @@ class DefaultGuides
                 'links' => ['admin' => 'pages.fuel', 'warehouse' => 'pages.fuel', 'company' => 'pages.fuel'],
                 'related' => ['truck-tracking', 'create-trip'], 'sort' => 40,
             ],
+            // ───────────────────────────── warehouse sections ─────────────────────────────
+            [
+                'slug' => 'warehouse-sections', 'topic' => 'boxes', 'icon' => '🗂️', 'apps' => ['admin', 'warehouse', 'scan'],
+                'title_en' => 'Warehouse sections, box sets and the waiting truck', 'title_tl' => 'Mga seksyon ng bodega, set ng box at truck na naghihintay',
+                'summary_en' => 'At unload the Scan app shows the section of each box from the receiver\'s province, keeps a customer\'s boxes together, and can load boxes straight onto a waiting truck.',
+                'summary_tl' => 'Sa unloading, ipinapakita ng Scan app ang seksyon ng bawat box ayon sa probinsya ng receiver, pinagsasama ang mga box ng isang customer, at puwedeng ikarga agad sa truck na naghihintay.',
+                'when_en' => 'Every container unload and every truck you load.',
+                'when_tl' => 'Sa bawat pag-unload ng container at bawat truck na kinakargahan.',
+                'steps' => [
+                    $s('Set the sections once', 'Admin → Settings → Warehouse sections: one section per destination, with its provinces. Print the QR labels if you use the label scan.', 'I-set ang mga seksyon minsan', 'Admin → Settings → Warehouse sections: isang seksyon bawat destinasyon, kasama ang mga probinsya. I-print ang QR labels kung gagamit ng label scan.'),
+                    $s('Scan at the container door', 'Scan each box as it comes off. The big letter on the phone is its section: put the box there. X means check the address first.', 'Mag-scan sa pinto ng container', 'I-scan ang bawat box pagbaba. Ang malaking letra sa phone ang seksyon nito: doon ilagay. Ang X ay check address muna.'),
+                    $s('Keep sets together', '"Box 2 of 3" shows where the customer\'s other boxes are: still in this container, or in another one.', 'Pagsamahin ang set', 'Ang "Box 2 of 3" ay nagsasabi kung nasaan ang ibang box ng customer: nasa container pa, o nasa ibang container.'),
+                    $s('A truck is waiting', 'Tap "A truck is waiting" and pick the warehouse trip. Its boxes show 🚚: put them straight on the truck. "Put in section instead" keeps one box in its section.', 'May truck na naghihintay', 'Pindutin ang "A truck is waiting" at piliin ang warehouse trip. Ang mga box nito ay may 🚚: diretso sa truck. Ang "Put in section instead" ay itatabi ang box sa seksyon.'),
+                    $s('Many phones at once', 'Several people can scan the same container or truck. The counter is shared; a box already scanned by someone else is not counted again.', 'Sabay-sabay ang maraming phone', 'Puwedeng sabay-sabay mag-scan ang ilang tao sa iisang container o truck. Iisa ang bilang; hindi na binibilang ulit ang box na na-scan na ng iba.'),
+                ],
+                'result_en' => 'Every box is in its section or on its truck, and a customer\'s boxes stay together.',
+                'result_tl' => 'Nasa tamang seksyon o truck ang bawat box, at magkakasama ang mga box ng isang customer.',
+                'problems' => [
+                    $p('It says Wrong hub when loading', 'The box is for another partner hub than this trip. Put it back in its section and tell the office.', 'Sabi ay Wrong hub sa loading', 'Ang box ay para sa ibang partner hub. Ibalik sa seksyon nito at sabihan ang office.'),
+                    $p('Customers missing boxes at the end', 'On the Done screen, find the boxes, or pick why each one stays behind (not arrived, damaged, cannot find, truck full).', 'May customer na kulang ang box sa dulo', 'Sa Done screen, hanapin ang box, o piliin kung bakit naiwan (wala pa, sira, hindi makita, puno ang truck).'),
+                ],
+                'pages' => ['pages.warehouse-sections', 'pages.scaninvoice', 'pages.unloadedcontainer'],
+                'links' => ['admin' => 'pages.warehouse-sections'],
+                'related' => ['unload-container', 'load-truck'], 'sort' => 25,
+            ],
         ];
     }
 }

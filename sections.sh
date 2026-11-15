@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Dispatch System — Fuel
+# Dispatch System — Warehouse sections
 # Only the files changed in this step; the rest of your project is left as it is.
 #
 #   cd ~/Desktop/Project/DispatchSystem
-#   bash ~/Desktop/Project/fuel.sh
+#   bash ~/Desktop/Project/sections.sh
 
 set -euo pipefail
 [ -f artisan ] || { echo "Run this from inside your DispatchSystem project folder (the one with 'artisan')."; exit 1; }
@@ -14,2459 +14,2308 @@ BACKUP="../DispatchSystem-backup-$STAMP.tar.gz"
 echo "▶ Backing up the project to $BACKUP"
 tar -czf "$BACKUP" --exclude=vendor --exclude=node_modules --exclude=storage/logs .
 
-echo "▶ Writing 33 files"
+echo "▶ Writing 22 files"
 
-# ---------------------------------------------------------------- app/Filament/Company/Pages/Fuel.php
-mkdir -p 'app/Filament/Company/Pages'
-cat > 'app/Filament/Company/Pages/Fuel.php' <<'DISPATCH_FILE_END_0'
+# ---------------------------------------------------------------- app/Filament/Pages/WarehouseSections.php
+mkdir -p 'app/Filament/Pages'
+cat > 'app/Filament/Pages/WarehouseSections.php' <<'DISPATCH_FILE_END_0'
 <?php
 
-namespace App\Filament\Company\Pages;
+namespace App\Filament\Pages;
 
-use App\Filament\Shared\Fuel\FuelPage;
-
-class Fuel extends FuelPage {}
-DISPATCH_FILE_END_0
-
-# ---------------------------------------------------------------- app/Filament/Company/Pages/TripFuel.php
-mkdir -p 'app/Filament/Company/Pages'
-cat > 'app/Filament/Company/Pages/TripFuel.php' <<'DISPATCH_FILE_END_1'
-<?php
-
-namespace App\Filament\Company\Pages;
-
-use App\Filament\Shared\Fuel\TripFuelPage;
-
-class TripFuel extends TripFuelPage {}
-DISPATCH_FILE_END_1
-
-# ---------------------------------------------------------------- app/Filament/Company/Resources/Deliverylogs/Tables/DeliverylogsTable.php
-mkdir -p 'app/Filament/Company/Resources/Deliverylogs/Tables'
-cat > 'app/Filament/Company/Resources/Deliverylogs/Tables/DeliverylogsTable.php' <<'DISPATCH_FILE_END_2'
-<?php
-
-namespace App\Filament\Company\Resources\Deliverylogs\Tables;
-
-use App\Filament\Company\Pages\TripStops;
-use App\Filament\Company\Pages\TripFuel;
-use App\Filament\Tables\TripBoardColumns;
-use App\Models\Deliverylog;
-use App\Models\Tripinvoice;
-use Filament\Actions\Action;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Actions\EditAction;
-use Filament\Notifications\Notification;
-use Filament\Support\Icons\Heroicon;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Auth;
-
-class DeliverylogsTable
-{
-    public static function configure(Table $table): Table
-    {
-        return $table
-            ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
-            ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'hub'))
-            ->columns([
-                TextColumn::make('trip_number')
-                    ->searchable(),
-                TripBoardColumns::status('hub'),
-                TripBoardColumns::progress('hub'),
-                TextColumn::make('truck.plate_no')
-                    ->sortable(),
-                TextColumn::make('trip_day')
-                    ->numeric()
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->sortable(),
-                TextColumn::make('Total Invoices')
-                    ->badge()
-                    ->color('success')
-                    ->label('Total Invoices')
-                    ->getStateUsing(function ($record) {
-
-                        return Tripinvoice::where('deliveryloghub_id', $record->id)->count();
-                    }),
-                TextColumn::make('Total Loaded')
-                    ->badge()
-                    ->color('success')
-                    ->label('Total Loaded')
-                    ->getStateUsing(function ($record) {
-
-                        return Tripinvoice::where('deliveryloghub_id', $record->id)->where('is_loaded_hub', 1)->count();
-                    }),
-
-                TextColumn::make('eta')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->date()
-                    ->sortable(),
-                TextColumn::make('departure_date')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->date()
-                    ->sortable(),
-                TextColumn::make('delivery_date')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->date()
-                    ->sortable(),
-                TextColumn::make('waybill_number')
-                    ->searchable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('user.full_name')
-                    ->label('Created By')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->sortable(),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-            ])
-            ->filters([
-                TripBoardColumns::filter('hub'),
-                //
-            ])
-            ->recordActions([
-                Action::make('stops')
-                    ->label('Stops & loading')
-                    ->icon('heroicon-o-map')
-                    ->button()
-                    ->color('gray')
-                    ->url(fn ($record): string => TripStops::getUrl(['trip' => $record->id])),
-                Action::make('fuel')
-                    ->label('Fuel')
-                    ->icon('heroicon-o-beaker')
-                    ->button()
-                    ->color('gray')
-                    ->visible(fn (): bool => \App\Support\Fuel\Fuel::ready())
-                    ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
-                Action::make('releasetruct')
-                    ->requiresConfirmation()
-                    ->label('Released Truck')
-                    ->color('info')
-                    ->icon(Heroicon::Truck)
-                    ->hidden(function ($record) {
-
-                        return ! $record->is_current;
-                    })
-                    ->action(function ($record) {
-
-                        $record->truck->update([
-                            'is_assigned' => 0,
-                        ]);
-                        $record->update([
-                            'is_current' => 0,
-                            'is_active' => 0,
-                        ]);
-
-                        Notification::make()
-                            ->title('Truck Released Successfully')
-                            ->success()
-                            ->send();
-                    }),
-                EditAction::make(),
-            ])
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    DeleteBulkAction::make(),
-                ]),
-            ]);
-    }
-}
-DISPATCH_FILE_END_2
-
-# ---------------------------------------------------------------- app/Filament/Delivery/Pages/Fuel.php
-mkdir -p 'app/Filament/Delivery/Pages'
-cat > 'app/Filament/Delivery/Pages/Fuel.php' <<'DISPATCH_FILE_END_3'
-<?php
-
-namespace App\Filament\Delivery\Pages;
-
-use App\Support\DriverTrip;
-use App\Support\Fuel\Fuel as FuelData;
-use App\Support\Fuel\FuelReader;
-use App\Support\Photos\PhotoShrinker;
+use App\Models\Boxes\WhSection;
+use App\Models\Logistichub;
+use App\Models\Warehouse;
+use App\Support\Boxes\Sections;
+use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
+use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
-use Livewire\Attributes\Locked;
-use Livewire\WithFileUploads;
+use Illuminate\Support\Facades\DB;
+use UnitEnum;
 
 /**
- * Driver app › ⛽ Add fuel: photo of the receipt (read by AI when on), check the numbers,
- * card or cash, photo of the odometer, save. The office sees it on the Fuel page.
+ * Admin → Settings → Warehouse sections: each section of a warehouse is for one destination,
+ * chosen by the receiver's province. The Scan app shows the section for each box at unload.
  */
-class Fuel extends Page
+class WarehouseSections extends Page
 {
-    use WithFileUploads;
+    protected string $view = 'filament.boxes.sections';
 
-    protected string $view = 'filament.delivery.pages.fuel';
+    protected static string|UnitEnum|null $navigationGroup = 'Settings';
 
-    protected static bool $shouldRegisterNavigation = false;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedSquares2x2;
 
-    protected static ?string $slug = 'fuel';
+    protected static ?string $navigationLabel = 'Warehouse sections';
 
-    /** receipt, check, odometer, done */
-    #[Locked]
-    public string $step = 'receipt';
+    protected static ?string $title = 'Settings · Warehouse sections';
 
-    public $upload = null;
+    protected static ?string $slug = 'warehouse-sections';
 
-    #[Locked]
-    public ?string $receiptPath = null;
+    protected static ?int $navigationSort = 93;
 
-    #[Locked]
-    public ?string $odometerPath = null;
+    public ?int $warehouseId = null;
 
-    public array $f = [];
+    /** @var list<array{id: ?int, code: string, name: string, color: string, kind: string, to: string, provinces: string}> */
+    public array $rows = [];
 
-    #[Locked]
-    public bool $aiRead = false;
+    public bool $labelScan = false;
 
-    #[Locked]
-    public array $aiData = [];
-
-    #[Locked]
-    public ?float $lat = null;
-
-    #[Locked]
-    public ?float $lng = null;
-
-    #[Locked]
-    public ?int $savedId = null;
+    public const COLORS = ['#1d6fb8', '#17895e', '#8a4bd1', '#e8590c', '#c8372d', '#0e2433', '#b07400', '#0f8b8d'];
 
     public static function canAccess(): bool
     {
-        return FuelData::ready() && Auth::check();
+        return Sections::ready() && (bool) Auth::user()?->hasRole('super_admin');
     }
 
     public function mount(): void
     {
-        $this->f = $this->blank();
+        $this->warehouseId = Auth::user()?->warehouse_id ?? Warehouse::orderBy('id')->value('id');
+        $this->loadRows();
     }
 
-    protected function blank(): array
+    public function updatedWarehouseId(): void
     {
-        return ['station' => '', 'product' => '', 'fuel_type' => '', 'liters' => '', 'price_per_liter' => '', 'total' => '',
-            'vatable' => '', 'vat' => '', 'station_tin' => '', 'invoice_no' => '', 'buyer_tin_ok' => '', 'paid_with' => 'card',
-            'card_last4' => '', 'odometer' => '', 'filled_at' => now()->format('Y-m-d\TH:i')];
+        $this->loadRows();
+    }
+
+    protected function loadRows(): void
+    {
+        $this->rows = WhSection::where('warehouse_id', $this->warehouseId)->orderBy('sort')->orderBy('code')->get()
+            ->map(fn (WhSection $s) => ['id' => $s->id, 'code' => $s->code, 'name' => $s->name, 'color' => $s->color, 'kind' => $s->kind,
+                'to' => $s->logistichub_id ? 'hub:'.$s->logistichub_id : ($s->to_warehouse_id ? 'wh:'.$s->to_warehouse_id : ''),
+                'provinces' => implode(', ', (array) $s->provinces)])->all();
+        $this->labelScan = Sections::labelScan($this->warehouseId);
+    }
+
+    public function addRow(): void
+    {
+        $used = collect($this->rows)->pluck('code')->all();
+        $code = collect(range('A', 'Z'))->first(fn ($l) => ! in_array($l, $used, true)) ?? '';
+        $this->rows[] = ['id' => null, 'code' => $code, 'name' => '', 'color' => self::COLORS[count($this->rows) % count(self::COLORS)], 'kind' => 'area', 'to' => '', 'provinces' => ''];
+    }
+
+    public function removeRow(int $i): void
+    {
+        unset($this->rows[$i]);
+        $this->rows = array_values($this->rows);
+    }
+
+    /** A first set of sections: one per partner hub, plus Returns (R) and Check address (X). */
+    public function suggest(): void
+    {
+        if ($this->rows) {
+            return;
+        }
+        foreach (Logistichub::where('is_active', true)->orderBy('id')->get() as $i => $hub) {
+            $this->rows[] = ['id' => null, 'code' => chr(65 + $i), 'name' => $hub->hub_name, 'color' => self::COLORS[$i % count(self::COLORS)], 'kind' => 'area', 'to' => 'hub:'.$hub->id, 'provinces' => ''];
+        }
+        $this->rows[] = ['id' => null, 'code' => 'R', 'name' => 'Returns & wrong hub', 'color' => '#c8372d', 'kind' => 'returns', 'to' => '', 'provinces' => ''];
+        $this->rows[] = ['id' => null, 'code' => 'X', 'name' => 'Check address', 'color' => '#b07400', 'kind' => 'check', 'to' => '', 'provinces' => ''];
+    }
+
+    public function save(): void
+    {
+        $this->validate([
+            'warehouseId' => 'required|integer|exists:warehouses,id',
+            'rows' => 'array',
+            'rows.*.code' => 'required|string|max:8|distinct',
+            'rows.*.name' => 'required|string|max:80',
+            'rows.*.color' => ['required', 'regex:/^#[0-9a-fA-F]{6}$/'],
+            'rows.*.kind' => 'required|in:'.implode(',', array_keys(WhSection::KINDS)),
+            'rows.*.to' => ['nullable', 'regex:/^(hub|wh):\d+$/'],
+            'rows.*.provinces' => 'nullable|string|max:2000',
+        ], ['rows.*.code.distinct' => 'Two sections have the same code.', 'rows.*.name.required' => 'Give each section a name.']);
+
+        // a province can only be in one section
+        $seen = [];
+        foreach ($this->rows as $r) {
+            foreach ($this->provinceList($r['provinces']) as $p) {
+                $k = Sections::clean($p);
+                if (isset($seen[$k]) && $seen[$k] !== $r['code']) {
+                    $this->addError('rows', "\"{$p}\" is in section {$seen[$k]} and {$r['code']}. A province can be in one section only.");
+
+                    return;
+                }
+                $seen[$k] = $r['code'];
+            }
+        }
+
+        DB::transaction(function () {
+            $keep = [];
+            foreach (array_values($this->rows) as $i => $r) {
+                [$type, $id] = array_pad(explode(':', (string) $r['to']), 2, null);
+                $s = ($r['id'] ? WhSection::where('warehouse_id', $this->warehouseId)->find($r['id']) : null) ?? new WhSection(['warehouse_id' => $this->warehouseId]);
+                $s->fill([
+                    'code' => mb_strtoupper(trim($r['code'])), 'name' => trim($r['name']), 'color' => $r['color'], 'kind' => $r['kind'],
+                    'logistichub_id' => $type === 'hub' ? (int) $id : null, 'to_warehouse_id' => $type === 'wh' ? (int) $id : null,
+                    'provinces' => $this->provinceList($r['provinces']) ?: null, 'sort' => $i, 'is_active' => true,
+                ])->save();
+                $keep[] = $s->id;
+            }
+            WhSection::where('warehouse_id', $this->warehouseId)->whereNotIn('id', $keep ?: [0])->delete();
+        });
+        Sections::setLabelScan($this->warehouseId, $this->labelScan);
+        Sections::forget();
+        $this->loadRows();
+        Notification::make()->title('Warehouse sections saved')->success()->send();
+    }
+
+    /** @return list<string> */
+    protected function provinceList(?string $text): array
+    {
+        return collect(preg_split('/[,;\n]+/', (string) $text))->map(fn ($p) => trim($p))->filter()->unique(fn ($p) => Sections::clean($p))->values()->all();
+    }
+
+    protected function getViewData(): array
+    {
+        $counts = WhSection::where('warehouse_id', $this->warehouseId)->withCount(['invoices' => fn ($q) => $q->where('is_verified', true)
+            ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))->where('is_assigned', false)->where('wh_is_assigned', false)])
+            ->pluck('invoices_count', 'id');
+
+        return [
+            'warehouses' => Warehouse::orderBy('name')->pluck('name', 'id'),
+            'targets' => collect(['' => '— nobody (returns, check address)'])
+                ->merge(Logistichub::orderBy('hub_name')->get()->mapWithKeys(fn ($h) => ['hub:'.$h->id => 'Hub · '.$h->hub_name]))
+                ->merge(Warehouse::where('id', '!=', $this->warehouseId)->orderBy('name')->get()->mapWithKeys(fn ($w) => ['wh:'.$w->id => 'Warehouse · '.$w->name])),
+            'counts' => $counts,
+            'kinds' => WhSection::KINDS,
+            'colors' => self::COLORS,
+            'labelsUrl' => $this->warehouseId ? route('sections.labels', ['warehouse' => $this->warehouseId]) : null,
+        ];
+    }
+}
+DISPATCH_FILE_END_0
+
+# ---------------------------------------------------------------- app/Filament/Scan/Pages/ScanApp.php
+mkdir -p 'app/Filament/Scan/Pages'
+cat > 'app/Filament/Scan/Pages/ScanApp.php' <<'DISPATCH_FILE_END_1'
+<?php
+
+namespace App\Filament\Scan\Pages;
+
+use App\Models\Ai\AiPhotoCheck;
+use App\Models\BoxPhoto;
+use App\Models\Invoice;
+use App\Models\PhotoSetting;
+use App\Models\Unmanifested;
+use App\Support\Ai\Ai;
+use App\Support\Ai\PhotoCheck;
+use App\Support\Photos\BoxPhotos;
+use App\Support\ScanModes;
+use Filament\Actions\Action;
+use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Textarea;
+use Filament\Notifications\Notification;
+use Filament\Pages\Page;
+use Filament\Panel;
+use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
+use Livewire\Attributes\Locked;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+
+/**
+ * The Scan app. One phone screen with four steps: start → pick → scan → done.
+ * Scanning is done by the existing scan pages (Unload Container, Load Truck, …):
+ * this page only picks the right one for the signed-in person and shows the result.
+ */
+class ScanApp extends Page
+{
+    protected string $view = 'filament.scan.app';
+
+    protected static ?string $title = 'Scan';
+
+    #[Locked]
+    public string $screen = 'home';
+
+    #[Locked]
+    public ?string $mode = null;
+
+    #[Locked]
+    public ?int $choice = null;
+
+    /** Result of the last scan, from the scan page that handled it. */
+    #[Locked]
+    public ?string $status = null;
+
+    #[Locked]
+    public ?string $message = null;
+
+    #[Locked]
+    public ?int $invoiceId = null;
+
+    /** Box not on the container's manifest (Unload container only). */
+    #[Locked]
+    public ?string $missing = null;
+
+    /** Boxes returned on this screen (Return boxes counts them as it goes). */
+    #[Locked]
+    public int $returned = 0;
+
+    #[Locked]
+    public int $sessionScans = 0;
+
+    /** Load truck: the box was too early (its spot is nearer the door than what is loaded now). */
+    #[Locked]
+    public ?array $early = null;
+
+    /** Load truck: where the box just loaded goes. */
+    #[Locked]
+    public ?array $spot = null;
+
+    /** Unload: the section (or waiting truck) of the box just scanned. */
+    #[Locked]
+    public ?array $route = null;
+
+    /** The box's set: "2 of 3 · 1 more still in this container". */
+    #[Locked]
+    public ?array $setInfo = null;
+
+    /** Load truck: the box is for another hub. */
+    #[Locked]
+    public ?array $wrongHub = null;
+
+    /** Unload: the list of trucks to pick from is open. */
+    public bool $truckPicker = false;
+
+    /** Show the finished and closed ones on the pick list too (greyed out). */
+    public bool $showFinished = false;
+
+    public ?string $condition = null;
+
+    public string $note = '';
+
+    /** @var TemporaryUploadedFile|null */
+    public $boxPhoto = null;
+
+    public static function getRoutePath(Panel $panel): string
+    {
+        return '/';
     }
 
     public function getTitle(): string|Htmlable
     {
-        return 'Add fuel';
+        return 'Scan';
     }
 
-    public function getHeading(): string|Htmlable
+    public function getHeading(): string
     {
         return '';
     }
 
-    /** Phone location when the fill is added: compared with the truck GPS. */
-    public function setPlace(mixed $lat, mixed $lng): void
+    protected function modes(): array
     {
-        $this->lat = is_numeric($lat) && abs((float) $lat) <= 90 ? (float) $lat : null;
-        $this->lng = is_numeric($lng) && abs((float) $lng) <= 180 ? (float) $lng : null;
+        return ScanModes::for(Auth::user());
     }
 
-    /** Called by the browser after a (shrunk) photo is uploaded. */
-    public function savePhoto(): void
+    protected function mode(): ?array
     {
-        $this->validate(['upload' => 'required|image|max:12288'], ['upload.image' => 'That file is not a photo.']);
-        $path = $this->upload->store('fuel/'.now()->format('Y-m'), 'public');
-        PhotoShrinker::file('public', $path);
-        $this->reset('upload');
+        return $this->mode ? ($this->modes()[$this->mode] ?? null) : null;
+    }
 
-        if ($this->step === 'odometer') {
-            if ($this->odometerPath) {
-                Storage::disk('public')->delete($this->odometerPath);
-            }
-            $this->odometerPath = $path;
-            if ($this->f['odometer'] === '' && ($km = FuelReader::odometer($path))) {
-                $this->f['odometer'] = (string) $km;
-            }
+    /** The existing scan page for this mode, set to the chosen container or trip. */
+    protected function station(?int $choice = null, ?string $modeKey = null): ?object
+    {
+        $mode = $modeKey ? ($this->modes()[$modeKey] ?? null) : $this->mode();
+        if (! $mode) {
+            return null;
+        }
+
+        $station = app($mode['class']);
+        $station->data = [$mode['field'] => $choice ?? $this->choice];
+        if (property_exists($station, 'returnedCount')) {
+            $station->returnedCount = $this->returned;
+        }
+
+        return $station;
+    }
+
+    // ------------------------------------------------------------------ steps
+
+    public function open(string $mode): void
+    {
+        if (! isset($this->modes()[$mode])) {
+            return;
+        }
+        $this->mode = $mode;
+        $this->choice = null;
+        $this->showFinished = false;
+        $this->screen = 'pick';
+        $this->clearResult();
+    }
+
+    public function pick(int $id): void
+    {
+        $station = $this->station();
+        if (! $station || ! $station->appChoices()->contains('id', $id)) {
+            Notification::make()->title('That one is not open for you any more.')->warning()->send();
 
             return;
         }
-
-        if ($this->receiptPath) {
-            Storage::disk('public')->delete($this->receiptPath);
-        }
-        $this->receiptPath = $path;
-        $read = FuelReader::receipt($path);
-        $this->aiRead = $read !== [];
-        $this->aiData = $read;
-        foreach ($read as $k => $v) {
-            if (array_key_exists($k, $this->f)) {
-                $this->f[$k] = (string) $v;
-            }
-        }
-        if (isset($read['buyer_tin'])) {
-            $this->f['buyer_tin_ok'] = FuelData::buyerTinOk($read['buyer_tin'], (float) ($read['total'] ?? 0)) === false ? '0' : '1';
-        }
-        if (isset($read['filled_at'])) {
-            $this->f['filled_at'] = str_replace(' ', 'T', $read['filled_at']);
-        }
-        $this->step = 'check';
+        $this->choice = $id;
+        $this->returned = 0;
+        $this->screen = 'scan';
+        $this->clearResult();
     }
 
-    public function noReceiptPhoto(): void
+    public function toggleFinished(): void
     {
-        $this->step = 'check';
+        $this->showFinished = ! $this->showFinished;
     }
 
-    public function toOdometer(): void
+    /**
+     * Containers or trips for a scan, with progress. Started ones first, then not started;
+     * finished (100%) and closed ones are marked so the list can hide them.
+     */
+    public function choiceList(string $modeKey): Collection
     {
-        $this->validateFill();
-        $this->step = 'odometer';
+        $station = $this->station(null, $modeKey);
+        if (! $station) {
+            return collect();
+        }
+
+        return $station->appChoices()->values()->map(function (array $c, int $i) use ($modeKey) {
+            $p = $this->station($c['id'], $modeKey)->progress();
+            $done = (int) ($p['loaded'] ?? 0);
+            $total = (int) ($p['total'] ?? 0);
+
+            return $c + [
+                'done' => $done, 'total' => $total, 'order' => $i,
+                'finished' => ! ($c['active'] ?? true) || ($total > 0 && $done >= $total),
+            ];
+        })->sortBy(fn ($c) => [$c['finished'] ? 2 : ($c['done'] > 0 ? 0 : 1), $c['order']])->values();
+    }
+
+    /** "2 waiting" for each scan on the start screen (kept for a minute). */
+    protected function waitingCounts(): array
+    {
+        $user = Auth::user();
+
+        return cache()->remember('scan-app.waiting.'.$user?->id, 60, fn () => collect(array_keys($this->modes()))
+            ->mapWithKeys(fn ($key) => [$key => $this->choiceList($key)->where('finished', false)->count()])->all());
+    }
+
+    public function home(): void
+    {
+        cache()->forget('scan-app.waiting.'.Auth::id());
+        $this->reset('mode', 'choice', 'returned');
+        $this->screen = 'home';
+        $this->clearResult();
     }
 
     public function back(): void
     {
-        $this->step = match ($this->step) { 'odometer' => 'check', default => 'receipt' };
+        $this->screen = 'pick';
+        $this->choice = null;
+        $this->clearResult();
     }
 
-    protected function validateFill(): void
+    public function finish(): void
     {
-        foreach (['liters', 'total', 'price_per_liter', 'vat', 'vatable'] as $k) {
-            $this->f[$k] = str_replace([',', '₱', ' '], '', (string) $this->f[$k]);
+        $this->screen = 'done';
+        $this->clearResult();
+    }
+
+    public function dismiss(): void
+    {
+        $this->clearResult();
+    }
+
+    protected function clearResult(): void
+    {
+        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub');
+    }
+
+    /** Called by the camera or the typed box number. */
+    public function scan(string $code): void
+    {
+        $this->runScan($code);
+    }
+
+    /** After "too early": load that box anyway. */
+    public function loadAnyway(): void
+    {
+        if ($code = $this->early['code'] ?? $this->wrongHub['code'] ?? null) {
+            $this->runScan($code, true);
         }
-        $this->validate([
-            'f.liters' => 'required|numeric|min:1|max:1000',
-            'f.total' => 'required|numeric|min:1|max:200000',
-            'f.price_per_liter' => 'nullable|numeric|min:10|max:300',
-            'f.vat' => 'nullable|numeric|min:0',
-            'f.vatable' => 'nullable|numeric|min:0',
-            'f.fuel_type' => 'required|in:diesel,gasoline',
-            'f.paid_with' => 'required|in:card,cash',
-            'f.station' => 'nullable|string|max:120',
-            'f.product' => 'nullable|string|max:80',
-            'f.filled_at' => 'required|date',
-        ], [
-            'f.liters.required' => 'Type the liters on the receipt.',
-            'f.total.required' => 'Type the total amount.',
-            'f.fuel_type.required' => 'Diesel or gasoline?',
-        ]);
     }
 
-    public function save(): void
+    // ------------------------------------------------------------------ sections, truck waiting, sets
+
+    /** Unload: take the box off the waiting truck and keep it in its section. */
+    public function putInSection(): void
     {
-        $this->validateFill();
-        $this->validate(['f.odometer' => 'nullable|integer|min:1|max:9999999']);
-        $driver = Auth::user();
-        $trip = DriverTrip::currentTrip($driver);
-        $truck = FuelData::truckFor($driver, $trip);
-        if (! $truck) {
-            Notification::make()->title('No truck for you yet')->body('Ask the office to put you on a truck, then add the fill again.')->danger()->send();
+        $station = $this->station();
+        if ($this->mode !== 'unload' || ! $this->invoiceId || ! $station || ! method_exists($station, 'putInSection') || ! $station->putInSection($this->invoiceId)) {
+            return;
+        }
+        $this->route = $station->route;
+        $this->message = $station->lastMessage;
+    }
+
+    public function openTruckPicker(bool $open = true): void
+    {
+        $this->truckPicker = $open && $this->mode === 'unload';
+    }
+
+    public function truckStart(int $tripId): void
+    {
+        $station = $this->station();
+        if ($this->mode === 'unload' && $station && method_exists($station, 'startTruck') && $station->startTruck($tripId)) {
+            $this->truckPicker = false;
+            Notification::make()->title('Truck waiting: its boxes now go straight onto it')->success()->send();
+        }
+    }
+
+    public function truckPause(bool $paused): void
+    {
+        if ($this->mode === 'unload' && ($station = $this->station()) && method_exists($station, 'pauseTruck')) {
+            $station->pauseTruck($paused);
+        }
+    }
+
+    public function truckStop(): void
+    {
+        if ($this->mode === 'unload' && ($station = $this->station()) && method_exists($station, 'stopTruck')) {
+            $station->stopTruck();
+        }
+    }
+
+    /** Load truck, Done screen: why a box of a customer's set stays behind. */
+    public function splitReason(int $invoiceId, string $reason): void
+    {
+        $station = $this->station();
+        if ($station && method_exists($station, 'recordSplit')) {
+            $station->recordSplit($invoiceId, $reason);
+        }
+    }
+
+    protected function runScan(string $code, bool $force = false): void
+    {
+        $station = $this->station();
+        if (! $station || ! $this->choice || $this->screen !== 'scan') {
+            return;
+        }
+
+        if ($force && property_exists($station, 'forceLoad')) {
+            $station->forceLoad = true;
+        }
+        $station->scan($code);
+        session()->forget('filament.notifications'); // this screen shows its own result
+
+        $this->clearResult();
+        $this->status = $station->lastStatus;
+        $this->message = $station->lastMessage;
+        $this->invoiceId = $station->lastInvoiceId;
+        $this->missing = property_exists($station, 'missingCode') ? $station->missingCode : null;
+        if (property_exists($station, 'returnedCount')) {
+            $this->returned = $station->returnedCount;
+        }
+        $this->early = property_exists($station, 'early') ? $station->early : null;
+        $this->spot = property_exists($station, 'spot') ? $station->spot : null;
+        $this->route = property_exists($station, 'route') ? $station->route : null;
+        $this->setInfo = property_exists($station, 'setInfo') ? $station->setInfo : null;
+        $this->wrongHub = property_exists($station, 'wrongHub') ? $station->wrongHub : null;
+
+        if ($this->status === 'success') {
+            $this->sessionScans++;
+            $key = 'scan-app.today.'.now()->toDateString();
+            session([$key => session($key, 0) + 1]);
+        }
+
+        $this->dispatch('scan-app-result', status: $this->status);
+    }
+
+    // ------------------------------------------------------------------ photos
+
+    protected function photoStep(): ?string
+    {
+        return $this->station()?->photoStep();
+    }
+
+    public function photosOn(): bool
+    {
+        $step = $this->photoStep();
+
+        return $step !== null && PhotoSetting::current()->allows($step);
+    }
+
+    public function setCondition(?string $condition): void
+    {
+        $this->condition = array_key_exists((string) $condition, BoxPhoto::CONDITIONS) ? $condition : null;
+    }
+
+    public function saveBoxPhoto(): void
+    {
+        $invoice = $this->status === 'success' && $this->invoiceId ? Invoice::find($this->invoiceId) : null;
+        if (! $invoice || ! $this->photosOn()) {
+            $this->reset('boxPhoto');
 
             return;
         }
-        $at = \Illuminate\Support\Carbon::parse($this->f['filled_at']);
-        $fill = FuelData::save([
-            ...$this->f,
-            'filled_at' => $at->gt(now()) ? now() : $at,
-            'buyer_tin_ok' => $this->f['buyer_tin_ok'] === '' ? null : $this->f['buyer_tin_ok'] === '1',
-            'receipt_path' => $this->receiptPath, 'odometer_path' => $this->odometerPath,
-            'lat' => $this->lat, 'lng' => $this->lng, 'ai_read' => $this->aiRead, 'ai_data' => $this->aiData ?: null,
-        ], $truck, $driver, $trip);
-        $this->savedId = $fill->id;
-        $this->step = 'done';
+
+        $this->validate(['boxPhoto' => 'required|image|max:12288'], ['boxPhoto.image' => 'That file is not a photo.']);
+
+        $station = $this->station();
+        BoxPhotos::store($this->boxPhoto, $station->photoStep(), $invoice, $station->photoContext(), Auth::user(), $this->condition, $this->note ?: null);
+        $this->reset('boxPhoto');
     }
 
-    public function another(): void
+    /** Photos of the last box at this step. */
+    public function shots(): Collection
     {
-        $this->reset(['receiptPath', 'odometerPath', 'aiRead', 'aiData', 'savedId']);
-        $this->f = $this->blank();
-        $this->step = 'receipt';
+        $step = $this->photoStep();
+
+        return $this->invoiceId && $step
+            ? BoxPhoto::where('invoice_id', $this->invoiceId)->where('step', $step)->orderBy('id')->get()
+            : collect();
     }
+
+    // ------------------------------------------------------------------ wrong box
+
+    public function unmanifestedAction(): Action
+    {
+        return Action::make('unmanifested')
+            ->label('Record as unmanifested')
+            ->modalHeading(fn () => "Unmanifested box {$this->missing}")
+            ->modalDescription('This box is in the container but not on its manifest. Take a photo and add a note.')
+            ->schema([
+                FileUpload::make('attachment_pic')->label('Photo')->image()->disk('public')->directory('unmanifested')->visibility('private')->required(),
+                Textarea::make('remarks')->label('Notes')->rows(3),
+            ])
+            ->visible(fn () => filled($this->missing) && $this->mode === 'unload')
+            ->action(function (array $data): void {
+                Unmanifested::create([
+                    'invoice' => $this->missing,
+                    'container_id' => $this->choice,
+                    'attachment_pic' => $data['attachment_pic'] ?? null,
+                    'remarks' => $data['remarks'] ?? null,
+                ]);
+                Notification::make()->title("Unmanifested box {$this->missing} recorded")->success()->send();
+                $this->clearResult();
+            });
+    }
+
+    // ------------------------------------------------------------------ view
 
     protected function getViewData(): array
     {
-        $driver = Auth::user();
-        $trip = DriverTrip::currentTrip($driver);
-        $truck = FuelData::truckFor($driver, $trip);
-        $cash = FuelData::cashFor($trip);
-        $prev = $truck ? \App\Models\Fuel\FuelFill::where('truck_id', $truck->id)->whereNotNull('odometer')->latest('filled_at')->first() : null;
-        $odo = (int) $this->f['odometer'];
-        $kmSince = $prev && $odo > $prev->odometer && $odo - $prev->odometer < 5000 ? $odo - $prev->odometer : null;
-        $liters = (float) $this->f['liters'];
+        $user = Auth::user();
+        $modes = $this->modes();
+        $mode = $this->mode();
+
+        $choices = collect();
+        $finishedCount = 0;
+        if ($this->screen === 'pick' && $mode) {
+            $all = $this->choiceList($this->mode);
+            $finishedCount = $all->where('finished', true)->count();
+            $choices = $this->showFinished ? $all : $all->where('finished', false)->values();
+        }
+
+        $progress = ['loaded' => 0, 'total' => 0];
+        $target = null;
+        $loadNext = null;
+        $team = [];
+        $truck = null;
+        $trucks = collect();
+        $openSets = [];
+        if (in_array($this->screen, ['scan', 'done'], true) && $mode && $this->choice) {
+            $station = $this->station();
+            $progress = $station->progress();
+            $target = $station->appChoices()->firstWhere('id', $this->choice);
+            $loadNext = $this->screen === 'scan' && method_exists($station, 'loadNext') ? $station->loadNext() : null;
+            $team = method_exists($station, 'team') ? $station->team() : [];
+            $truck = method_exists($station, 'truckStatus') ? $station->truckStatus() : null;
+            $trucks = $this->truckPicker && method_exists($station, 'truckChoices') ? $station->truckChoices() : collect();
+            $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
+        }
+
+        $todayPhotos = BoxPhoto::where('user_id', $user?->id)->whereDate('taken_at', today());
 
         return [
-            'trip' => $trip, 'truck' => $truck, 'cash' => $cash,
-            'aiOn' => FuelReader::on(),
-            'wrongFuel' => $truck?->fuel_type && $this->f['fuel_type'] && $truck->fuel_type !== $this->f['fuel_type'],
-            'problems' => $this->step === 'check' ? FuelReader::problems($this->f) : [],
-            'receiptUrl' => $this->receiptPath ? Storage::disk('public')->url($this->receiptPath) : null,
-            'odometerUrl' => $this->odometerPath ? Storage::disk('public')->url($this->odometerPath) : null,
-            'prevOdo' => $prev?->odometer, 'kmSince' => $kmSince, 'kml' => $kmSince && $liters > 0 ? round($kmSince / $liters, 1) : null,
-            'needTin' => (float) $this->f['total'] >= 1000 && FuelData::companyTin() !== '',
-            'companyTin' => FuelData::companyTin(), 'companyName' => (string) FuelData::setting('company_name', ''),
-            'saved' => $this->savedId ? \App\Models\Fuel\FuelFill::find($this->savedId) : null,
+            'modes' => $modes,
+            'def' => $mode,
+            'place' => ScanModes::place($user),
+            'firstName' => $user?->first_name ?: 'there',
+            'initials' => mb_strtoupper(mb_substr($user?->first_name ?? '', 0, 1).mb_substr($user?->last_name ?? '', 0, 1)) ?: '·',
+            'greeting' => now()->hour < 12 ? 'Good morning' : (now()->hour < 18 ? 'Good afternoon' : 'Good evening'),
+            'today' => [
+                'scans' => (int) session('scan-app.today.'.now()->toDateString(), 0),
+                'photos' => (clone $todayPhotos)->count(),
+                'problems' => (clone $todayPhotos)->whereIn('condition', ['damaged', 'wet', 'open'])->distinct()->count('invoice_id'),
+            ],
+            'choices' => $choices,
+            'finishedCount' => $finishedCount,
+            'waiting' => $this->screen === 'home' ? $this->waitingCounts() : [],
+            'progress' => $progress,
+            'target' => $target,
+            'loadNext' => $loadNext,
+            'team' => $team,
+            'truck' => $truck,
+            'trucks' => $trucks,
+            'openSets' => $openSets,
+            'splitReasons' => \App\Models\Boxes\SetSplit::REASONS,
+            'box' => $this->invoiceId ? Invoice::find($this->invoiceId) : null,
+            'conditions' => BoxPhoto::CONDITIONS,
+            'shots' => $this->status === 'success' ? $this->shots() : collect(),
+            ...$this->aiPhotoFlag(),
         ];
+    }
+
+    /** AI photo check: the newest photo of this person that the AI thinks looks damaged while they marked it Good. */
+    protected function aiPhotoFlag(): array
+    {
+        if ($this->screen !== 'scan' || ! Ai::switchedOn('photo_check')) {
+            return ['aiFlag' => null, 'aiPending' => false];
+        }
+        $mine = AiPhotoCheck::where('source', 'scan')
+            ->whereIn('box_photo_id', BoxPhoto::where('user_id', Auth::id())->where('taken_at', '>=', now()->subMinutes(20))->select('id'));
+
+        return [
+            'aiFlag' => (clone $mine)->where('flagged', true)->whereNull('decision')
+                ->where(fn ($q) => $q->whereNull('worker_said')->orWhere('worker_said', 'good'))->latest('id')->first(),
+            'aiPending' => (clone $mine)->whereNull('checked_at')->where('created_at', '>=', now()->subMinutes(3))->exists(),
+        ];
+    }
+
+    public function aiFlagAnswer(int $id, bool $damaged): void
+    {
+        $check = AiPhotoCheck::whereIn('box_photo_id', BoxPhoto::where('user_id', Auth::id())->select('id'))->find($id);
+        if (! $check || $check->decision) {
+            return;
+        }
+        if ($damaged) {
+            BoxPhoto::whereKey($check->box_photo_id)->update(['condition' => $check->verdict === 'wet' ? 'wet' : ($check->verdict === 'open' ? 'open' : 'damaged')]);
+            PhotoCheck::confirm($check, Auth::user());
+        } else {
+            PhotoCheck::dismiss($check, Auth::user());
+        }
+    }
+}
+DISPATCH_FILE_END_1
+
+# ---------------------------------------------------------------- app/Filament/Shared/LoadTripPage.php
+mkdir -p 'app/Filament/Shared'
+cat > 'app/Filament/Shared/LoadTripPage.php' <<'DISPATCH_FILE_END_2'
+<?php
+
+namespace App\Filament\Shared;
+
+use App\Filament\Concerns\ScansInvoices;
+use App\Models\Deliverylog;
+use App\Models\Invoice;
+use App\Models\Tripinvoice;
+use App\Models\Boxes\SetSplit;
+use App\Models\User;
+use App\Services\TripAssignment;
+use App\Support\Boxes\BoxSets;
+use App\Support\Maps\LoadOrder;
+use App\Support\Maps\TripSorter;
+use Filament\Forms\Components\Select;
+use Filament\Pages\Page;
+use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
+
+/**
+ * Scan station: crew scans each box as it goes onto the truck of a trip.
+ *
+ * Used by the admin hub (Scanload), the warehouse hub (Hubloaded) and partner
+ * hubs (LoadTruck, which loads boxes handed over to the hub's own trips).
+ */
+abstract class LoadTripPage extends Page
+{
+    use ScansInvoices;
+
+    protected string $view = 'filament.pages.scanload';
+
+    protected static string|\BackedEnum|null $navigationIcon = Heroicon::OutlinedArrowUpTray;
+
+    /** Partner-hub mode: invoices are linked via deliveryloghub_id / is_loaded_hub. */
+    protected static bool $atHub = false;
+
+    /** Set by "Load it anyway" after a "too early" warning. */
+    public bool $forceLoad = false;
+
+    /** The last box that was too early to load (see LoadOrder). */
+    public ?array $early = null;
+
+    /** Where the box just loaded goes: ['zone' => 'front', 'stop' => 7]. */
+    public ?array $spot = null;
+
+    /** The box is for another hub than the trip goes to. */
+    public ?array $wrongHub = null;
+
+    /** The box's set on this truck: "Maria Santos · 2 of 3 · still to load X-103 (C)". */
+    public ?array $setInfo = null;
+
+    public function mount(): void
+    {
+        $this->form->fill();
+    }
+
+    protected function tripColumn(): string
+    {
+        return static::$atHub ? 'deliveryloghub_id' : 'deliverylog_id';
+    }
+
+    protected function loadedColumn(): string
+    {
+        return static::$atHub ? 'is_loaded_hub' : 'is_loaded';
+    }
+
+    protected function tripOptionsQuery(): Builder
+    {
+        return Deliverylog::query()
+            ->with('destination:id,hub_name')
+            ->where('logistichub_id', Auth::user()->logistichub_id)
+            ->whereNotNull('truck_id')
+            ->where('is_active', true)
+            ->latest('id');
+    }
+
+    public function form(Schema $schema): Schema
+    {
+        return $schema
+            ->statePath('data')
+            ->components([
+                Select::make('deliverylog_id')
+                    ->label('Trip')
+                    ->placeholder('Choose the trip you are loading')
+                    ->searchable()
+                    ->live()
+                    ->required()
+                    ->afterStateUpdated(fn () => $this->reset('lastInvoiceId', 'lastStatus', 'lastMessage'))
+                    ->options(fn () => $this->tripOptionsQuery()
+                        ->get()
+                        ->mapWithKeys(fn (Deliverylog $trip) => [
+                            $trip->id => $trip->trip_number.($trip->destination ? ' → '.$trip->destination->hub_name : ''),
+                        ])),
+            ]);
+    }
+
+    protected function selectionField(): ?string
+    {
+        return 'deliverylog_id';
+    }
+
+    protected function selectionLabel(): string
+    {
+        return 'a trip';
+    }
+
+    /** The selected trip, re-checked against what this user may load. */
+    protected function selectedTrip(): ?Deliverylog
+    {
+        return $this->tripOptionsQuery()->find($this->data['deliverylog_id'] ?? null);
+    }
+
+    protected function handleScan(string $code): void
+    {
+        $trip = $this->selectedTrip();
+
+        if (! $trip) {
+            $this->scanResult('danger', 'That trip is no longer open for loading.');
+
+            return;
+        }
+
+        $tripinvoice = Tripinvoice::with('invdata')
+            ->where($this->tripColumn(), $trip->id)
+            ->where('invoice', $code)
+            ->latest('id')
+            ->first();
+
+        if (! $tripinvoice) {
+            $elsewhere = Tripinvoice::with(['deliverylog:id,trip_number', 'invdata'])
+                ->where('invoice', $code)
+                ->latest('id')
+                ->first();
+
+            $this->scanResult(
+                'danger',
+                $elsewhere
+                    ? "{$code} belongs to trip {$elsewhere->deliverylog?->trip_number}, not {$trip->trip_number}."
+                    : "{$code} is not on trip {$trip->trip_number}.",
+                $elsewhere?->invdata ?? $this->invoicesMatching($code)->first(),
+            );
+
+            return;
+        }
+
+        if ($tripinvoice->{$this->loadedColumn()}) {
+            $who = $tripinvoice->loaded_by && $tripinvoice->loaded_by !== Auth::id() ? User::find($tripinvoice->loaded_by)?->first_name : null;
+            $when = $tripinvoice->loaded_at ? \Illuminate\Support\Carbon::parse($tripinvoice->loaded_at)->format('g:i A') : null;
+            $this->scanResult('warning', "{$code} was already loaded".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $tripinvoice->invdata);
+
+            return;
+        }
+
+        $this->early = null;
+        $this->spot = null;
+        $this->wrongHub = null;
+        $this->setInfo = null;
+        if (! $this->forceLoad && ($wrong = $this->wrongHubFor($trip, $tripinvoice))) {
+            $this->wrongHub = $wrong;
+            $this->scanResult('warning', "Wrong hub: {$code} is for {$wrong['for']} (section {$wrong['section']}). This trip goes to {$wrong['trip']}.", $tripinvoice->invdata);
+
+            return;
+        }
+        if (! $this->forceLoad && ($early = LoadOrder::tooEarly($trip, $tripinvoice, static::$atHub))) {
+            $this->early = $early;
+            $this->scanResult('warning', "Too early: {$code} is for stop {$early['stop']}".($early['place'] ? " ({$early['place']})" : '').'. It goes in later, nearer the door. Load stop '.$early['nextStop'].' first.', $tripinvoice->invdata);
+
+            return;
+        }
+        $this->forceLoad = false;
+
+        app(TripAssignment::class)->markLoaded($tripinvoice, atHub: static::$atHub);
+        $tripinvoice->forceFill(['loaded_by' => Auth::id(), 'loaded_at' => now()])->saveQuietly();
+        $this->spot = TripSorter::zoneMap($trip)[$tripinvoice->id] ?? null;
+        if ($tripinvoice->invdata) {
+            $this->setInfo = BoxSets::onTrip($tripinvoice->invdata, $trip, $this->tripColumn(), $this->loadedColumn());
+        }
+
+        $this->scanResult('success', "{$code} loaded.", $tripinvoice->invdata);
+    }
+
+    /** The box's section is for another partner hub than the one this trip goes to. */
+    protected function wrongHubFor(Deliverylog $trip, Tripinvoice $tripinvoice): ?array
+    {
+        $section = $tripinvoice->invdata?->whSection;
+        $to = static::$atHub ? null : $trip->assigned_to;
+        if (! $section || ! $section->logistichub_id || ! $to || (int) $section->logistichub_id === (int) $to) {
+            return null;
+        }
+
+        return ['code' => $tripinvoice->invoice, 'for' => $section->name ?: $section->goesTo(), 'section' => $section->code, 'color' => $section->color,
+            'trip' => $trip->destination?->hub_name ?? 'another hub'];
+    }
+
+    /** Customers whose boxes are not all on the truck, for the Done screen. */
+    public function openSets(): array
+    {
+        $trip = $this->selectedTrip();
+
+        return $trip ? BoxSets::openOnTrip($trip, $this->tripColumn(), $this->loadedColumn()) : [];
+    }
+
+    /** Why a box of a set stays behind. */
+    public function recordSplit(int $invoiceId, string $reason): bool
+    {
+        $trip = $this->selectedTrip();
+        if (! $trip || ! array_key_exists($reason, SetSplit::REASONS)) {
+            return false;
+        }
+        $ok = collect($this->openSets())->pluck('missing')->flatten(1)->contains('id', $invoiceId);
+        if (! $ok) {
+            return false;
+        }
+        SetSplit::updateOrCreate(['invoice_id' => $invoiceId, 'deliverylog_id' => $trip->id],
+            ['reason' => $reason, 'user_id' => Auth::id(), 'set_key' => Invoice::whereKey($invoiceId)->value('set_key')]);
+
+        return true;
+    }
+
+    /** Who loaded how many boxes on this trip. */
+    public function team(): array
+    {
+        $id = $this->data['deliverylog_id'] ?? null;
+        if (! $id) {
+            return [];
+        }
+        $counts = Tripinvoice::where($this->tripColumn(), $id)->where($this->loadedColumn(), true)->whereNotNull('loaded_by')
+            ->selectRaw('loaded_by, count(*) n')->groupBy('loaded_by')->pluck('n', 'loaded_by');
+        $names = User::whereIn('id', $counts->keys())->pluck('first_name', 'id');
+
+        return $counts->sortDesc()->map(fn ($n, $uid) => ['name' => (int) $uid === Auth::id() ? 'You' : ($names[$uid] ?? '?'), 'n' => (int) $n, 'me' => (int) $uid === Auth::id()])->values()->all();
+    }
+
+    /** After "too early" or "wrong hub": load that box anyway. */
+    public function loadAnyway(): void
+    {
+        if ($code = $this->early['code'] ?? $this->wrongHub['code'] ?? null) {
+            $this->forceLoad = true;
+            $this->scan($code);
+            $this->forceLoad = false;
+        }
+    }
+
+    /** What to load next on the selected trip (null when the trip has no sorted stops). */
+    public function loadNext(): ?array
+    {
+        $trip = $this->selectedTrip();
+
+        return $trip ? LoadOrder::next($trip, static::$atHub) : null;
+    }
+
+    /** @return array{loaded: int, total: int} */
+    public function progress(): array
+    {
+        $tripId = $this->data['deliverylog_id'] ?? null;
+
+        if (! $tripId) {
+            return ['loaded' => 0, 'total' => 0];
+        }
+
+        $query = Tripinvoice::where($this->tripColumn(), $tripId);
+
+        return [
+            'loaded' => (clone $query)->where($this->loadedColumn(), true)->count(),
+            'total' => $query->count(),
+            'last' => (clone $query)->where($this->loadedColumn(), true)->max('updated_at'),
+        ];
+    }
+
+    public function household(): array
+    {
+        $tripId = (int) ($this->data['deliverylog_id'] ?? 0);
+
+        return $this->householdRows($this->lastInvoice(), function (Invoice $box) use ($tripId): array {
+            $onTrip = Tripinvoice::with('deliverylog:id,trip_number')->where('invoice_id', $box->id)->latest('id')->first();
+
+            return [
+                'trip' => $onTrip?->deliverylog?->trip_number,
+                'done' => (bool) ($onTrip?->{$this->loadedColumn()} && (int) $onTrip->{$this->tripColumn()} === $tripId),
+            ];
+        });
+    }
+
+    public function photoStep(): ?string
+    {
+        return static::$atHub ? 'hub_load' : 'load';
+    }
+
+    public function photoContext(): array
+    {
+        return [
+            'deliverylog_id' => $this->data['deliverylog_id'] ?? null,
+            'warehouse_id' => Auth::user()?->warehouse_id,
+            'logistichub_id' => Auth::user()?->logistichub_id,
+        ];
+    }
+
+    public function appChoices(): Collection
+    {
+        return $this->tripOptionsQuery()->latest('id')->limit(60)->get()
+            ->map(fn (Deliverylog $t) => ['id' => $t->id, 'name' => 'Trip '.$t->trip_number, 'active' => (bool) ($t->is_active ?? true),
+                'sub' => $t->destination?->hub_name ? 'To '.$t->destination->hub_name : ($t->departure_date ? 'Leaves '.$t->departure_date : null)]);
+    }
+}
+DISPATCH_FILE_END_2
+
+# ---------------------------------------------------------------- app/Filament/Shared/UnloadContainerPage.php
+mkdir -p 'app/Filament/Shared'
+cat > 'app/Filament/Shared/UnloadContainerPage.php' <<'DISPATCH_FILE_END_3'
+<?php
+
+namespace App\Filament\Shared;
+
+use App\Filament\Concerns\ScansInvoices;
+use App\Models\Boxissue;
+use App\Models\Container;
+use App\Models\Invoice;
+use App\Models\Invoiceissue;
+use App\Models\Unmanifested;
+use App\Models\User;
+use App\Support\Boxes\BoxSets;
+use App\Support\Boxes\Crossdock;
+use App\Support\Boxes\Sections;
+use Filament\Actions\Action;
+use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\MarkdownEditor;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
+use Filament\Notifications\Notification;
+use Filament\Pages\Page;
+use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
+use Livewire\Attributes\Locked;
+
+/**
+ * Scan station for unloading a shipping container: every box scanned is
+ * marked verified. Boxes that are damaged can be reported, and boxes that
+ * are not on the manifest can be recorded as unmanifested.
+ */
+abstract class UnloadContainerPage extends Page
+{
+    use ScansInvoices;
+
+    protected string $view = 'filament.pages.scaninvoice';
+
+    /** The last code that was not found in the container (for the unmanifested form). */
+    #[Locked]
+    public ?string $missingCode = null;
+
+    /** Where the box just scanned goes: a section tile, or the waiting truck. */
+    public ?array $route = null;
+
+    /** The box's set: "Maria Santos · 2 of 3 · 1 more still in this container". */
+    public ?array $setInfo = null;
+
+    abstract protected function containerQuery(): Builder;
+
+    public function mount(): void
+    {
+        $this->form->fill();
+    }
+
+    public function form(Schema $schema): Schema
+    {
+        return $schema
+            ->statePath('data')
+            ->components([
+                Select::make('container_id')
+                    ->label('Container')
+                    ->placeholder('Choose the container you are unloading')
+                    ->searchable()
+                    ->live()
+                    ->required()
+                    ->afterStateUpdated(fn () => $this->reset('lastInvoiceId', 'lastStatus', 'lastMessage', 'missingCode'))
+                    ->options(fn () => $this->containerQuery()
+                        ->with('consolidator:id,company_name')
+                        ->latest('id')
+                        ->get()
+                        ->mapWithKeys(fn (Container $container) => [
+                            $container->id => collect([
+                                $container->container_no,
+                                $container->batch_no ? 'batch '.$container->batch_no : null,
+                                $container->batch_year,
+                                $container->consolidator?->company_name,
+                            ])->filter()->join(' · '),
+                        ])),
+            ]);
+    }
+
+    protected function selectionField(): ?string
+    {
+        return 'container_id';
+    }
+
+    protected function selectionLabel(): string
+    {
+        return 'a container';
+    }
+
+    public function stationHeading(): string
+    {
+        return 'Unload the container';
+    }
+
+    public function stationDescription(): string
+    {
+        return 'Pick the container, then scan each box as it comes off. Scanned boxes are marked verified.';
+    }
+
+    public function stationIcon(): string
+    {
+        return 'heroicon-o-archive-box-arrow-down';
+    }
+
+    public function progressLabel(): string
+    {
+        return 'Boxes verified in this container';
+    }
+
+    protected function selectedContainer(): ?Container
+    {
+        return $this->containerQuery()->find($this->data['container_id'] ?? null);
+    }
+
+    protected function handleScan(string $code): void
+    {
+        $container = $this->selectedContainer();
+
+        if (! $container) {
+            $this->scanResult('danger', 'That container is not available any more.');
+
+            return;
+        }
+
+        $this->missingCode = null;
+        $this->route = null;
+        $this->setInfo = null;
+
+        if ($section = Sections::fromCode($code)) {
+            $this->placeInSection($container, $section);
+
+            return;
+        }
+
+        $invoice = Invoice::where('container_id', $container->id)->where('invoice', $code)->first();
+
+        if (! $invoice) {
+            $this->missingCode = $code;
+            $other = $this->invoicesMatching($code)->first();
+
+            $this->scanResult(
+                'danger',
+                $other
+                    ? "{$code} is manifested in another container ({$other->container?->container_no})."
+                    : "{$code} is not on this container's manifest.",
+                $other,
+            );
+
+            return;
+        }
+
+        if ($invoice->is_verified) {
+            $who = $invoice->verified_by && $invoice->verified_by !== Auth::id() ? User::find($invoice->verified_by)?->first_name : null;
+            $when = $invoice->verified_at ? \Illuminate\Support\Carbon::parse($invoice->verified_at)->format('g:i A') : null;
+            $this->route = Sections::tile($invoice->whSection);
+            $this->scanResult('warning', "{$code} was already verified".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $invoice);
+
+            return;
+        }
+
+        $invoice->forceFill(['is_verified' => true, 'verified_at' => now(), 'verified_by' => Auth::id()])->save();
+
+        $this->scanResult('success', $this->sendToSection($container, $invoice), $invoice);
+    }
+
+    /** After the box is verified: pick its section, or load it straight onto the waiting truck. */
+    protected function sendToSection(Container $container, Invoice $invoice): string
+    {
+        $code = $invoice->invoice;
+        $warehouseId = $this->warehouseId($container);
+        $section = Sections::forInvoice($invoice, $warehouseId);
+        $this->setInfo = BoxSets::atUnload($invoice);
+
+        if (! $section) {
+            return "{$code} verified.";
+        }
+
+        if ($trip = Crossdock::load($invoice, Crossdock::active($container->id), $section)) {
+            $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => null])->save();
+            $this->route = ['kind' => 'truck', 'code' => 'TRUCK', 'name' => $trip->warehouse?->name ?? $section->goesTo(), 'trip' => $trip->trip_number, 'color' => '#e8590c'];
+
+            return "{$code} verified · onto truck {$trip->trip_number}.";
+        }
+
+        $label = Sections::labelScan($warehouseId);
+        $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => $label ? null : now()])->save();
+        $this->route = Sections::tile($section) + ['pending' => $label, 'why' => $section->kind === 'check' ? Sections::whyCheck($invoice) : null];
+
+        return "{$code} verified · section {$section->code}.";
+    }
+
+    /** Section-label scan (when switched on): the boxes this person scanned for that section are now there. */
+    protected function placeInSection(Container $container, \App\Models\Boxes\WhSection $section): void
+    {
+        $warehouseId = $this->warehouseId($container);
+        if (! Sections::labelScan($warehouseId)) {
+            $this->scanResult('warning', 'The section label scan is off: boxes are saved in their section when you scan them.');
+
+            return;
+        }
+        $pending = Invoice::where('container_id', $container->id)->where('verified_by', Auth::id())
+            ->whereNotNull('wh_section_id')->whereNull('sectioned_at')->get();
+        $dock = Crossdock::active($container->id);
+        if ($dock) {
+            $onTruck = \App\Models\Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->whereIn('invoice_id', $pending->pluck('id'))->pluck('invoice_id')->all();
+            $pending = $pending->reject(fn ($b) => in_array($b->id, $onTruck, true));
+        }
+        $mine = $pending->where('wh_section_id', $section->id);
+        $other = $pending->where('wh_section_id', '!=', $section->id);
+        $this->route = Sections::tile($section);
+
+        if ($mine->isEmpty()) {
+            $this->scanResult('warning', $other->isNotEmpty()
+                ? 'Wrong section: your '.$other->count().' '.str('box')->plural($other->count()).' '.($other->count() === 1 ? 'is' : 'are').' for '.$other->map(fn ($b) => $b->whSection?->code)->unique()->join(', ').', not '.$section->code.'.'
+                : "Section {$section->code}: none of your boxes are waiting for it.");
+
+            return;
+        }
+        Invoice::whereIn('id', $mine->pluck('id'))->update(['sectioned_at' => now()]);
+        $this->scanResult('success', $mine->count().' '.str('box')->plural($mine->count())." saved in section {$section->code}"
+            .($other->isNotEmpty() ? ' · '.$other->count().' still for '.$other->map(fn ($b) => $b->whSection?->code)->unique()->join(', ') : '').'.');
+    }
+
+    protected function warehouseId(?Container $container): ?int
+    {
+        return $container?->warehouse_id ?? Auth::user()?->warehouse_id;
+    }
+
+    // ------------------------------------------------------------------ truck waiting (cross-dock)
+
+    /** "Put in section instead": take the box off the waiting truck and keep it in its section. */
+    public function putInSection(int $invoiceId): bool
+    {
+        $container = $this->selectedContainer();
+        $dock = Crossdock::active($container?->id);
+        $invoice = $container ? Invoice::where('container_id', $container->id)->find($invoiceId) : null;
+        if (! $dock || ! $invoice || ! Crossdock::unload($invoice, $dock)) {
+            return false;
+        }
+        $section = $invoice->whSection ?? Sections::forInvoice($invoice, $this->warehouseId($container));
+        $invoice->forceFill(['wh_section_id' => $section?->id, 'sectioned_at' => now()])->save();
+        $this->route = Sections::tile($section);
+        $this->lastInvoiceId = $invoice->id;
+        $this->lastStatus = 'success';
+        $this->lastMessage = "{$invoice->invoice} stays in section ".($section?->code ?? '').'. It goes on the next truck.';
+
+        return true;
+    }
+
+    /** Trucks that can wait at this unload. */
+    public function truckChoices(): Collection
+    {
+        return Crossdock::trips($this->warehouseId($this->selectedContainer()))
+            ->map(fn ($t) => ['id' => $t->id, 'name' => 'WH trip '.$t->trip_number, 'to' => $t->warehouse?->name, 'truck' => $t->truck?->plate_no]);
+    }
+
+    public function startTruck(int $tripId): bool
+    {
+        $container = $this->selectedContainer();
+
+        return $container && Crossdock::start($container, $tripId) !== null;
+    }
+
+    public function pauseTruck(bool $paused): void
+    {
+        Crossdock::active($this->selectedContainer()?->id)?->update(['paused' => $paused]);
+    }
+
+    public function stopTruck(): void
+    {
+        Crossdock::active($this->selectedContainer()?->id)?->update(['ended_at' => now()]);
+    }
+
+    public function truckStatus(): ?array
+    {
+        $dock = Crossdock::active($this->selectedContainer()?->id);
+
+        return $dock ? Crossdock::counts($dock) : null;
+    }
+
+    /** Who scanned how many boxes off this container. */
+    public function team(): array
+    {
+        $id = $this->data['container_id'] ?? null;
+        if (! $id) {
+            return [];
+        }
+        $counts = Invoice::where('container_id', $id)->whereNotNull('verified_by')->selectRaw('verified_by, count(*) n')->groupBy('verified_by')->pluck('n', 'verified_by');
+        $names = User::whereIn('id', $counts->keys())->pluck('first_name', 'id');
+
+        return $counts->sortDesc()->map(fn ($n, $uid) => ['name' => (int) $uid === Auth::id() ? 'You' : ($names[$uid] ?? '?'), 'n' => (int) $n, 'me' => (int) $uid === Auth::id()])->values()->all();
+    }
+
+    /** @return array{loaded: int, total: int, last?: ?string, issues?: int, unmanifested?: int} */
+    public function progress(): array
+    {
+        $containerId = $this->data['container_id'] ?? null;
+
+        if (! $containerId) {
+            return ['loaded' => 0, 'total' => 0];
+        }
+
+        $query = Invoice::where('container_id', $containerId);
+
+        return [
+            'loaded' => (clone $query)->where('is_verified', true)->count(),
+            'total' => $query->count(),
+            'last' => (clone $query)->max('verified_at'),
+            'issues' => Invoiceissue::where('container_id', $containerId)->count(),
+            'unmanifested' => Unmanifested::where('container_id', $containerId)->count(),
+        ];
+    }
+
+    public function household(): array
+    {
+        return $this->householdRows($this->lastInvoice(), fn (Invoice $box) => [
+            'trip' => $box->is_verified ? 'Verified' : 'Not scanned yet',
+            'done' => (bool) $box->is_verified,
+        ]);
+    }
+
+    public function reportIssueAction(): Action
+    {
+        return Action::make('reportIssue')
+            ->label('Report a problem')
+            ->icon(Heroicon::OutlinedExclamationTriangle)
+            ->color('danger')
+            ->outlined()
+            ->visible(fn () => $this->lastInvoiceId !== null && $this->lastInvoice()?->container_id == ($this->data['container_id'] ?? null))
+            ->modalHeading(fn () => 'Report a problem with '.$this->lastInvoice()?->invoice)
+            ->modalWidth('lg')
+            ->schema([
+                Select::make('boxissue_id')
+                    ->label('Problem')
+                    ->options(fn () => Boxissue::query()->orderBy('issue_type')->pluck('issue_type', 'id'))
+                    ->required(),
+                MarkdownEditor::make('remarks')
+                    ->label('Notes')
+                    ->toolbarButtons(['bold', 'italic', 'bulletList']),
+                FileUpload::make('attachment_pic')
+                    ->label('Photo')
+                    ->image()
+                    ->disk('public')
+                    ->directory('boxissue')
+                    ->visibility('private')
+                    ->required(),
+            ])
+            ->action(function (array $data): void {
+                $invoice = $this->lastInvoice();
+
+                if (! $invoice) {
+                    return;
+                }
+
+                Invoiceissue::create([
+                    'invoice' => $invoice->invoice,
+                    'invoice_id' => $invoice->id,
+                    'container_id' => $invoice->container_id,
+                    'boxissue_id' => $data['boxissue_id'],
+                    'remarks' => $data['remarks'] ?? null,
+                    'attachment_pic' => $data['attachment_pic'] ?? null,
+                    'user_id' => Auth::id(),
+                ]);
+
+                Notification::make()->title("Problem recorded for {$invoice->invoice}")->success()->send();
+            });
+    }
+
+    public function unmanifestedAction(): Action
+    {
+        return Action::make('unmanifested')
+            ->label('Record as unmanifested box')
+            ->icon(Heroicon::OutlinedDocumentPlus)
+            ->color('warning')
+            ->visible(fn () => filled($this->missingCode))
+            ->modalHeading(fn () => "Unmanifested box {$this->missingCode}")
+            ->modalDescription('This box is in the container but not on its manifest. Take a photo and add a note.')
+            ->modalWidth('lg')
+            ->schema([
+                FileUpload::make('attachment_pic')
+                    ->label('Photo')
+                    ->image()
+                    ->disk('public')
+                    ->directory('unmanifested')
+                    ->visibility('private')
+                    ->required(),
+                Textarea::make('remarks')->label('Notes')->rows(3),
+            ])
+            ->action(function (array $data): void {
+                Unmanifested::create([
+                    'invoice' => $this->missingCode,
+                    'container_id' => $this->data['container_id'],
+                    'attachment_pic' => $data['attachment_pic'] ?? null,
+                    'remarks' => $data['remarks'] ?? null,
+                ]);
+
+                Notification::make()->title("Unmanifested box {$this->missingCode} recorded")->success()->send();
+
+                $this->missingCode = null;
+            });
+    }
+
+    public function photoStep(): ?string
+    {
+        return 'unload';
+    }
+
+    public function photoContext(): array
+    {
+        $id = $this->data['container_id'] ?? null;
+
+        return [
+            'container_id' => $id,
+            'warehouse_id' => ($id ? Container::whereKey($id)->value('warehouse_id') : null) ?? Auth::user()?->warehouse_id,
+            'logistichub_id' => Auth::user()?->logistichub_id,
+        ];
+    }
+
+    public function appChoices(): Collection
+    {
+        return $this->containerQuery()->with('consolidator:id,company_name')->latest('id')->limit(60)->get()
+            ->map(fn (Container $c) => ['id' => $c->id, 'name' => $c->container_no, 'active' => (bool) ($c->is_active ?? true) && ! $c->is_unloaded,
+                'sub' => collect([$c->batch_no ? 'Batch '.$c->batch_no : null, $c->consolidator?->company_name])->filter()->join(' · ') ?: null]);
     }
 }
 DISPATCH_FILE_END_3
 
-# ---------------------------------------------------------------- app/Filament/Pages/Fuel.php
-mkdir -p 'app/Filament/Pages'
-cat > 'app/Filament/Pages/Fuel.php' <<'DISPATCH_FILE_END_4'
+# ---------------------------------------------------------------- app/Filament/Shared/WarehouseTripScanPage.php
+mkdir -p 'app/Filament/Shared'
+cat > 'app/Filament/Shared/WarehouseTripScanPage.php' <<'DISPATCH_FILE_END_4'
 <?php
 
-namespace App\Filament\Pages;
+namespace App\Filament\Shared;
 
-use App\Filament\Shared\Fuel\FuelPage;
+use App\Filament\Concerns\ScansInvoices;
+use App\Models\Invoice;
+use App\Models\Whtripinvoice;
+use Filament\Forms\Components\Select;
+use Filament\Pages\Page;
+use Filament\Schemas\Schema;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
-class Fuel extends FuelPage {}
+/**
+ * Scan station for warehouse-to-warehouse trips.
+ * Whloaded loads boxes at the origin, Whunloaded receives them at the destination.
+ */
+abstract class WarehouseTripScanPage extends Page
+{
+    use ScansInvoices;
+
+    protected string $view = 'filament.pages.scanload';
+
+    /** true = receiving at the destination warehouse, false = loading at the origin. */
+    protected static bool $unloading = false;
+
+    abstract protected function tripOptionsQuery(): Builder;
+
+    public function mount(): void
+    {
+        $this->form->fill();
+    }
+
+    public function form(Schema $schema): Schema
+    {
+        return $schema
+            ->statePath('data')
+            ->components([
+                Select::make('deliverylog_id')
+                    ->label('Trip')
+                    ->placeholder(static::$unloading ? 'Choose the arriving trip' : 'Choose the trip you are loading')
+                    ->searchable()
+                    ->live()
+                    ->required()
+                    ->afterStateUpdated(fn () => $this->reset('lastInvoiceId', 'lastStatus', 'lastMessage'))
+                    ->options(fn () => $this->tripOptionsQuery()->latest('id')->pluck('trip_number', 'id')),
+            ]);
+    }
+
+    protected function selectionField(): ?string
+    {
+        return 'deliverylog_id';
+    }
+
+    protected function selectionLabel(): string
+    {
+        return 'a trip';
+    }
+
+    protected function doneColumn(): string
+    {
+        return static::$unloading ? 'is_unloaded' : 'is_loaded';
+    }
+
+    protected function handleScan(string $code): void
+    {
+        $trip = $this->tripOptionsQuery()->find($this->data['deliverylog_id'] ?? null);
+
+        if (! $trip) {
+            $this->scanResult('danger', 'That trip is not available any more.');
+
+            return;
+        }
+
+        $invoice = $this->invoicesMatching($code)->first();
+        $row = $invoice
+            ? Whtripinvoice::with('whdeliverylog:id,trip_number')->where('invoice_id', $invoice->id)->latest('id')->first()
+            : null;
+
+        if (! $row) {
+            $this->scanResult('danger', "{$code} is not on any warehouse trip.", $invoice);
+
+            return;
+        }
+
+        if ((int) $row->whdeliverylog_id !== (int) $trip->id) {
+            $this->scanResult('danger', "{$code} belongs to trip {$row->whdeliverylog?->trip_number}, not {$trip->trip_number}.", $invoice);
+
+            return;
+        }
+
+        if (static::$unloading && ! $row->is_loaded) {
+            $this->scanResult('warning', "{$code} was never scanned onto the truck. Check with the loading warehouse.", $invoice);
+
+            return;
+        }
+
+        if ($row->{$this->doneColumn()}) {
+            $who = ! static::$unloading && $row->loaded_by && $row->loaded_by !== Auth::id() ? \App\Models\User::find($row->loaded_by)?->first_name : null;
+            $this->scanResult('warning', "{$code} was already ".(static::$unloading ? 'received' : 'loaded').($who ? " by {$who}" : '').'. Not counted again.', $invoice);
+
+            return;
+        }
+
+        DB::transaction(function () use ($row, $invoice, $trip): void {
+            $row->update([$this->doneColumn() => true] + (static::$unloading ? [] : ['loaded_by' => Auth::id(), 'loaded_at' => now()]));
+
+            // The box now physically sits in the destination warehouse.
+            if (static::$unloading) {
+                $invoice->update(['warehouse_id' => $trip->warehouse_id]);
+            }
+        });
+
+        $this->scanResult('success', "{$code} ".(static::$unloading ? 'received' : 'loaded').'.', $invoice);
+    }
+
+    /** @return array{loaded: int, total: int} */
+    public function progress(): array
+    {
+        $tripId = $this->data['deliverylog_id'] ?? null;
+
+        if (! $tripId) {
+            return ['loaded' => 0, 'total' => 0];
+        }
+
+        $query = Whtripinvoice::where('whdeliverylog_id', $tripId);
+
+        return [
+            'loaded' => (clone $query)->where($this->doneColumn(), true)->count(),
+            'total' => $query->count(),
+        ];
+    }
+
+    public function progressLabel(): string
+    {
+        return static::$unloading ? 'Boxes received from this trip' : 'Boxes loaded on this trip';
+    }
+
+    public function stationHeading(): string
+    {
+        return static::$unloading ? 'Receive boxes from the truck' : 'Scan boxes onto the truck';
+    }
+
+    public function stationDescription(): string
+    {
+        return static::$unloading
+            ? 'Pick the arriving trip, then scan every box as it comes off.'
+            : 'Pick the trip, then scan every box as it is loaded.';
+    }
+
+    public function stationIcon(): string
+    {
+        return static::$unloading ? 'heroicon-o-arrow-down-tray' : 'heroicon-o-arrow-up-tray';
+    }
+
+    public function household(): array
+    {
+        $tripId = (int) ($this->data['deliverylog_id'] ?? 0);
+
+        return $this->householdRows($this->lastInvoice(), function (Invoice $box) use ($tripId): array {
+            $row = Whtripinvoice::with('whdeliverylog:id,trip_number')->where('invoice_id', $box->id)->latest('id')->first();
+
+            return [
+                'trip' => $row?->whdeliverylog?->trip_number,
+                'done' => (bool) ($row?->{$this->doneColumn()} && (int) $row->whdeliverylog_id === $tripId),
+            ];
+        });
+    }
+
+    public function photoStep(): ?string
+    {
+        return static::$unloading ? 'wh_unload' : 'wh_load';
+    }
+
+    public function photoContext(): array
+    {
+        return [
+            'whdeliverylog_id' => $this->data['deliverylog_id'] ?? null,
+            'warehouse_id' => Auth::user()?->warehouse_id,
+            'logistichub_id' => Auth::user()?->logistichub_id,
+        ];
+    }
+
+    public function appChoices(): Collection
+    {
+        return $this->tripOptionsQuery()->latest('id')->limit(60)->get()
+            ->map(fn ($t) => ['id' => $t->id, 'name' => 'WH trip '.$t->trip_number, 'active' => (bool) ($t->is_active ?? true), 'sub' => $t->departure_date ? 'Leaves '.$t->departure_date : null]);
+    }
+}
 DISPATCH_FILE_END_4
 
-# ---------------------------------------------------------------- app/Filament/Pages/FuelSettings.php
-mkdir -p 'app/Filament/Pages'
-cat > 'app/Filament/Pages/FuelSettings.php' <<'DISPATCH_FILE_END_5'
-<?php
-
-namespace App\Filament\Pages;
-
-use App\Models\Truck;
-use App\Support\Fuel\Fuel;
-use BackedEnum;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Support\Facades\Auth;
-use UnitEnum;
-
-/** Admin → Settings → Fuel: company TIN, fuel card, the cash rule, and each truck's fuel, tank and card. */
-class FuelSettings extends Page
-{
-    protected string $view = 'filament.fuel.settings';
-
-    protected static string|UnitEnum|null $navigationGroup = 'Settings';
-
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedBeaker;
-
-    protected static ?string $navigationLabel = 'Fuel';
-
-    protected static ?string $title = 'Settings · Fuel';
-
-    protected static ?string $slug = 'fuel-settings';
-
-    protected static ?int $navigationSort = 92;
-
-    public array $values = [];
-
-    /** truck id => [fuel_type, tank_liters, fuel_card_last4] */
-    public array $trucks = [];
-
-    public static function canAccess(): bool
-    {
-        return Fuel::ready() && (bool) Auth::user()?->hasRole('super_admin');
-    }
-
-    public function mount(): void
-    {
-        $this->values = [
-            'company_name' => (string) Fuel::setting('company_name', ''),
-            'company_tin' => Fuel::companyTin(),
-            'card_brand' => (string) Fuel::setting('card_brand', 'petron'),
-            'cash_min_km' => (string) Fuel::cashMinKm(),
-            'buffer_pct' => (string) Fuel::bufferPct(),
-            'default_kml' => (string) Fuel::defaultKml(),
-        ];
-        foreach (Truck::orderBy('plate_no')->get() as $t) {
-            $this->trucks[$t->id] = ['fuel_type' => (string) $t->fuel_type, 'tank_liters' => (string) $t->tank_liters, 'fuel_card_last4' => (string) $t->fuel_card_last4];
-        }
-    }
-
-    public function save(): void
-    {
-        $this->validate([
-            'values.company_name' => 'nullable|string|max:120',
-            'values.company_tin' => ['nullable', 'string', 'max:20', 'regex:/^[0-9 -]*$/'],
-            'values.card_brand' => 'required|in:'.implode(',', array_keys(Fuel::PROVIDERS)),
-            'values.cash_min_km' => 'required|integer|min:0|max:2000',
-            'values.buffer_pct' => 'required|integer|min:0|max:50',
-            'values.default_kml' => 'required|numeric|min:1|max:30',
-            'trucks.*.fuel_type' => 'nullable|in:diesel,gasoline',
-            'trucks.*.tank_liters' => 'nullable|integer|min:10|max:1000',
-            'trucks.*.fuel_card_last4' => ['nullable', 'regex:/^\d{4}$/'],
-        ], [
-            'values.company_tin.regex' => 'Numbers only, like 123-456-789-000.',
-            'trucks.*.fuel_card_last4.regex' => 'The last 4 digits of the card.',
-        ]);
-        Fuel::put('company_name', trim($this->values['company_name']));
-        Fuel::put('company_tin', trim($this->values['company_tin']));
-        Fuel::put('card_brand', $this->values['card_brand']);
-        Fuel::put('cash_min_km', (int) $this->values['cash_min_km']);
-        Fuel::put('buffer_pct', (int) $this->values['buffer_pct']);
-        Fuel::put('default_kml', round((float) $this->values['default_kml'], 1));
-        foreach ($this->trucks as $id => $v) {
-            Truck::whereKey((int) $id)->update([
-                'fuel_type' => $v['fuel_type'] ?: null,
-                'tank_liters' => $v['tank_liters'] !== '' ? (int) $v['tank_liters'] : null,
-                'fuel_card_last4' => $v['fuel_card_last4'] ?: null,
-            ]);
-        }
-        Notification::make()->title('Fuel settings saved')->success()->send();
-    }
-
-    protected function getViewData(): array
-    {
-        return [
-            'list' => Truck::orderBy('plate_no')->get(['id', 'plate_no', 'description', 'category']),
-            'aiOn' => \App\Support\Fuel\FuelReader::on(),
-        ];
-    }
-}
-DISPATCH_FILE_END_5
-
-# ---------------------------------------------------------------- app/Filament/Pages/TripFuel.php
-mkdir -p 'app/Filament/Pages'
-cat > 'app/Filament/Pages/TripFuel.php' <<'DISPATCH_FILE_END_6'
-<?php
-
-namespace App\Filament\Pages;
-
-use App\Filament\Shared\Fuel\TripFuelPage;
-
-class TripFuel extends TripFuelPage {}
-DISPATCH_FILE_END_6
-
-# ---------------------------------------------------------------- app/Filament/Resources/Deliverylogs/Tables/DeliverylogsTable.php
-mkdir -p 'app/Filament/Resources/Deliverylogs/Tables'
-cat > 'app/Filament/Resources/Deliverylogs/Tables/DeliverylogsTable.php' <<'DISPATCH_FILE_END_7'
-<?php
-
-namespace App\Filament\Resources\Deliverylogs\Tables;
-
-use App\Filament\Pages\TripStops;
-use App\Filament\Pages\TripFuel;
-use App\Filament\Tables\TripBoardColumns;
-use App\Models\Deliverylog;
-use App\Models\Logistichub;
-use Filament\Actions\Action;
-use Filament\Actions\ActionGroup;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Actions\EditAction;
-use Filament\Notifications\Notification;
-use Filament\Support\Icons\Heroicon;
-use Filament\Tables\Columns\IconColumn;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Columns\ToggleColumn;
-use Filament\Tables\Enums\RecordActionsPosition;
-use Filament\Tables\Filters\SelectFilter;
-use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
-
-class DeliverylogsTable
-{
-    public static function configure(Table $table): Table
-    {
-        return $table
-            ->recordUrl(null)
-            ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
-            ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'delivery'))
-            ->columns([
-                TextColumn::make('trip_number')
-                    ->searchable(),
-
-                TripBoardColumns::status('delivery'),
-
-                TripBoardColumns::progress('delivery'),
-
-                TextColumn::make('truck_id')
-                    ->label('Truck')
-                    ->searchable(query: function ($query, $search) {
-                        return $query->whereHas('truck', function ($q) use ($search) {
-                            $q->where('plate_no', 'like', "%{$search}%");
-                        });
-                    })
-                    ->sortable()
-                    ->getStateUsing(function ($record) {
-                        return $record->truck ? $record->truck->plate_no : 'Truck not assigned';
-                    }),
-                TextColumn::make('vicheletype')
-                    ->label('Vichele Type/Size')
-                    ->getStateUsing(function ($record) {
-                        return $record->truck ? $record->truck->category : ' ';
-                    }),
-                TextColumn::make('trip_day')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->numeric()
-                    ->sortable(),
-                TextColumn::make('logistichub.hub_name')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Logistic Hub/Location'),
-                TextColumn::make('Total Invoices')
-                    ->label('Total Invoices')
-                    ->badge()
-                    ->color('danger')
-                    ->getStateUsing(function ($record) {
-                        return $record->tripinvoices()->count();
-                    }),
-                TextColumn::make('Total Loaded')
-                    ->badge()
-                    ->color('success')
-                    ->label('Total Loaded')
-                    ->getStateUsing(function ($record) {
-                        return $record->tripinvoices()->whereHas('invoice', function ($query) {
-                            $query->where('is_loaded', 1);
-                        })->count();
-                    }),
-                TextColumn::make('Verified Invoices')
-                    ->label('Invoices Verified')
-                    ->badge()
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->color('info')
-                    ->getStateUsing(function ($record) {
-                        return $record->tripinvoices()->whereHas('invoice', function ($query) {
-                            $query->where('is_verified', 1);
-                        })->count();
-                        // return $record->tripinvoices->invoices->where('is_verified', 1)->count();
-                    }),
-                TextColumn::make('City')
-                    ->label('City')
-                    ->separator(',')
-                    ->color('primary')
-                    ->listWithLineBreaks()
-                    ->limitList(3)
-                    ->expandableLimitedList()
-                    ->getStateUsing(function ($record) {
-                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
-                        return DB::table('tripinvoices')
-                            ->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
-                            ->where('tripinvoices.deliverylog_id', $record->id)
-                            ->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
-                            ->distinct()->orderBy('invoices.receiver_city')->pluck('invoices.receiver_city');
-                        //   ->implode(" , ");
-                    }),
-                TextColumn::make('Province')
-                    ->label('Province')
-                    ->separator(',')
-                    ->color('primary')
-                    ->listWithLineBreaks()
-                    ->limitList(3)
-                    ->expandableLimitedList()
-                    ->getStateUsing(function ($record) {
-                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
-                        return DB::table('tripinvoices')
-                            ->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
-                            ->where('tripinvoices.deliverylog_id', $record->id)
-                            ->whereNotNull('invoices.receiver_province')->where('invoices.receiver_province', '!=', '')
-                            ->distinct()->orderBy('invoices.receiver_province')->pluck('invoices.receiver_province');
-                        //   ->implode(" , ");
-                    }),
-                IconColumn::make('is_lock')
-                    ->label('Lock Status')
-                    ->boolean()
-                    ->trueIcon(Heroicon::LockClosed)
-                    ->falseIcon(Heroicon::LockOpen)
-                    ->sortable()
-                    ->color(function ($state) {
-                        return $state ? 'danger' : 'success';
-                    }),
-
-                TextColumn::make('waybill_number')
-                    ->label('Waybill No. / Container No.')
-                    ->searchable()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->sortable(),
-                TextColumn::make('eta')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('ETA')
-                    ->date()
-                    ->sortable(),
-                TextColumn::make('departure_date')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->date()
-                    ->sortable(),
-                TextColumn::make('assigned_to')
-                    ->sortable()
-                    ->getStateUsing(function ($record) {
-                        return Logistichub::where('id', $record->assigned_to)->first()->hub_name;
-                    }),
-                TextColumn::make('user.full_name')
-                    ->label('Created By')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->sortable(),
-
-                ToggleColumn::make('is_active')
-                    ->label('Is Active')
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-            ])
-            ->filters([
-                TripBoardColumns::filter('delivery'),
-                SelectFilter::make('is_lock')
-                    ->label('Is Locked')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ]),
-                SelectFilter::make('is_active')
-                    ->label('Is Active')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ])->default(1),
-                SelectFilter::make('assigned_to')
-                    ->label('Going To')
-                    ->options(Logistichub::query()->pluck('hub_name', 'id'))
-                    ->searchable()
-                    ->preload(),
-            ])->deferFilters(false)
-            ->recordActions([
-                Action::make('stops')
-                    ->label('Stops & loading')
-                    ->icon('heroicon-o-map')
-                    ->button()
-                    ->color('gray')
-                    ->url(fn ($record): string => TripStops::getUrl(['trip' => $record->id])),
-                Action::make('fuel')
-                    ->label('Fuel')
-                    ->icon('heroicon-o-beaker')
-                    ->button()
-                    ->color('gray')
-                    ->visible(fn (): bool => \App\Support\Fuel\Fuel::ready())
-                    ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
-                ActionGroup::make([
-                    Action::make('locktrip')
-                        ->requiresConfirmation()
-                        ->label(function ($record) {
-                            return $record->is_lock ? 'Unlock Trip' : 'Lock Trip';
-                        })
-                        ->color('info')
-                        ->icon(function ($record) {
-                            return $record->is_lock ? Heroicon::LockOpen : Heroicon::LockClosed;
-                        })
-                        ->hidden(function ($record) {
-                            //  dd(Auth::user()->hasRole('super_admin'));
-                            return Auth::user()->hasRole('super_admin') ? false : true;
-                        })
-                        ->action(function ($record) {
-                            $record->update([
-                                'is_lock' => ! $record->is_lock,
-                            ]);
-
-                            Notification::make()
-                                ->title($record->is_lock ? 'Trip Locked Successfully' : 'Trip Unlocked Successfully')
-                                ->success()
-                                ->send();
-                        }),
-                    Action::make('releasetruct')
-                        ->requiresConfirmation()
-                        ->label('Released Truck')
-                        ->color('info')
-                        ->icon(Heroicon::Truck)
-                        ->hidden(function ($record) {
-
-                            return ! $record->is_current;
-                        })
-                        ->action(function ($record) {
-
-                            $record->truck->update([
-                                'is_assigned' => 0,
-                            ]);
-                            $record->update([
-                                'is_current' => 0,
-                                'is_active' => 0,
-                            ]);
-
-                            Notification::make()
-                                ->title('Truck Released Successfully')
-                                ->success()
-                                ->send();
-                        }),
-                    EditAction::make()
-                        ->label('Edit')
-                        ->icon(Heroicon::PencilSquare)
-                        ->hidden(function ($record) {
-                            return $record->is_lock;
-                        }),
-
-                ]),
-            ], position: RecordActionsPosition::BeforeColumns)
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    //    DeleteBulkAction::make(),
-
-                ]),
-            ]);
-    }
-}
-DISPATCH_FILE_END_7
-
-# ---------------------------------------------------------------- app/Filament/Shared/Fuel/FuelPage.php
-mkdir -p 'app/Filament/Shared/Fuel'
-cat > 'app/Filament/Shared/Fuel/FuelPage.php' <<'DISPATCH_FILE_END_8'
-<?php
-
-namespace App\Filament\Shared\Fuel;
-
-use App\Models\Fuel\FuelFill;
-use App\Models\Fuel\FuelStatement;
-use App\Models\Fuel\FuelStatementLine;
-use App\Support\Fuel\Fuel;
-use App\Support\Fuel\FuelReport;
-use App\Support\Fuel\FuelStatements;
-use App\Support\Tracking\Tracker;
-use BackedEnum;
-use Filament\Facades\Filament;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Support\Facades\Auth;
-use Livewire\Attributes\Url;
-use Livewire\WithFileUploads;
-
-/**
- * Fuel: what each truck used and spent, alerts, fuel card statements, this week's price
- * and VAT. Admin sees every hub; Warehouse and Partner hub see their own trucks.
- */
-abstract class FuelPage extends Page
-{
-    use WithFileUploads;
-
-    protected string $view = 'filament.fuel.page';
-
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedBeaker;
-
-    protected static ?string $navigationLabel = 'Fuel';
-
-    protected static ?string $title = 'Fuel';
-
-    protected static ?string $slug = 'fuel';
-
-    #[Url]
-    public string $tab = 'trucks';
-
-    #[Url]
-    public string $month = '';
-
-    #[Url]
-    public ?int $truck = null;
-
-    /** statement import */
-    public $statementFile = null;
-
-    public string $provider = 'petron';
-
-    public ?int $statementId = null;
-
-    public string $lineStatus = '';
-
-    public string $priceDiesel = '';
-
-    public string $priceGasoline = '';
-
-    public static function canAccess(): bool
-    {
-        return Fuel::ready() && Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()) !== false;
-    }
-
-    public function mount(): void
-    {
-        $this->month = preg_match('/^\d{4}-\d{2}$/', $this->month) ? $this->month : now()->format('Y-m');
-        $this->provider = (string) Fuel::setting('card_brand', 'petron');
-    }
-
-    protected function hub(): int|false|null
-    {
-        return Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId());
-    }
-
-    protected function isAdmin(): bool
-    {
-        return $this->hub() === null;
-    }
-
-    public function setTab(string $tab): void
-    {
-        $this->tab = in_array($tab, ['trucks', 'fills', 'alerts', 'cards', 'prices', 'vat'], true) ? $tab : 'trucks';
-    }
-
-    public function showTruck(?int $id): void
-    {
-        $this->truck = $id;
-        $this->tab = 'fills';
-    }
-
-    public function importStatement(): void
-    {
-        $this->validate(['statementFile' => 'required|file|max:10240', 'provider' => 'required|in:'.implode(',', array_keys(Fuel::PROVIDERS))]);
-        $hub = $this->hub();
-        $s = FuelStatements::import($this->statementFile->getRealPath(), $this->provider, Auth::id(), $hub ?: null, $this->statementFile->getClientOriginalName());
-        $this->statementFile = null;
-        $this->statementId = $s->id;
-        if (! $s->lines) {
-            Notification::make()->title('No charges found in the file')->body('Save the statement as CSV, with the column titles (date, card or plate, liters, amount) in the first rows.')->warning()->send();
-
-            return;
-        }
-        $m = $s->lines()->where('status', 'matched')->count();
-        Notification::make()->title("{$s->lines} charges imported · {$m} matched")->success()->send();
-    }
-
-    public function savePrices(): void
-    {
-        abort_unless($this->isAdmin(), 403);
-        $week = Fuel::weekStart()->toDateString();
-        foreach (['diesel' => $this->priceDiesel, 'gasoline' => $this->priceGasoline] as $type => $v) {
-            $v = (float) str_replace(',', '', $v);
-            Fuel::put("price.{$type}", $v > 0 ? ['week' => $week, 'price' => round($v, 2)] : null);
-        }
-        $this->priceDiesel = $this->priceGasoline = '';
-        Notification::make()->title('This week\'s price saved')->success()->send();
-    }
-
-    protected function getViewData(): array
-    {
-        $report = new FuelReport($this->hub(), $this->month);
-        $truckIds = $report->trucks()->pluck('id');
-        $statements = FuelStatement::query()->when(! $this->isAdmin(), fn ($q) => $q->where('logistichub_id', $this->hub()))->latest()->take(8)->get();
-        $statement = $this->statementId ? $statements->firstWhere('id', $this->statementId) : $statements->first();
-
-        return [
-            'report' => $report,
-            'totals' => $report->totals(),
-            'rows' => $this->tab === 'trucks' ? $report->perTruck() : collect(),
-            'alerts' => in_array($this->tab, ['alerts', 'trucks'], true) ? $report->alerts() : [],
-            'fills' => $this->tab === 'fills' || $this->tab === 'vat'
-                ? $report->fills()->with(['truck', 'driver', 'trip'])->when($this->truck && $this->tab === 'fills', fn ($q) => $q->where('truck_id', $this->truck))->orderByDesc('filled_at')->get()
-                : collect(),
-            'statements' => $statements,
-            'statement' => $statement,
-            'lines' => $statement ? FuelStatementLine::where('fuel_statement_id', $statement->id)
-                ->where(fn ($q) => $q->whereIn('truck_id', $truckIds->all() ?: [0])->orWhereNull('truck_id'))
-                ->when($this->lineStatus, fn ($q) => $q->where('status', $this->lineStatus))->with(['truck', 'fuelFill'])->orderBy('charged_at')->get() : collect(),
-            'lineCounts' => $statement ? $statement->lines()->selectRaw('status, count(*) n')->groupBy('status')->pluck('n', 'status') : collect(),
-            'prices' => ['diesel' => Fuel::price('diesel'), 'gasoline' => Fuel::price('gasoline')],
-            'weeks' => $this->tab === 'prices' ? Fuel::priceWeeks() : [],
-            'isAdmin' => $this->isAdmin(),
-            'truckName' => $this->truck ? $report->trucks()->firstWhere('id', $this->truck)?->plate_no : null,
-            'months' => collect(range(0, 11))->map(fn ($i) => now()->startOfMonth()->subMonths($i))->mapWithKeys(fn ($d) => [$d->format('Y-m') => $d->format('F Y')]),
-            'vatUrl' => route('fuel.vat-export', ['month' => $this->month, 'panel' => Filament::getCurrentPanel()?->getId()]),
-            'companyTin' => Fuel::companyTin(),
-        ];
-    }
-}
-DISPATCH_FILE_END_8
-
-# ---------------------------------------------------------------- app/Filament/Shared/Fuel/TripFuelPage.php
-mkdir -p 'app/Filament/Shared/Fuel'
-cat > 'app/Filament/Shared/Fuel/TripFuelPage.php' <<'DISPATCH_FILE_END_9'
-<?php
-
-namespace App\Filament\Shared\Fuel;
-
-use App\Models\Deliverylog;
-use App\Models\Fuel\FuelCash;
-use App\Models\Fuel\FuelFill;
-use App\Support\Fuel\Fuel;
-use App\Support\Maps\TripSorter;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\Auth;
-use Livewire\Attributes\Locked;
-use Livewire\Attributes\Url;
-
-/**
- * Delivery Log › trip › Fuel: the fuel cash estimate (trip km ÷ km per liter × this
- * week's price + buffer), cash given, the fills on the trip, and the change returned.
- */
-abstract class TripFuelPage extends Page
-{
-    protected string $view = 'filament.fuel.trip';
-
-    protected static bool $shouldRegisterNavigation = false;
-
-    protected static ?string $slug = 'trip-fuel';
-
-    #[Url(as: 'trip')]
-    #[Locked]
-    public int $tripId = 0;
-
-    public string $give = '';
-
-    public string $returned = '';
-
-    public string $note = '';
-
-    public static function canAccess(): bool
-    {
-        return Fuel::ready() && parent::canAccess();
-    }
-
-    public function mount(): void
-    {
-        $this->tripId = (int) request()->query('trip', $this->tripId);
-        $trip = $this->trip();
-        abort_unless($trip && TripSorter::canSee(Auth::user(), $trip), 404);
-        $this->give = (string) (Fuel::estimate($trip)['amount'] ?? '');
-    }
-
-    protected function trip(): ?Deliverylog
-    {
-        return Deliverylog::with('truck')->find($this->tripId);
-    }
-
-    public function getTitle(): string|Htmlable
-    {
-        return 'Fuel for this trip';
-    }
-
-    public function getSubheading(): ?string
-    {
-        $trip = $this->trip();
-
-        return $trip ? 'Trip '.$trip->trip_number.($trip->truck ? ' · '.$trip->truck->plate_no : '') : null;
-    }
-
-    public function giveCash(): void
-    {
-        $trip = $this->trip();
-        abort_unless($trip && TripSorter::canSee(Auth::user(), $trip), 404);
-        $amount = round((float) str_replace([',', '₱'], '', $this->give), 2);
-        if ($amount <= 0) {
-            Notification::make()->title('Type the cash you give the driver')->warning()->send();
-
-            return;
-        }
-        if (Fuel::cashFor($trip)) {
-            Notification::make()->title('Fuel cash was already given for this trip')->warning()->send();
-
-            return;
-        }
-        $e = Fuel::estimate($trip);
-        FuelCash::create([
-            'deliverylog_id' => $trip->id, 'truck_id' => $trip->truck_id, 'driver_id' => \App\Models\Truckcrew::where('truck_id', $trip->truck_id)->latest('id')->value('crew'),
-            'km' => $e['km'], 'km_per_liter' => $e['kml'], 'price' => $e['price'], 'buffer_pct' => $e['buffer'],
-            'estimate' => $e['amount'], 'given' => $amount, 'given_at' => now(), 'given_by' => Auth::id(),
-            'note' => trim($this->note) ?: null,
-        ]);
-        $this->note = '';
-        Notification::make()->title('₱'.number_format($amount, 2).' fuel cash given')->success()->send();
-    }
-
-    public function settle(): void
-    {
-        $trip = $this->trip();
-        abort_unless($trip && TripSorter::canSee(Auth::user(), $trip), 404);
-        $cash = Fuel::cashFor($trip);
-        if (! $cash || $cash->settled_at) {
-            return;
-        }
-        $back = round((float) str_replace([',', '₱'], '', $this->returned), 2);
-        $cash->update(['returned' => max(0, $back), 'settled_at' => now(), 'settled_by' => Auth::id(), 'note' => trim($this->note) ?: $cash->note]);
-        $short = round($cash->given - $cash->spent() - $back, 2);
-        Notification::make()->title('Fuel cash settled')
-            ->body(abs($short) >= 1 ? ($short > 0 ? '₱'.number_format($short, 2).' not covered by receipts or change.' : '₱'.number_format(-$short, 2).' more than given (paid by the driver?).') : 'Receipts and change add up.')
-            ->{abs($short) >= 1 ? 'warning' : 'success'}()->send();
-    }
-
-    public function undoCash(): void
-    {
-        $trip = $this->trip();
-        abort_unless($trip && TripSorter::canSee(Auth::user(), $trip), 404);
-        $cash = Fuel::cashFor($trip);
-        if ($cash && ! $cash->settled_at && $cash->given_at->gt(now()->subHour())) {
-            $cash->delete();
-            Notification::make()->title('Fuel cash removed')->send();
-        }
-    }
-
-    protected function getViewData(): array
-    {
-        $trip = $this->trip();
-        $cash = Fuel::cashFor($trip);
-
-        return [
-            'trip' => $trip,
-            'est' => Fuel::estimate($trip),
-            'cash' => $cash,
-            'fills' => FuelFill::where('deliverylog_id', $trip->id)->orderBy('filled_at')->get(),
-            'minKm' => Fuel::cashMinKm(),
-        ];
-    }
-}
-DISPATCH_FILE_END_9
-
-# ---------------------------------------------------------------- app/Filament/Warehouse/Pages/Fuel.php
-mkdir -p 'app/Filament/Warehouse/Pages'
-cat > 'app/Filament/Warehouse/Pages/Fuel.php' <<'DISPATCH_FILE_END_10'
-<?php
-
-namespace App\Filament\Warehouse\Pages;
-
-use App\Filament\Shared\Fuel\FuelPage;
-
-class Fuel extends FuelPage {}
-DISPATCH_FILE_END_10
-
-# ---------------------------------------------------------------- app/Filament/Warehouse/Pages/TripFuel.php
-mkdir -p 'app/Filament/Warehouse/Pages'
-cat > 'app/Filament/Warehouse/Pages/TripFuel.php' <<'DISPATCH_FILE_END_11'
-<?php
-
-namespace App\Filament\Warehouse\Pages;
-
-use App\Filament\Shared\Fuel\TripFuelPage;
-
-class TripFuel extends TripFuelPage {}
-DISPATCH_FILE_END_11
-
-# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Deliverylogs/Tables/DeliverylogsTable.php
-mkdir -p 'app/Filament/Warehouse/Resources/Deliverylogs/Tables'
-cat > 'app/Filament/Warehouse/Resources/Deliverylogs/Tables/DeliverylogsTable.php' <<'DISPATCH_FILE_END_12'
-<?php
-
-namespace App\Filament\Warehouse\Resources\Deliverylogs\Tables;
-
-use App\Filament\Tables\TripBoardColumns;
-use App\Filament\Warehouse\Pages\TripStops;
-use App\Filament\Warehouse\Pages\TripFuel;
-use App\Models\Deliverylog;
-use App\Models\Logistichub;
-use Filament\Actions\Action;
-use Filament\Actions\ActionGroup;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Actions\EditAction;
-use Filament\Notifications\Notification;
-use Filament\Support\Icons\Heroicon;
-use Filament\Tables\Columns\IconColumn;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Columns\ToggleColumn;
-use Filament\Tables\Enums\RecordActionsPosition;
-use Filament\Tables\Filters\SelectFilter;
-use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
-
-class DeliverylogsTable
-{
-    public static function configure(Table $table): Table
-    {
-        return $table
-            ->recordUrl(null)
-            ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
-            ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'delivery'))
-            ->columns([
-                TextColumn::make('trip_number')
-                    ->searchable(),
-
-                TripBoardColumns::status('delivery'),
-
-                TripBoardColumns::progress('delivery'),
-
-                TextColumn::make('truck_id')
-                    ->label('Truck')
-                    ->searchable(query: function ($query, $search) {
-                        return $query->whereHas('truck', function ($q) use ($search) {
-                            $q->where('plate_no', 'like', "%{$search}%");
-                        });
-                    })
-                    ->sortable()
-                    ->getStateUsing(function ($record) {
-                        return $record->truck ? $record->truck->plate_no : 'Truck not assigned';
-                    }),
-                TextColumn::make('vicheletype')
-                    ->label('Vichele Type/Size')
-                    ->getStateUsing(function ($record) {
-                        return $record->truck ? $record->truck->category : ' ';
-                    }),
-                TextColumn::make('trip_day')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->numeric()
-                    ->sortable(),
-                TextColumn::make('logistichub.hub_name')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Logistic Hub/Location'),
-                TextColumn::make('Total Invoices')
-                    ->label('Total Invoices')
-                    ->badge()
-                    ->color('danger')
-                    ->getStateUsing(function ($record) {
-                        return $record->tripinvoices()->count();
-                    }),
-                TextColumn::make('Total Loaded')
-                    ->badge()
-                    ->color('success')
-                    ->label('Total Loaded')
-                    ->getStateUsing(function ($record) {
-                        return $record->tripinvoices()->whereHas('invoice', function ($query) {
-                            $query->where('is_loaded', 1);
-                        })->count();
-                    }),
-                TextColumn::make('Verified Invoices')
-                    ->label('Invoices Verified')
-                    ->badge()
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->color('info')
-                    ->getStateUsing(function ($record) {
-                        return $record->tripinvoices()->whereHas('invoice', function ($query) {
-                            $query->where('is_verified', 1);
-                        })->count();
-                        // return $record->tripinvoices->invoices->where('is_verified', 1)->count();
-                    }),
-                TextColumn::make('City')
-                    ->label('City')
-                    ->separator(',')
-                    ->color('primary')
-                    ->listWithLineBreaks()
-                    ->limitList(3)
-                    ->expandableLimitedList()
-                    ->getStateUsing(function ($record) {
-                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
-                        return DB::table('tripinvoices')
-                            ->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
-                            ->where('tripinvoices.deliverylog_id', $record->id)
-                            ->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
-                            ->distinct()->orderBy('invoices.receiver_city')->pluck('invoices.receiver_city');
-                        //   ->implode(" , ");
-                    }),
-                TextColumn::make('Province')
-                    ->label('Province')
-                    ->separator(',')
-                    ->color('primary')
-                    ->listWithLineBreaks()
-                    ->limitList(3)
-                    ->expandableLimitedList()
-                    ->getStateUsing(function ($record) {
-                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
-                        return DB::table('tripinvoices')
-                            ->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
-                            ->where('tripinvoices.deliverylog_id', $record->id)
-                            ->whereNotNull('invoices.receiver_province')->where('invoices.receiver_province', '!=', '')
-                            ->distinct()->orderBy('invoices.receiver_province')->pluck('invoices.receiver_province');
-                        //   ->implode(" , ");
-                    }),
-                IconColumn::make('is_lock')
-                    ->label('Lock Status')
-                    ->boolean()
-                    ->trueIcon(Heroicon::LockClosed)
-                    ->falseIcon(Heroicon::LockOpen)
-                    ->sortable()
-                    ->color(function ($state) {
-                        return $state ? 'danger' : 'success';
-                    }),
-
-                TextColumn::make('waybill_number')
-                    ->label('Waybill No. / Container No.')
-                    ->searchable()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->sortable(),
-                TextColumn::make('eta')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('ETA')
-                    ->date()
-                    ->sortable(),
-                TextColumn::make('departure_date')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->date()
-                    ->sortable(),
-                TextColumn::make('assigned_to')
-                    ->sortable()
-                    ->getStateUsing(function ($record) {
-                        return Logistichub::where('id', $record->assigned_to)->first()->hub_name;
-                    }),
-                TextColumn::make('user.full_name')
-                    ->label('Created By')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->sortable(),
-
-                ToggleColumn::make('is_active')
-                    ->label('Is Active')
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-            ])
-            ->filters([
-                TripBoardColumns::filter('delivery'),
-                SelectFilter::make('is_lock')
-                    ->label('Is Locked')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ]),
-                SelectFilter::make('is_active')
-                    ->label('Is Active')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ])->default(1),
-                SelectFilter::make('assigned_to')
-                    ->label('Going To')
-                    ->options(Logistichub::query()->pluck('hub_name', 'id'))
-                    ->searchable()
-                    ->preload(),
-            ])->deferFilters(false)
-            ->recordActions([
-                Action::make('stops')
-                    ->label('Stops & loading')
-                    ->icon('heroicon-o-map')
-                    ->button()
-                    ->color('gray')
-                    ->url(fn ($record): string => TripStops::getUrl(['trip' => $record->id])),
-                Action::make('fuel')
-                    ->label('Fuel')
-                    ->icon('heroicon-o-beaker')
-                    ->button()
-                    ->color('gray')
-                    ->visible(fn (): bool => \App\Support\Fuel\Fuel::ready())
-                    ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
-                ActionGroup::make([
-                    Action::make('locktrip')
-                        ->requiresConfirmation()
-                        ->label(function ($record) {
-                            return $record->is_lock ? 'Unlock Trip' : 'Lock Trip';
-                        })
-                        ->color('info')
-                        ->icon(function ($record) {
-                            return $record->is_lock ? Heroicon::LockOpen : Heroicon::LockClosed;
-                        })
-                        ->hidden(function ($record) {
-                            //  dd(Auth::user()->hasRole('super_admin'));
-                            //  dd(Auth::user()->is_admin);
-                            return Auth::user()->is_admin ? false : true;
-                        })
-                        ->action(function ($record) {
-                            $record->update([
-                                'is_lock' => ! $record->is_lock,
-                            ]);
-
-                            Notification::make()
-                                ->title($record->is_lock ? 'Trip Locked Successfully' : 'Trip Unlocked Successfully')
-                                ->success()
-                                ->send();
-                        }),
-                    Action::make('releasetruct')
-                        ->requiresConfirmation()
-                        ->label('Released Truck')
-                        ->color('info')
-                        ->icon(Heroicon::Truck)
-                        ->hidden(function ($record) {
-
-                            return ! $record->is_current;
-                        })
-                        ->action(function ($record) {
-
-                            $record->truck->update([
-                                'is_assigned' => 0,
-                            ]);
-                            $record->update([
-                                'is_current' => 0,
-                                'is_active' => 0,
-                            ]);
-
-                            Notification::make()
-                                ->title('Truck Released Successfully')
-                                ->success()
-                                ->send();
-                        }),
-                    EditAction::make()
-                        ->label('Edit')
-                        ->icon(Heroicon::PencilSquare)
-                        ->hidden(function ($record) {
-                            return $record->is_lock;
-                        }),
-
-                ]),
-            ], position: RecordActionsPosition::BeforeColumns)
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    //    DeleteBulkAction::make(),
-
-                ]),
-            ]);
-
-    }
-}
-DISPATCH_FILE_END_12
-
-# ---------------------------------------------------------------- app/Http/Controllers/FuelController.php
+# ---------------------------------------------------------------- app/Http/Controllers/SectionLabelsController.php
 mkdir -p 'app/Http/Controllers'
-cat > 'app/Http/Controllers/FuelController.php' <<'DISPATCH_FILE_END_13'
+cat > 'app/Http/Controllers/SectionLabelsController.php' <<'DISPATCH_FILE_END_5'
 <?php
 
 namespace App\Http\Controllers;
 
-use App\Support\Fuel\Fuel;
-use App\Support\Fuel\FuelReport;
-use App\Support\Tracking\Tracker;
+use App\Models\Boxes\WhSection;
+use App\Models\Warehouse;
+use App\Support\Boxes\Sections;
 use Illuminate\Http\Request;
-use Symfony\Component\HttpFoundation\StreamedResponse;
+use Illuminate\Http\Response;
+use Milon\Barcode\DNS2D;
 
-/** Fuel › VAT: the month's fuel receipts as a CSV file the accountant opens in Excel. */
-class FuelController extends Controller
+/** Printable QR labels for the warehouse sections: one big label per page. */
+class SectionLabelsController extends Controller
 {
-    public function vatExport(Request $request): StreamedResponse
+    public function __invoke(Request $request): Response
     {
-        abort_unless(Fuel::ready(), 404);
-        $panel = in_array($request->query('panel'), ['admin', 'warehouse', 'company'], true) ? $request->query('panel') : 'warehouse';
-        $hub = Tracker::hubFor($request->user(), $panel);
-        abort_if($hub === false, 403);
-        $month = preg_match('/^\d{4}-\d{2}$/', (string) $request->query('month')) ? $request->query('month') : now()->format('Y-m');
-        $report = new FuelReport($hub, $month);
-        $fills = $report->fills()->with(['truck', 'trip'])->orderBy('filled_at')->get();
+        abort_unless(Sections::ready(), 404);
+        $user = $request->user();
+        $warehouse = Warehouse::findOrFail((int) $request->query('warehouse'));
+        abort_unless($user?->hasRole('super_admin') || (int) $user?->warehouse_id === $warehouse->id, 403);
 
-        return response()->streamDownload(function () use ($fills) {
-            $out = fopen('php://output', 'w');
-            fwrite($out, "\xEF\xBB\xBF"); // so Excel reads ₱ and ñ
-            fputcsv($out, ['Date', 'Station', 'Station TIN', 'Invoice no.', 'Product', 'Fuel', 'Liters', 'Price per liter', 'VATable sales', 'VAT 12%', 'Total', 'Company TIN on receipt', 'Paid with', 'Truck', 'Trip'], ',', '"', '\\');
-            foreach ($fills as $f) {
-                fputcsv($out, [
-                    $f->filled_at->format('Y-m-d H:i'), $f->station, $f->station_tin, $f->invoice_no, $f->product, $f->fuel_type,
-                    $f->liters, $f->price_per_liter, $f->vatable, $f->vat, $f->total,
-                    $f->buyer_tin_ok === true ? 'yes' : ($f->buyer_tin_ok === false ? 'MISSING' : ($f->total < 1000 ? 'not needed' : '')),
-                    $f->paid_with, $f->truck?->plate_no, $f->trip?->trip_number,
-                ], ',', '"', '\\');
-            }
-            fputcsv($out, ['', 'Total', '', '', '', '', $fills->sum('liters'), '', $fills->sum('vatable'), $fills->sum('vat'), $fills->sum('total')], ',', '"', '\\');
-            fclose($out);
-        }, "fuel-vat-{$month}.csv", ['Content-Type' => 'text/csv; charset=UTF-8']);
+        $sections = WhSection::with(['hub:id,hub_name', 'toWarehouse:id,name'])->where('warehouse_id', $warehouse->id)
+            ->where('is_active', true)->orderBy('sort')->orderBy('code')->get()
+            ->map(function (WhSection $s) {
+                $svg = (new DNS2D)->getBarcodeSVG($s->qrText(), 'QRCODE,M', 10, 10, '#0b1620');
+
+                return ['code' => $s->code, 'name' => $s->name ?: $s->goesTo(), 'color' => $s->color, 'provinces' => implode(', ', (array) $s->provinces),
+                    'qr' => preg_replace('/<desc>.*?<\/desc>/s', '', preg_replace('/^.*?(<svg)/s', '$1', $svg))];
+            });
+
+        return response()->view('boxes.section-labels', ['warehouse' => $warehouse, 'sections' => $sections]);
     }
 }
-DISPATCH_FILE_END_13
+DISPATCH_FILE_END_5
 
-# ---------------------------------------------------------------- app/Models/Fuel/FuelCash.php
-mkdir -p 'app/Models/Fuel'
-cat > 'app/Models/Fuel/FuelCash.php' <<'DISPATCH_FILE_END_14'
+# ---------------------------------------------------------------- app/Models/Boxes/SetSplit.php
+mkdir -p 'app/Models/Boxes'
+cat > 'app/Models/Boxes/SetSplit.php' <<'DISPATCH_FILE_END_6'
 <?php
 
-namespace App\Models\Fuel;
+namespace App\Models\Boxes;
 
-use App\Models\Deliverylog;
-use App\Models\User;
+use App\Models\Invoice;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-/** Fuel cash given for a trip, and how it was settled (change returned). */
-class FuelCash extends Model
+/** A customer's boxes that leave on different trucks, and why. */
+class SetSplit extends Model
 {
-    protected $table = 'fuel_cash';
+    protected $guarded = [];
+
+    public const REASONS = ['not_arrived' => 'Not arrived yet', 'held' => 'Damaged or held', 'not_found' => 'Cannot find', 'full' => 'Truck full'];
+
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class);
+    }
+}
+DISPATCH_FILE_END_6
+
+# ---------------------------------------------------------------- app/Models/Boxes/WhCrossdock.php
+mkdir -p 'app/Models/Boxes'
+cat > 'app/Models/Boxes/WhCrossdock.php' <<'DISPATCH_FILE_END_7'
+<?php
+
+namespace App\Models\Boxes;
+
+use App\Models\Container;
+use App\Models\Whdeliverylog;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+/** A truck waiting at a container unload: its boxes go straight from the container onto it. */
+class WhCrossdock extends Model
+{
+    protected $table = 'wh_crossdocks';
 
     protected $guarded = [];
 
     protected function casts(): array
     {
-        return [
-            'km' => 'float', 'km_per_liter' => 'float', 'price' => 'float', 'estimate' => 'float', 'given' => 'float',
-            'returned' => 'float', 'given_at' => 'datetime', 'settled_at' => 'datetime',
-        ];
+        return ['paused' => 'boolean', 'ended_at' => 'datetime'];
+    }
+
+    public function container(): BelongsTo
+    {
+        return $this->belongsTo(Container::class);
     }
 
     public function trip(): BelongsTo
     {
-        return $this->belongsTo(Deliverylog::class, 'deliverylog_id');
-    }
-
-    public function givenBy(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'given_by');
-    }
-
-    public function settledBy(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'settled_by');
-    }
-
-    /** Cash receipts for this trip. */
-    public function spent(): float
-    {
-        return (float) FuelFill::where('deliverylog_id', $this->deliverylog_id)->where('paid_with', 'cash')->sum('total');
-    }
-
-    public function left(): float
-    {
-        return round($this->given - $this->spent(), 2);
+        return $this->belongsTo(Whdeliverylog::class, 'whdeliverylog_id');
     }
 }
-DISPATCH_FILE_END_14
+DISPATCH_FILE_END_7
 
-# ---------------------------------------------------------------- app/Models/Fuel/FuelFill.php
-mkdir -p 'app/Models/Fuel'
-cat > 'app/Models/Fuel/FuelFill.php' <<'DISPATCH_FILE_END_15'
+# ---------------------------------------------------------------- app/Models/Boxes/WhSection.php
+mkdir -p 'app/Models/Boxes'
+cat > 'app/Models/Boxes/WhSection.php' <<'DISPATCH_FILE_END_8'
 <?php
 
-namespace App\Models\Fuel;
+namespace App\Models\Boxes;
 
-use App\Models\Deliverylog;
-use App\Models\Truck;
-use App\Models\User;
+use App\Models\Invoice;
+use App\Models\Logistichub;
+use App\Models\Warehouse;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\Storage;
-
-/** One fill: what the receipt says, how it was paid, the odometer, and the checks. */
-class FuelFill extends Model
-{
-    protected $table = 'fuel_fills';
-
-    protected $guarded = [];
-
-    protected function casts(): array
-    {
-        return [
-            'filled_at' => 'datetime', 'liters' => 'float', 'price_per_liter' => 'float', 'total' => 'float', 'vatable' => 'float',
-            'vat' => 'float', 'km_per_liter' => 'float', 'lat' => 'float', 'lng' => 'float', 'buyer_tin_ok' => 'boolean',
-            'gps_ok' => 'boolean', 'ai_read' => 'boolean', 'ai_data' => 'array',
-        ];
-    }
-
-    public function truck(): BelongsTo
-    {
-        return $this->belongsTo(Truck::class);
-    }
-
-    public function trip(): BelongsTo
-    {
-        return $this->belongsTo(Deliverylog::class, 'deliverylog_id');
-    }
-
-    public function driver(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'driver_id');
-    }
-
-    public function receiptUrl(): ?string
-    {
-        return $this->receipt_path ? Storage::disk('public')->url($this->receipt_path) : null;
-    }
-
-    public function odometerUrl(): ?string
-    {
-        return $this->odometer_path ? Storage::disk('public')->url($this->odometer_path) : null;
-    }
-}
-DISPATCH_FILE_END_15
-
-# ---------------------------------------------------------------- app/Models/Fuel/FuelStatement.php
-mkdir -p 'app/Models/Fuel'
-cat > 'app/Models/Fuel/FuelStatement.php' <<'DISPATCH_FILE_END_16'
-<?php
-
-namespace App\Models\Fuel;
-
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-/** A fuel card statement file that was imported. */
-class FuelStatement extends Model
+/** A section of the warehouse floor, for one destination (a partner hub, another warehouse, returns…). */
+class WhSection extends Model
 {
-    protected $table = 'fuel_statements';
+    protected $table = 'wh_sections';
 
     protected $guarded = [];
 
+    public const KINDS = ['area' => 'Destination', 'returns' => 'Returns & wrong hub', 'check' => 'Check address'];
+
     protected function casts(): array
     {
-        return ['from' => 'date', 'to' => 'date'];
+        return ['provinces' => 'array', 'is_active' => 'boolean'];
     }
 
-    public function lines(): HasMany
+    public function warehouse(): BelongsTo
     {
-        return $this->hasMany(FuelStatementLine::class);
+        return $this->belongsTo(Warehouse::class);
+    }
+
+    public function hub(): BelongsTo
+    {
+        return $this->belongsTo(Logistichub::class, 'logistichub_id');
+    }
+
+    public function toWarehouse(): BelongsTo
+    {
+        return $this->belongsTo(Warehouse::class, 'to_warehouse_id');
+    }
+
+    public function invoices(): HasMany
+    {
+        return $this->hasMany(Invoice::class, 'wh_section_id');
+    }
+
+    /** What the QR label on this section says. */
+    public function qrText(): string
+    {
+        return 'SEC-'.$this->id;
+    }
+
+    /** "Cebu hub", "Tarlac warehouse", "Check address" */
+    public function goesTo(): string
+    {
+        return $this->hub?->hub_name ?? $this->toWarehouse?->name ?? (self::KINDS[$this->kind] ?? $this->name);
     }
 }
-DISPATCH_FILE_END_16
+DISPATCH_FILE_END_8
 
-# ---------------------------------------------------------------- app/Models/Fuel/FuelStatementLine.php
-mkdir -p 'app/Models/Fuel'
-cat > 'app/Models/Fuel/FuelStatementLine.php' <<'DISPATCH_FILE_END_17'
+# ---------------------------------------------------------------- app/Models/Invoice.php
+mkdir -p 'app/Models'
+cat > 'app/Models/Invoice.php' <<'DISPATCH_FILE_END_9'
 <?php
 
-namespace App\Models\Fuel;
+namespace App\Models;
 
-use App\Models\Truck;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
-/** One charge on a fuel card statement, matched to a fill from the Driver app. */
-class FuelStatementLine extends Model
+class Invoice extends Model
 {
-    protected $table = 'fuel_statement_lines';
-
-    protected $guarded = [];
-
     protected function casts(): array
     {
-        return ['charged_at' => 'datetime', 'liters' => 'float', 'amount' => 'float'];
+        return [
+            'is_verified' => 'boolean',
+            'is_delivered' => 'boolean',
+            'is_assigned' => 'boolean',
+            'is_returned' => 'boolean',
+            'is_priority' => 'boolean',
+            'is_resolved' => 'boolean',
+            'wh_is_assigned' => 'boolean',
+            'sectioned_at' => 'datetime',
+        ];
     }
 
-    public function statement(): BelongsTo
+    protected static function booted(): void
     {
-        return $this->belongsTo(FuelStatement::class, 'fuel_statement_id');
+        // the customer's set: all boxes for the same receiver, phone and city
+        static::saving(function (Invoice $invoice): void {
+            if (! $invoice->set_key || $invoice->isDirty(['receiver_name', 'receiver_mobile_no', 'receiver_city'])) {
+                $invoice->set_key = \App\Support\Boxes\BoxSets::keyFor($invoice->receiver_name, $invoice->receiver_mobile_no, $invoice->receiver_city);
+            }
+        });
     }
 
-    public function truck(): BelongsTo
+    public function whSection()
     {
-        return $this->belongsTo(Truck::class);
+        return $this->belongsTo(\App\Models\Boxes\WhSection::class, 'wh_section_id');
     }
 
-    public function fuelFill(): BelongsTo
+    public function verifiedBy()
     {
-        return $this->belongsTo(FuelFill::class, 'fuel_fill_id');
+        return $this->belongsTo(User::class, 'verified_by');
+    }
+
+    public function container()
+    {
+        return $this->belongsTo(Container::class);
+    }
+
+    public function warehouse()
+    {
+        return $this->belongsTo(Warehouse::class);
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    public function routearea()
+    {
+        return $this->belongsTo(Routearea::class);
+    }
+
+    protected function FullAddress(): Attribute
+    {
+        return new Attribute(
+            get: fn () => $this->receiver_address.' '.$this->receiver_province.' '.$this->receiver_city.' '.$this->receiver_barangay
+        );
+    }
+
+    public function consolidator()
+    {
+        return $this->belongsTo(
+            Consolidator::class,
+            'location_code', // FK on invoices
+            'code'           // UNIQUE key on consolidators
+        );
+
+    }
+
+    public function tripInvoices()
+    {
+        return $this->hasMany(Tripinvoice::class);
+    }
+
+    public function deliverylogs()
+    {
+        return $this->hasManyThrough(Deliverylog::class, Tripinvoice::class);
+    }
+
+    public function invoiceissue()
+    {
+        return $this->hasMany(Invoiceissue::class);
+    }
+
+    public function whtripinvoice()
+    {
+        return $this->hasOne(Whtripinvoice::class, 'invoice_id', 'id');
+    }
+
+    public function deliveryAttempts(): HasMany
+    {
+        return $this->hasMany(DeliveryAttempt::class)->latest('id');
+    }
+
+    public function latestDeliveryAttempt(): HasOne
+    {
+        return $this->hasOne(DeliveryAttempt::class)->latestOfMany();
     }
 }
-DISPATCH_FILE_END_17
+DISPATCH_FILE_END_9
 
-# ---------------------------------------------------------------- app/Support/Ai/AiFeatures.php
-mkdir -p 'app/Support/Ai'
-cat > 'app/Support/Ai/AiFeatures.php' <<'DISPATCH_FILE_END_18'
+# ---------------------------------------------------------------- app/Support/Boxes/BoxSets.php
+mkdir -p 'app/Support/Boxes'
+cat > 'app/Support/Boxes/BoxSets.php' <<'DISPATCH_FILE_END_10'
 <?php
 
-namespace App\Support\Ai;
+namespace App\Support\Boxes;
 
-/** The AI helpers that can be switched on in Admin → Settings → AI. */
-class AiFeatures
+use App\Models\Boxes\SetSplit;
+use App\Models\Deliverylog;
+use App\Models\Invoice;
+use App\Models\Tripinvoice;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
+
+/**
+ * A set is all the boxes for one customer: the same receiver, phone and city,
+ * not delivered yet. "Maria Santos · box 2 of 3".
+ */
+class BoxSets
 {
-    /** key => [title, what it does, who uses it, needs the API key] */
-    public const ALL = [
-        'trips' => ['AI trip helper', 'Drafts trips from the ready boxes and your free trucks: grouped by province, city and barangay, priority and tried-before boxes first, the same receiver always together. You check and press Create; trip numbers are given as usual.', 'Admin · Warehouse · Partner hub', true],
-        'aging' => ['Box aging', 'How long each box has waited since unload, at each stage. Late boxes in the bell, a morning summary, limits suggested from your history, and why boxes are late (AI).', 'Admin · Warehouse · Partner hub', false],
-        'photo_check' => ['AI photo check', 'Looks at every box photo (scan and proof of delivery) and lists the ones that look damaged, wet, opened or blurry.', 'Admin · Warehouse · Partner hub', true],
-        'ask' => ['Ask the system', 'Staff ask about boxes, containers, trips and drivers in plain words. It can only read.', 'Admin · Warehouse · Partner hub', true],
-        'manifest' => ['Read a manifest', 'Reads a consolidator manifest (PDF, Excel, CSV or a photo) into a container\'s invoices, and fixes messy addresses.', 'Admin · Warehouse', true],
-        'risky' => ['Risky deliveries', 'Lists boxes on trips that will likely fail, writes a text for the receiver, and warns the driver.', 'Admin · Partner hub · Driver app', true],
-        'alerts' => ['Alerts', 'Checks every 15 minutes for unusual things: too-fast deliveries, boxes on two trips, boxes stuck, many failures in one barangay.', 'Admin · Warehouse · Partner hub', false],
-        'issues' => ['Issue helper', 'On an Invoice Issue: sums it up, suggests the next step and writes the email to the consolidator with the photos.', 'Admin', true],
-        'insights' => ['Insights', 'Forecast of boxes for the next 8 weeks and a weekly report for each partner hub.', 'Admin · Warehouse · Partner hub', true],
-        'voice' => ['Driver voice note', 'In the Driver app, "Can\'t deliver": the driver says what happened and the reason and note are filled in.', 'Driver app', true],
-        'sms_writer' => ['SMS writer', 'In Settings → SMS: make a text fit in 1 SMS, friendlier, or translate it to Tagalog or Bisaya. Also turns the driver\'s note ("wala tao, balik bukas") into a clear "not delivered" text.', 'Admin', true],
-        'alert_explain' => ['Truck alerts explained', 'Each truck alert gets a short note: what probably happened (lunch, no signal, wrong turn), how worried to be, and what to do.', 'Admin · Warehouse · Partner hub', true],
-        'day_summary' => ['End-of-day truck summary', 'After work: the day in short, and for each truck what went well and what to look at. Optional daily email.', 'Admin · Warehouse · Partner hub', true],
-        'addresses' => ['AI address cleaning', 'Before a trip is put on the map, messy addresses are fixed ("purok 3 near chapel, Lapu2" → "Purok 3, Pusok, Lapu-Lapu City, Cebu") so more stops are found. Settings → Maps & routes.', 'Admin · Warehouse · Partner hub', true],
-        'fuel_receipts' => ['Read fuel receipts', 'In the Driver app, reads the fuel receipt photo (station, diesel or gasoline, liters, price, total, VAT, TIN) and the odometer photo, so the driver does not type them.', 'Driver app · Fuel', true],
-        'help_ask' => ['Help answers', 'In the Help guide, staff and drivers ask in their own words (English, Tagalog or Taglish) and get a short answer taken only from the guides, with the right guide to open.', 'Admin · Warehouse · Partner hub · Scan app · Driver app', true],
-        'customer_chat' => ['Customer chat', 'A public page where receivers type their box number and ask questions. Answers come from tracking; anything else goes to staff.', 'Receivers · Admin · Partner hub', true],
-    ];
-
-    public static function title(string $key): string
+    public static function keyFor(?string $name, ?string $phone, ?string $city): ?string
     {
-        return self::ALL[$key][0] ?? $key;
+        $name = Str::lower(Str::squish(preg_replace('/[^\p{L}\p{N} ]+/u', ' ', (string) $name)));
+        if ($name === '') {
+            return null;
+        }
+        $digits = substr(preg_replace('/\D/', '', (string) $phone), -10);
+        $city = Str::lower(Str::squish((string) $city));
+
+        return sha1($name.'|'.$digits.'|'.$city);
+    }
+
+    /** Every box of this box's set (itself included), oldest first. */
+    public static function members(Invoice $invoice): Collection
+    {
+        if (! $invoice->set_key) {
+            return collect([$invoice]);
+        }
+
+        return Invoice::query()->with('container:id,container_no')
+            ->where('set_key', $invoice->set_key)
+            ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered')->orWhere('id', $invoice->id))
+            ->where('created_at', '>=', ($invoice->created_at ?? now())->copy()->subDays(120))
+            ->orderBy('id')->get();
+    }
+
+    /**
+     * At unload: the box's place in its set, and where the other boxes are.
+     *
+     * @return array{n: int, of: int, name: string, text: string, kind: string}|null
+     */
+    public static function atUnload(Invoice $invoice): ?array
+    {
+        $all = static::members($invoice);
+        if ($all->count() < 2) {
+            return null;
+        }
+        $n = $all->search(fn ($b) => $b->id === $invoice->id) + 1;
+        $here = $all->where('container_id', $invoice->container_id);
+        $waiting = $here->where('id', '!=', $invoice->id)->filter(fn ($b) => ! $b->is_verified)->count();
+        $elsewhere = $all->where('container_id', '!=', $invoice->container_id)->filter(fn ($b) => ! $b->is_verified)->count();
+        $done = $all->filter(fn ($b) => $b->is_verified)->count();
+
+        $text = match (true) {
+            $waiting === 0 && $elsewhere === 0 => '✓ All '.$all->count().' boxes are off the container.',
+            $elsewhere === 0 => $waiting.' more still in this container.',
+            $waiting === 0 => $elsewhere.' '.($elsewhere === 1 ? 'is' : 'are').' in another container (not here yet).',
+            default => $waiting.' more in this container, '.$elsewhere.' in another container.',
+        };
+
+        return ['n' => $n, 'of' => $all->count(), 'name' => Str::title((string) $invoice->receiver_name), 'text' => $text,
+            'kind' => $elsewhere > 0 ? 'split' : ($waiting === 0 && $done === $all->count() ? 'done' : 'wait')];
+    }
+
+    /**
+     * On a truck: how many of the set are loaded, and where the others are.
+     *
+     * @return array{n: int, of: int, name: string, text: string, kind: string}|null
+     */
+    public static function onTrip(Invoice $invoice, Deliverylog $trip, string $tripColumn = 'deliverylog_id', string $loadedColumn = 'is_loaded'): ?array
+    {
+        $all = static::members($invoice);
+        if ($all->count() < 2) {
+            return null;
+        }
+        $rows = Tripinvoice::whereIn('invoice_id', $all->pluck('id'))->where($tripColumn, $trip->id)->get()->keyBy('invoice_id');
+        $loaded = $rows->filter(fn ($r) => $r->{$loadedColumn})->count();
+        $left = $all->filter(fn ($b) => isset($rows[$b->id]) && ! $rows[$b->id]->{$loadedColumn});
+        $off = $all->filter(fn ($b) => ! isset($rows[$b->id]));
+
+        $parts = [];
+        if ($left->isNotEmpty()) {
+            $parts[] = 'Still to load: '.$left->map(fn ($b) => $b->invoice.($b->whSection ? ' ('.$b->whSection->code.')' : ''))->join(', ');
+        }
+        if ($off->isNotEmpty()) {
+            $parts[] = $off->count().' not on this trip ('.$off->map(fn ($b) => $b->invoice)->join(', ').')';
+        }
+
+        return ['n' => $loaded, 'of' => $all->count(), 'name' => Str::title((string) $invoice->receiver_name),
+            'text' => $parts ? implode(' · ', $parts) : '✓ Complete · all '.$all->count().' boxes loaded',
+            'kind' => $off->isNotEmpty() ? 'split' : ($left->isEmpty() ? 'done' : 'wait')];
+    }
+
+    /**
+     * Customers on a trip whose set is not complete on the truck, for the Done screen.
+     *
+     * @return list<array{key: string, name: string, have: int, of: int, missing: list<array{id: int, invoice: string, where: string}>, reason: ?string}>
+     */
+    public static function openOnTrip(Deliverylog $trip, string $tripColumn = 'deliverylog_id', string $loadedColumn = 'is_loaded'): array
+    {
+        $rows = Tripinvoice::with('invdata')->where($tripColumn, $trip->id)->get();
+        $keys = $rows->pluck('invdata.set_key')->filter()->unique();
+        if ($keys->isEmpty()) {
+            return [];
+        }
+        $loadedIds = $rows->filter(fn ($r) => $r->{$loadedColumn})->pluck('invoice_id')->all();
+        $boxes = Invoice::with(['whSection:id,code', 'container:id,container_no'])->whereIn('set_key', $keys)
+            ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))->get()->groupBy('set_key');
+        $reasons = SetSplit::where('deliverylog_id', $trip->id)->get()->keyBy('invoice_id');
+        $onTrip = $rows->pluck('invoice_id')->all();
+
+        $out = [];
+        foreach ($boxes as $key => $set) {
+            if ($set->count() < 2) {
+                continue;
+            }
+            $missing = $set->reject(fn ($b) => in_array($b->id, $loadedIds, true));
+            if ($missing->isEmpty() || $set->count() === $missing->count()) {
+                continue; // complete, or none of it loaded yet
+            }
+            $first = $set->first();
+            $out[] = [
+                'key' => $key, 'name' => Str::title((string) $first->receiver_name), 'have' => $set->count() - $missing->count(), 'of' => $set->count(),
+                'missing' => $missing->map(fn ($b) => ['id' => $b->id, 'invoice' => $b->invoice,
+                    'where' => in_array($b->id, $onTrip, true) ? 'on this trip, not loaded'.($b->whSection ? ' · section '.$b->whSection->code : '')
+                        : (! $b->is_verified ? 'not unloaded yet'.($b->container ? ' · container '.$b->container->container_no : '') : ($b->whSection ? 'section '.$b->whSection->code : 'in the warehouse')),
+                    'reason' => $reasons[$b->id]->reason ?? null])->values()->all(),
+            ];
+        }
+
+        return $out;
     }
 }
-DISPATCH_FILE_END_18
+DISPATCH_FILE_END_10
 
-# ---------------------------------------------------------------- app/Support/Fuel/Fuel.php
-mkdir -p 'app/Support/Fuel'
-cat > 'app/Support/Fuel/Fuel.php' <<'DISPATCH_FILE_END_19'
+# ---------------------------------------------------------------- app/Support/Boxes/Crossdock.php
+mkdir -p 'app/Support/Boxes'
+cat > 'app/Support/Boxes/Crossdock.php' <<'DISPATCH_FILE_END_11'
 <?php
 
-namespace App\Support\Fuel;
+namespace App\Support\Boxes;
+
+use App\Models\Boxes\WhCrossdock;
+use App\Models\Container;
+use App\Models\Invoice;
+use App\Models\Whdeliverylog;
+use App\Models\Whtripinvoice;
+use App\Services\TripAssignment;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Throwable;
+
+/**
+ * A truck waiting at a container unload (for example a 10-wheeler to the Tarlac warehouse).
+ * Boxes for that warehouse go straight from the container onto the truck: one scan
+ * verifies the box and loads it. The crew can put a box in its section instead, or pause the truck.
+ */
+class Crossdock
+{
+    public static function active(?int $containerId): ?WhCrossdock
+    {
+        if (! $containerId || ! Sections::ready()) {
+            return null;
+        }
+
+        return WhCrossdock::with('trip.warehouse:id,name')->where('container_id', $containerId)->whereNull('ended_at')->latest('id')->first();
+    }
+
+    /** Warehouse trips leaving this warehouse that can take boxes. */
+    public static function trips(?int $warehouseId): Collection
+    {
+        if (! $warehouseId) {
+            return collect();
+        }
+
+        return Whdeliverylog::with('warehouse:id,name', 'truck:id,plate_no')->where('user_whid', $warehouseId)
+            ->where('is_active', true)->where(fn ($q) => $q->where('is_lock', false)->orWhereNull('is_lock'))
+            ->latest('id')->limit(20)->get();
+    }
+
+    public static function start(Container $container, int $tripId): ?WhCrossdock
+    {
+        $trip = static::trips(Auth::user()?->warehouse_id)->firstWhere('id', $tripId);
+        if (! $trip) {
+            return null;
+        }
+        WhCrossdock::where('container_id', $container->id)->whereNull('ended_at')->update(['ended_at' => now()]);
+
+        return WhCrossdock::create(['container_id' => $container->id, 'whdeliverylog_id' => $trip->id, 'started_by' => Auth::id()]);
+    }
+
+    /**
+     * Load the box onto the waiting truck when its section is for the truck's warehouse.
+     * Returns the trip it was loaded on, or null (then it goes to its section as usual).
+     */
+    public static function load(Invoice $invoice, ?WhCrossdock $dock, ?\App\Models\Boxes\WhSection $section): ?Whdeliverylog
+    {
+        $trip = $dock?->trip;
+        if (! $dock || $dock->paused || ! $trip || ! $section || ! $section->to_warehouse_id || (int) $section->to_warehouse_id !== (int) $trip->warehouse_id) {
+            return null;
+        }
+        try {
+            DB::transaction(function () use ($invoice, $trip): void {
+                app(TripAssignment::class)->addToWarehouseTrip($trip, [$invoice]);
+                Whtripinvoice::where('whdeliverylog_id', $trip->id)->where('invoice_id', $invoice->id)
+                    ->update(['is_loaded' => true, 'loaded_by' => Auth::id(), 'loaded_at' => now()]);
+            });
+        } catch (Throwable $e) {
+            report($e);
+
+            return null;
+        }
+
+        return Whtripinvoice::where('whdeliverylog_id', $trip->id)->where('invoice_id', $invoice->id)->exists() ? $trip : null;
+    }
+
+    /** "Put in section instead": take the box off the waiting truck again. */
+    public static function unload(Invoice $invoice, WhCrossdock $dock): bool
+    {
+        $row = Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->where('invoice_id', $invoice->id)->where('is_unloaded', false)->first();
+        if (! $row) {
+            return false;
+        }
+        DB::transaction(function () use ($row, $invoice): void {
+            $row->delete();
+            $invoice->update(['wh_is_assigned' => false]);
+        });
+
+        return true;
+    }
+
+    /**
+     * The truck's boxes from this container: on the truck, in the section, still in the container.
+     *
+     * @return array{trip: string, to: string, onTruck: int, inSection: int, inContainer: int, paused: bool, section: ?string}
+     */
+    public static function counts(WhCrossdock $dock): array
+    {
+        $trip = $dock->trip;
+        $section = Sections::forWarehouse($trip?->user_whid, (int) $trip?->warehouse_id);
+        $forTruck = Invoice::where('container_id', $dock->container_id)->get()
+            ->filter(fn ($b) => (int) Sections::forInvoice($b, $trip?->user_whid)?->to_warehouse_id === (int) $trip?->warehouse_id);
+        $ids = $forTruck->pluck('id');
+        $onTruck = Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->whereIn('invoice_id', $ids)->count();
+
+        return [
+            'trip' => (string) $trip?->trip_number, 'to' => (string) ($trip?->warehouse?->name ?? 'the other warehouse'),
+            'onTruck' => $onTruck,
+            'inSection' => $forTruck->filter(fn ($b) => $b->is_verified)->count() - $onTruck,
+            'inContainer' => $forTruck->filter(fn ($b) => ! $b->is_verified)->count(),
+            'paused' => (bool) $dock->paused, 'section' => $section?->code,
+        ];
+    }
+}
+DISPATCH_FILE_END_11
+
+# ---------------------------------------------------------------- app/Support/Boxes/Sections.php
+mkdir -p 'app/Support/Boxes'
+cat > 'app/Support/Boxes/Sections.php' <<'DISPATCH_FILE_END_12'
+<?php
+
+namespace App\Support\Boxes;
 
 use App\Models\AppSetting;
-use App\Models\Deliverylog;
-use App\Models\Fuel\FuelCash;
-use App\Models\Fuel\FuelFill;
-use App\Models\Maps\TripRoute;
-use App\Models\Tracking\TruckPosition;
-use App\Models\Truck;
-use App\Models\Truckcrew;
-use App\Models\User;
-use App\Support\Maps\RoutePlanner;
-use Illuminate\Support\Carbon;
+use App\Models\Boxes\WhSection;
+use App\Models\Invoice;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
- * Fuel: settings, diesel or gasoline, this week's price from the receipts, km per liter,
- * the cash estimate for a trip, and saving a fill with its checks.
+ * Which section of the warehouse a box goes to, from the receiver's province.
+ * Each warehouse sets its own sections (Admin → Settings → Warehouse sections);
+ * sections with no warehouse are for every warehouse.
  */
-class Fuel
+class Sections
 {
-    public const TYPES = ['diesel' => 'Diesel', 'gasoline' => 'Gasoline'];
-
-    public const PROVIDERS = ['petron' => 'Petron Fleet Card', 'shell' => 'Shell Fleet Card', 'caltex' => 'Caltex StarCard', 'seaoil' => 'SEAOIL PriceLOCQ', 'other' => 'Other'];
-
-    /** Product names on receipts. Diesel words are checked first ("V-Power Diesel" is diesel). */
-    protected const DIESEL = ['diesel', 'biodiesel', 'turbo d', 'diesel max', 'techron d', 'fuelsave d', 'ado', 'gasoil', 'gas oil'];
-
-    protected const GASOLINE = ['gasoline', 'unleaded', 'premium', 'xcs', 'blaze', 'xtra', 'v-power', 'vpower', 'silver', 'platinum', 'extreme', 'super', 'regular', 'ron', 'gas 9', '91', '95', '97', '100', 'fuelsave g', 'sprint'];
-
-    // ------------------------------------------------------------------ settings
-
-    public static function setting(string $key, mixed $default = null): mixed
-    {
-        $v = AppSetting::get('fuel.'.$key, $default);
-
-        return is_string($v) && str_starts_with($v, '{') ? (json_decode($v, true) ?? $v) : $v;
-    }
-
-    public static function put(string $key, mixed $value): void
-    {
-        AppSetting::put('fuel.'.$key, is_array($value) ? json_encode($value) : $value);
-    }
-
-    public static function companyTin(): string
-    {
-        return (string) static::setting('company_tin', '');
-    }
-
-    public static function cashMinKm(): int
-    {
-        return (int) static::setting('cash_min_km', 150);
-    }
-
-    public static function bufferPct(): int
-    {
-        return (int) static::setting('buffer_pct', 10);
-    }
-
-    public static function defaultKml(): float
-    {
-        return (float) static::setting('default_kml', 7);
-    }
+    /** @var array<int, Collection<int, WhSection>> */
+    protected static array $memo = [];
 
     public static function ready(): bool
     {
-        return Schema::hasTable('fuel_fills');
+        return Schema::hasTable('wh_sections');
     }
 
-    // ------------------------------------------------------------------ diesel or gasoline
-
-    /** "Diesel Max" → diesel, "XCS" → gasoline, unknown → null. */
-    public static function typeOf(?string $product): ?string
+    /** The sections of a warehouse, in order. */
+    public static function of(?int $warehouseId): Collection
     {
-        $p = ' '.Str::lower(Str::ascii((string) $product)).' ';
-        if (trim($p) === '') {
-            return null;
-        }
-        foreach (static::DIESEL as $w) {
-            if (str_contains($p, $w)) {
-                return 'diesel';
-            }
-        }
-        foreach (static::GASOLINE as $w) {
-            if (preg_match('/(^|[^a-z0-9])'.preg_quote($w, '/').'([^a-z0-9]|$)/', $p)) {
-                return 'gasoline';
-            }
-        }
-
-        return null;
-    }
-
-    // ------------------------------------------------------------------ price
-
-    /** The start of the price week: prices change on Tuesday. */
-    public static function weekStart(?Carbon $day = null): Carbon
-    {
-        $day = ($day ?? now())->copy()->startOfDay();
-
-        return $day->isTuesday() ? $day : $day->previous(Carbon::TUESDAY);
-    }
-
-    /**
-     * This week's price per liter: the admin's price for this week, else the middle price of the
-     * receipts since Tuesday, else last week's receipts.
-     *
-     * @return array{price: ?float, from: string, count: int}
-     */
-    public static function price(string $type, ?Carbon $day = null): array
-    {
-        $week = static::weekStart($day);
-        $set = static::setting("price.{$type}");
-        if (is_array($set) && ($set['week'] ?? null) === $week->toDateString() && ($set['price'] ?? 0) > 0) {
-            return ['price' => (float) $set['price'], 'from' => 'set by the office', 'count' => 0];
-        }
-        foreach ([[$week, $week->copy()->addWeek()], [$week->copy()->subWeek(), $week]] as $i => [$from, $to]) {
-            $prices = FuelFill::where('fuel_type', $type)->whereNotNull('price_per_liter')
-                ->where('filled_at', '>=', $from)->where('filled_at', '<', $to)->pluck('price_per_liter');
-            if ($prices->isNotEmpty()) {
-                return ['price' => static::median($prices), 'from' => ($i ? 'last week\'s ' : '').$prices->count().' '.Str::plural('receipt', $prices->count()), 'count' => $prices->count()];
-            }
-        }
-
-        return ['price' => null, 'from' => 'no receipts yet', 'count' => 0];
-    }
-
-    /** @return list<array{week: Carbon, diesel: ?float, gasoline: ?float}> */
-    public static function priceWeeks(int $weeks = 6): array
-    {
-        $out = [];
-        $start = static::weekStart();
-        for ($i = 0; $i < $weeks; $i++) {
-            $w = $start->copy()->subWeeks($i);
-            $row = ['week' => $w];
-            foreach (array_keys(static::TYPES) as $type) {
-                $p = FuelFill::where('fuel_type', $type)->whereNotNull('price_per_liter')
-                    ->where('filled_at', '>=', $w)->where('filled_at', '<', $w->copy()->addWeek())->pluck('price_per_liter');
-                $row[$type] = $p->isNotEmpty() ? static::median($p) : null;
-            }
-            $out[] = $row;
-        }
-
-        return $out;
-    }
-
-    public static function median(Collection $values): float
-    {
-        $v = $values->map(fn ($x) => (float) $x)->sort()->values();
-        $n = $v->count();
-
-        return round($n % 2 ? $v[intdiv($n, 2)] : ($v[$n / 2 - 1] + $v[$n / 2]) / 2, 2);
-    }
-
-    // ------------------------------------------------------------------ km per liter
-
-    /** The truck's usual km per liter (last 5 fills with an odometer), or null. */
-    public static function kml(int $truckId, int $last = 5, int $skip = 0): ?float
-    {
-        $fills = FuelFill::where('truck_id', $truckId)->whereNotNull('km_since')->where('km_since', '>', 0)
-            ->orderByDesc('filled_at')->skip($skip)->take($last)->get(['km_since', 'liters']);
-        $l = $fills->sum('liters');
-
-        return $fills->isNotEmpty() && $l > 0 ? round($fills->sum('km_since') / $l, 1) : null;
-    }
-
-    // ------------------------------------------------------------------ cash for a trip
-
-    /**
-     * Cash for a trip: trip km ÷ the truck's km per liter × this week's price + buffer,
-     * rounded up to ₱10. Pieces are null when not known yet.
-     *
-     * @return array{km: ?float, kml: float, kmlFrom: string, type: string, price: ?float, priceFrom: string, buffer: int, liters: ?float, amount: ?float, short: bool}
-     */
-    public static function estimate(Deliverylog $trip): array
-    {
-        $truck = $trip->truck;
-        $km = TripRoute::where('deliverylog_id', $trip->id)->value('km');
-        $kml = $truck ? static::kml($truck->id) : null;
-        $type = $truck?->fuel_type ?: 'diesel';
-        $p = static::price($type);
-        $buffer = static::bufferPct();
-        $liters = $km ? round($km / ($kml ?: static::defaultKml()), 1) : null;
-        $amount = $liters && $p['price'] ? ceil(round($liters * $p['price'] * (1 + $buffer / 100) / 10, 4)) * 10 : null;
-
-        return [
-            'km' => $km ? (float) $km : null, 'kml' => $kml ?: static::defaultKml(), 'kmlFrom' => $kml ? 'from its last fills' : 'usual for trucks (no fills yet)',
-            'type' => $type, 'price' => $p['price'], 'priceFrom' => $p['from'], 'buffer' => $buffer, 'liters' => $liters, 'amount' => $amount,
-            'short' => $km !== null && $km < static::cashMinKm(),
-        ];
-    }
-
-    public static function cashFor(?Deliverylog $trip): ?FuelCash
-    {
-        return $trip ? FuelCash::where('deliverylog_id', $trip->id)->first() : null;
-    }
-
-    // ------------------------------------------------------------------ the driver's truck
-
-    /** The truck the driver is on: today's trip, or the truck they are crew of. */
-    public static function truckFor(User $driver, ?Deliverylog $trip): ?Truck
-    {
-        if ($trip?->truck) {
-            return $trip->truck;
-        }
-        $id = Truckcrew::where('crew', $driver->id)->latest('id')->value('truck_id');
-
-        return $id ? Truck::find($id) : null;
-    }
-
-    // ------------------------------------------------------------------ saving a fill
-
-    /**
-     * Save a fill and work out the checks: km since the last fill, km per liter, price per
-     * liter when missing, VAT sums, the company TIN, and the truck GPS at that time.
-     */
-    public static function save(array $data, Truck $truck, ?User $driver, ?Deliverylog $trip): FuelFill
-    {
-        $at = Carbon::parse($data['filled_at'] ?? now());
-        $liters = round((float) $data['liters'], 2);
-        $total = round((float) $data['total'], 2);
-        $price = (float) ($data['price_per_liter'] ?? 0) ?: ($liters > 0 ? round($total / $liters, 2) : null);
-        $odo = isset($data['odometer']) && $data['odometer'] !== '' ? (int) $data['odometer'] : null;
-
-        $prev = $odo ? FuelFill::where('truck_id', $truck->id)->whereNotNull('odometer')->where('filled_at', '<', $at)->orderByDesc('filled_at')->first() : null;
-        $kmSince = $prev && $odo > $prev->odometer && $odo - $prev->odometer < 5000 ? $odo - $prev->odometer : null;
-
-        [$gpsOk, $gpsM, $lat, $lng] = static::gpsCheck($truck->id, $at, $data['lat'] ?? null, $data['lng'] ?? null);
-
-        $vat = isset($data['vat']) && $data['vat'] !== '' ? round((float) $data['vat'], 2) : null;
-        $vatable = isset($data['vatable']) && $data['vatable'] !== '' ? round((float) $data['vatable'], 2) : ($vat !== null ? round($total - $vat, 2) : null);
-
-        return FuelFill::create([
-            'truck_id' => $truck->id, 'deliverylog_id' => $trip?->id, 'driver_id' => $driver?->id,
-            'logistichub_id' => $truck->logistichub_id ?: $trip?->logistichub_id, 'filled_at' => $at,
-            'station' => $data['station'] ?? null, 'product' => $data['product'] ?? null,
-            'fuel_type' => $data['fuel_type'] ?? static::typeOf($data['product'] ?? null),
-            'liters' => $liters, 'price_per_liter' => $price, 'total' => $total, 'vatable' => $vatable, 'vat' => $vat,
-            'station_tin' => $data['station_tin'] ?? null, 'invoice_no' => $data['invoice_no'] ?? null,
-            'buyer_tin_ok' => static::buyerTinOk($data['buyer_tin'] ?? null, $total, $data['buyer_tin_ok'] ?? null),
-            'paid_with' => ($data['paid_with'] ?? 'card') === 'cash' ? 'cash' : 'card', 'card_last4' => $data['card_last4'] ?? null,
-            'odometer' => $odo, 'km_since' => $kmSince, 'km_per_liter' => $kmSince && $liters > 0 ? round($kmSince / $liters, 2) : null,
-            'receipt_path' => $data['receipt_path'] ?? null, 'odometer_path' => $data['odometer_path'] ?? null,
-            'lat' => $lat, 'lng' => $lng, 'gps_ok' => $gpsOk, 'gps_distance_m' => $gpsM,
-            'ai_read' => (bool) ($data['ai_read'] ?? false), 'ai_data' => $data['ai_data'] ?? null,
-        ]);
-    }
-
-    /**
-     * Is the company's TIN on the receipt? Only asked from ₱1,000 (below that the buyer's
-     * details are not needed). Null when not known (no company TIN set, or nothing read).
-     */
-    public static function buyerTinOk(?string $buyerTin, float $total, mixed $told = null): ?bool
-    {
-        if ($told !== null && $told !== '') {
-            return (bool) $told;
-        }
-        $mine = preg_replace('/\D/', '', static::companyTin());
-        if ($total < 1000 || strlen($mine) < 9) {
-            return null;
-        }
-        $theirs = preg_replace('/\D/', '', (string) $buyerTin);
-
-        return $theirs !== '' && str_starts_with($theirs, substr($mine, 0, 9));
-    }
-
-    /**
-     * Was the phone where the truck was? Compares the phone's location (when the driver
-     * allowed it) with the truck GPS within 15 minutes of the fill.
-     *
-     * @return array{0: ?bool, 1: ?int, 2: ?float, 3: ?float}
-     */
-    public static function gpsCheck(int $truckId, Carbon $at, mixed $lat, mixed $lng): array
-    {
-        $pos = TruckPosition::where('truck_id', $truckId)
-            ->whereBetween('recorded_at', [$at->copy()->subMinutes(15), $at->copy()->addMinutes(15)])
-            ->get()->sortBy(fn ($p) => abs($p->recorded_at->diffInSeconds($at)))->first();
-        $lat = is_numeric($lat) ? (float) $lat : null;
-        $lng = is_numeric($lng) ? (float) $lng : null;
-        if (! $pos) {
-            return [null, null, $lat, $lng];
-        }
-        if ($lat === null || $lng === null) {
-            return [null, null, $pos->lat, $pos->lng];
-        }
-        $m = (int) round(RoutePlanner::km([$lat, $lng], [$pos->lat, $pos->lng]) * 1000);
-
-        return [$m <= 1000, $m, $lat, $lng];
-    }
-}
-DISPATCH_FILE_END_19
-
-# ---------------------------------------------------------------- app/Support/Fuel/FuelReader.php
-mkdir -p 'app/Support/Fuel'
-cat > 'app/Support/Fuel/FuelReader.php' <<'DISPATCH_FILE_END_20'
-<?php
-
-namespace App\Support\Fuel;
-
-use App\Support\Ai\Ai;
-use Illuminate\Support\Str;
-
-/**
- * Reads a fuel receipt photo (station, product, liters, price, total, VAT, TIN, invoice no.,
- * card) and an odometer photo with the AI. Off, or nothing read: the driver types it.
- */
-class FuelReader
-{
-    public static function on(): bool
-    {
-        try {
-            return Ai::enabled('fuel_receipts');
-        } catch (\Throwable) {
-            return false;
-        }
-    }
-
-    /** @return array<string, mixed> only the fields that were read */
-    public static function receipt(string $path): array
-    {
-        if (! static::on() || ! ($image = Ai::image('public', $path))) {
-            return [];
-        }
-        $system = 'You read fuel station receipts (sales invoices) from the Philippines: Petron, Shell, Caltex, SEAOIL, Phoenix, Unioil, Cleanfuel and others. '
-            .'Read only what is printed; use null for anything you cannot read. Numbers without commas or peso signs. '
-            .'fuel_type: "diesel" or "gasoline" from the product name (Diesel Max, Turbo Diesel, V-Power Diesel, FuelSave Diesel → diesel; XCS, Blaze, Xtra Advance, V-Power, Silver, Platinum, Unleaded, Extreme 95/97 → gasoline). '
-            .'vatable = "VATable sales"/"VAT sales"; vat = "VAT amount"/"12% VAT". station_tin = the seller TIN at the top. buyer_name and buyer_tin = the customer name and TIN written or printed for the buyer, if any. '
-            .'card_last4 = last 4 digits of a fleet/credit card if shown. date as YYYY-MM-DD and time as HH:MM (24h) if shown. '
-            .'Answer as {"station": str, "product": str, "fuel_type": str, "liters": num, "price_per_liter": num, "total": num, "vatable": num, "vat": num, '
-            .'"station_tin": str, "invoice_no": str, "buyer_name": str, "buyer_tin": str, "card_last4": str, "odometer": int, "date": str, "time": str}.';
-        try {
-            $out = Ai::json('fuel_receipts', $system, [$image, ['type' => 'text', 'text' => 'Read this receipt.']], 'fast', 500);
-        } catch (\Throwable) {
-            return [];
-        }
-
-        $num = fn ($v) => is_numeric(str_replace(',', '', (string) $v)) ? round((float) str_replace(',', '', (string) $v), 2) : null;
-        $str = fn ($v, $n = 120) => is_string($v) && trim($v) !== '' && strtolower(trim($v)) !== 'null' ? Str::limit(trim($v), $n, '') : null;
-        $read = [
-            'station' => $str($out['station'] ?? null), 'product' => $str($out['product'] ?? null, 80),
-            'liters' => $num($out['liters'] ?? null), 'price_per_liter' => $num($out['price_per_liter'] ?? null), 'total' => $num($out['total'] ?? null),
-            'vatable' => $num($out['vatable'] ?? null), 'vat' => $num($out['vat'] ?? null),
-            'station_tin' => $str($out['station_tin'] ?? null, 30), 'invoice_no' => $str($out['invoice_no'] ?? null, 40),
-            'buyer_tin' => $str($out['buyer_tin'] ?? null, 30), 'card_last4' => $str($out['card_last4'] ?? null, 8),
-            'odometer' => is_numeric($out['odometer'] ?? null) ? (int) $out['odometer'] : null,
-        ];
-        $type = Fuel::typeOf($read['product']) ?? (in_array($out['fuel_type'] ?? null, ['diesel', 'gasoline'], true) ? $out['fuel_type'] : null);
-        $read['fuel_type'] = $type;
-        if (! empty($out['date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $out['date'])) {
-            $when = $out['date'].' '.(preg_match('/^\d{1,2}:\d{2}$/', (string) ($out['time'] ?? '')) ? $out['time'] : '00:00');
-            try {
-                $at = \Illuminate\Support\Carbon::parse($when);
-                if ($at->isBetween(now()->subDays(3), now()->addHour())) {
-                    $read['filled_at'] = $at->format('Y-m-d H:i');
-                }
-            } catch (\Throwable) {
-            }
-        }
-        // the numbers must agree: liters × price ≈ total
-        if ($read['liters'] && $read['total'] && ! $read['price_per_liter']) {
-            $read['price_per_liter'] = round($read['total'] / $read['liters'], 2);
-        }
-
-        return array_filter($read, fn ($v) => $v !== null);
-    }
-
-    public static function odometer(string $path): ?int
-    {
-        if (! static::on() || ! ($image = Ai::image('public', $path))) {
-            return null;
-        }
-        try {
-            $out = Ai::json('fuel_receipts', 'You read the odometer (total km) on a truck dashboard photo. Ignore the trip meter. Answer as {"odometer": int or null}.',
-                [$image, ['type' => 'text', 'text' => 'Read the odometer.']], 'fast', 60);
-        } catch (\Throwable) {
-            return null;
-        }
-
-        return is_numeric($out['odometer'] ?? null) && (int) $out['odometer'] > 0 ? (int) $out['odometer'] : null;
-    }
-
-    /** Do the receipt numbers agree? liters × price ≈ total, VATable + VAT ≈ total. */
-    public static function problems(array $f): array
-    {
-        $p = [];
-        $l = (float) ($f['liters'] ?? 0);
-        $pr = (float) ($f['price_per_liter'] ?? 0);
-        $t = (float) ($f['total'] ?? 0);
-        if ($l > 0 && $pr > 0 && $t > 0 && abs($l * $pr - $t) > max(2, $t * 0.01)) {
-            $p[] = 'Liters × price is ₱'.number_format($l * $pr, 2).', not the total ₱'.number_format($t, 2).'.';
-        }
-        $v = $f['vat'] ?? null;
-        $va = $f['vatable'] ?? null;
-        if ($v !== null && $v !== '' && $va !== null && $va !== '' && $t > 0 && abs((float) $v + (float) $va - $t) > max(1, $t * 0.01)) {
-            $p[] = 'VATable + VAT is not the total.';
-        }
-
-        return $p;
-    }
-}
-DISPATCH_FILE_END_20
-
-# ---------------------------------------------------------------- app/Support/Fuel/FuelReport.php
-mkdir -p 'app/Support/Fuel'
-cat > 'app/Support/Fuel/FuelReport.php' <<'DISPATCH_FILE_END_21'
-<?php
-
-namespace App\Support\Fuel;
-
-use App\Models\Fuel\FuelCash;
-use App\Models\Fuel\FuelFill;
-use App\Models\Fuel\FuelStatementLine;
-use App\Models\Truck;
-use App\Models\Tripinvoice;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
-
-/**
- * What the Fuel page shows for a month, for the trucks a person may see:
- * totals, each truck, alerts and VAT.
- */
-class FuelReport
-{
-    public Carbon $from;
-
-    public Carbon $to;
-
-    /** @param  int|false|null  $hub  null = all hubs (Admin), false = none */
-    public function __construct(public int|false|null $hub, ?string $month = null)
-    {
-        $this->from = $month ? Carbon::parse($month.'-01')->startOfMonth() : now()->startOfMonth();
-        $this->to = $this->from->copy()->endOfMonth();
-    }
-
-    /** @return Collection<int, Truck> */
-    public function trucks(): Collection
-    {
-        if ($this->hub === false) {
+        if (! static::ready()) {
             return collect();
         }
 
-        return Truck::query()->when($this->hub !== null, fn ($q) => $q->where('logistichub_id', $this->hub))
-            ->orderBy('plate_no')->get();
+        return static::$memo[(int) $warehouseId] ??= WhSection::query()->with(['hub:id,hub_name', 'toWarehouse:id,name'])
+            ->where('is_active', true)
+            ->where(fn ($q) => $q->whereNull('warehouse_id')->when($warehouseId, fn ($q) => $q->orWhere('warehouse_id', $warehouseId)))
+            ->orderBy('sort')->orderBy('code')->get();
     }
 
-    public function fills(): Builder
+    public static function forget(): void
     {
-        return FuelFill::query()->whereIn('truck_id', $this->trucks()->pluck('id'))
-            ->whereBetween('filled_at', [$this->from, $this->to]);
+        static::$memo = [];
     }
 
-    public function totals(): array
+    /** Does this warehouse use sections at all? */
+    public static function used(?int $warehouseId): bool
     {
-        $f = $this->fills()->get();
-        $spent = $f->sum('total');
-        $cash = $f->where('paid_with', 'cash')->sum('total');
-        $vat = $f->sum('vat');
-        $noTin = $f->filter(fn ($x) => $x->buyer_tin_ok === false)->sum('vat');
-        $km = $f->sum('km_since');
-        $kmLiters = $f->whereNotNull('km_since')->sum('liters');
-        $boxes = Tripinvoice::query()->where('is_delivered', true)->whereBetween('delivered_at', [$this->from, $this->to])
-            ->whereIn('deliverylog_id', \App\Models\Deliverylog::query()->whereIn('truck_id', $this->trucks()->pluck('id'))->select('id'))->count();
-
-        return [
-            'spent' => $spent, 'liters' => $f->sum('liters'), 'fills' => $f->count(),
-            'diesel' => $f->where('fuel_type', 'diesel')->sum('liters'), 'gasoline' => $f->where('fuel_type', 'gasoline')->sum('liters'),
-            'cash' => $cash, 'cashPct' => $spent > 0 ? (int) round($cash / $spent * 100) : 0,
-            'vat' => $vat, 'vatNoTin' => $noTin, 'kml' => $kmLiters > 0 ? round($km / $kmLiters, 1) : null,
-            'boxes' => $boxes, 'perBox' => $boxes > 0 ? round($spent / $boxes, 2) : null,
-            'unsettled' => FuelCash::whereNull('settled_at')->whereIn('truck_id', $this->trucks()->pluck('id'))->count(),
-        ];
+        return static::of($warehouseId)->where('kind', 'area')->isNotEmpty();
     }
 
-    /** One row per truck with fills this month. */
-    public function perTruck(): Collection
+    /** "Cebu" for "Province of Cebu", "cebu ", "CEBU PROV." */
+    public static function clean(?string $province): string
     {
-        $fills = $this->fills()->orderBy('filled_at')->get()->groupBy('truck_id');
+        $p = Str::lower(Str::squish((string) $province));
+        $p = preg_replace('/\b(province of|prov\.?|province)\b/u', '', $p);
+        $p = trim(preg_replace('/[^\p{L}\p{N} ]+/u', ' ', $p));
+        $p = Str::squish($p);
 
-        return $this->trucks()->map(function (Truck $t) use ($fills) {
-            $f = $fills->get($t->id, collect());
-            $withKm = $f->whereNotNull('km_since');
-            $kml = $withKm->sum('liters') > 0 ? round($withKm->sum('km_since') / $withKm->sum('liters'), 1) : null;
-            $recent = Fuel::kml($t->id, 3);
-            $before = Fuel::kml($t->id, 10, 3);
-            $change = $recent && $before ? (int) round(($recent - $before) / $before * 100) : null;
-            $last = $f->last();
-
-            return [
-                'truck' => $t, 'liters' => $f->sum('liters'), 'spent' => $f->sum('total'), 'fills' => $f->count(), 'kml' => $kml,
-                'change' => $change, 'perKm' => $withKm->sum('km_since') > 0 ? round($withKm->sum('total') / $withKm->sum('km_since'), 2) : null,
-                'last' => $last ? $last->filled_at->format('M j').' · '.($last->station ?: '—') : null,
-            ];
-        })->filter(fn ($r) => $r['fills'] > 0 || $this->hub !== null)->values();
-    }
-
-    /**
-     * What to look at, newest first.
-     *
-     * @return list<array{kind: string, icon: string, title: string, text: string, when: string, at: Carbon, fill: ?int}>
-     */
-    public function alerts(): array
-    {
-        $out = [];
-        $trucks = $this->trucks()->keyBy('id');
-        $fills = $this->fills()->with('truck')->orderBy('filled_at')->get();
-        $peso = fn ($n) => '₱'.number_format((float) $n, 2);
-        $add = function (string $kind, string $icon, string $title, string $text, Carbon $at, ?int $fill = null) use (&$out) {
-            $out[] = ['kind' => $kind, 'icon' => $icon, 'title' => $title, 'text' => $text, 'when' => $at->format('M j · g:i A'), 'at' => $at, 'fill' => $fill];
+        return match ($p) {
+            'ncr', 'metro manila', 'national capital region', 'manila' => 'metro manila',
+            default => $p,
         };
-        $prices = [];
-
-        foreach ($fills as $f) {
-            $t = $f->truck;
-            $plate = $t?->plate_no ?? 'Truck';
-            if ($t?->fuel_type && $f->fuel_type && $t->fuel_type !== $f->fuel_type) {
-                $add('red', '⛽', "{$plate} ({$t->fuel_type}) · {$f->fuel_type} on the receipt",
-                    trim(($f->station ?: '').' · '.rtrim(rtrim(number_format($f->liters, 2), '0'), '.').' L '.($f->product ?: '').' · '.$peso($f->total).' · paid '.$f->paid_with, ' ·').'. Wrong fuel, or another vehicle?', $f->filled_at, $f->id);
-            }
-            if ($t?->tank_liters && $f->liters > $t->tank_liters * 1.02) {
-                $add('red', '🛢️', "{$plate} · {$f->liters} L in one fill", "The tank holds {$t->tank_liters} L. ".($f->station ? "At {$f->station}." : ''), $f->filled_at, $f->id);
-            }
-            if ($f->gps_ok === false) {
-                $add('red', '📍', "{$plate} · fill added away from the truck", 'The phone was '.number_format($f->gps_distance_m / 1000, 1).' km from the truck GPS when this fill was added.', $f->filled_at, $f->id);
-            }
-            if ($f->price_per_liter && $f->fuel_type) {
-                $week = Fuel::weekStart($f->filled_at)->toDateString();
-                $prices[$f->fuel_type][$week] ??= Fuel::price($f->fuel_type, $f->filled_at)['price'];
-                $usual = $prices[$f->fuel_type][$week];
-                if ($usual && abs($f->price_per_liter - $usual) > $usual * 0.1) {
-                    $add('amber', '💵', "{$plate} · ₱".number_format($f->price_per_liter, 2)."/L on a {$f->paid_with} receipt", 'This week\'s '.$f->fuel_type.' price is ₱'.number_format($usual, 2).'/L. '.($f->station ? "At {$f->station}." : ''), $f->filled_at, $f->id);
-                }
-            }
-            if ($f->total >= 1000 && $f->vat !== null && $f->vat == 0.0) {
-                $add('amber', '🧾', "{$plate} · no VAT on the receipt", ($f->station ?: 'The station').' · '.$peso($f->total).'. A non-VAT station, or not a proper receipt.', $f->filled_at, $f->id);
-            }
-        }
-
-        // two fills close together
-        foreach ($fills->groupBy('truck_id') as $list) {
-            $prev = null;
-            foreach ($list as $f) {
-                if ($prev && $prev->filled_at->diffInMinutes($f->filled_at) < 120) {
-                    $add('amber', '⏱️', ($f->truck?->plate_no ?? 'Truck').' · two fills in '.(int) $prev->filled_at->diffInMinutes($f->filled_at).' minutes',
-                        rtrim(rtrim(number_format($prev->liters, 2), '0'), '.').' L then '.rtrim(rtrim(number_format($f->liters, 2), '0'), '.').' L.', $f->filled_at, $f->id);
-                }
-                $prev = $f;
-            }
-        }
-
-        // km per liter dropping
-        foreach ($trucks as $t) {
-            $recent = Fuel::kml($t->id, 3);
-            $before = Fuel::kml($t->id, 10, 3);
-            if ($recent && $before && $recent < $before * 0.85) {
-                $add('amber', '📉', "{$t->plate_no} · km per liter down ".(int) round((1 - $recent / $before) * 100).'%',
-                    "{$recent} km/L the last 3 fills, normally {$before}. Check tires, engine, or the fills.", now(), null);
-            }
-        }
-
-        // the company TIN missing on receipts of ₱1,000 and up
-        $noTin = $fills->filter(fn ($f) => $f->buyer_tin_ok === false);
-        if ($noTin->isNotEmpty()) {
-            $add('amber', '🧾', $noTin->count().' '.str('receipt')->plural($noTin->count()).' without your company TIN',
-                'VAT of '.$peso($noTin->sum('vat')).' cannot be claimed. Ask the drivers to show the company TIN card to the cashier.', $noTin->last()->filled_at, null);
-        }
-
-        // card statement lines
-        $lines = FuelStatementLine::query()->whereIn('truck_id', $trucks->keys())->whereBetween('charged_at', [$this->from, $this->to])
-            ->whereIn('status', ['no_fill', 'liters_differ'])->with('truck')->get();
-        $noFill = $lines->where('status', 'no_fill');
-        if ($noFill->isNotEmpty()) {
-            $add('amber', '💳', $noFill->count().' card '.str('charge')->plural($noFill->count()).' with no fill in the Driver app',
-                $noFill->take(3)->map(fn ($l) => ($l->truck?->plate_no ?? '?').' '.($l->charged_at?->format('M j g:i A') ?? '').' '.$peso($l->amount))->join(' · '), $noFill->max('charged_at'), null);
-        }
-        foreach ($lines->where('status', 'liters_differ') as $l) {
-            $add('amber', '⚖️', ($l->truck?->plate_no ?? 'Truck').' · liters differ from the card', 'Card: '.$l->liters.' L · Driver app: '.($l->fuelFill?->liters ?? '—').' L · '.($l->station ?: ''), $l->charged_at ?? now(), $l->fuel_fill_id);
-        }
-
-        // fuel cash not settled 2 days after it was given
-        FuelCash::whereNull('settled_at')->whereIn('truck_id', $trucks->keys())->where('given_at', '<', now()->subDays(2))->with('trip')
-            ->get()->each(fn ($c) => $add('amber', '💵', 'Fuel cash not settled · trip '.($c->trip?->trip_number ?? $c->deliverylog_id),
-                $peso($c->given).' given '.$c->given_at->diffForHumans().'. Cash receipts so far: '.$peso($c->spent()).'.', $c->given_at, null));
-
-        usort($out, fn ($a, $b) => [$a['kind'] === 'red' ? 0 : 1, -$a['at']->getTimestamp()] <=> [$b['kind'] === 'red' ? 0 : 1, -$b['at']->getTimestamp()]);
-
-        return $out;
-    }
-}
-DISPATCH_FILE_END_21
-
-# ---------------------------------------------------------------- app/Support/Fuel/FuelStatements.php
-mkdir -p 'app/Support/Fuel'
-cat > 'app/Support/Fuel/FuelStatements.php' <<'DISPATCH_FILE_END_22'
-<?php
-
-namespace App\Support\Fuel;
-
-use App\Models\Fuel\FuelFill;
-use App\Models\Fuel\FuelStatement;
-use App\Models\Fuel\FuelStatementLine;
-use App\Models\Truck;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Str;
-
-/**
- * Import a fuel card statement (CSV from Petron, Shell Fleet Hub, Caltex StarCard Online,
- * SEAOIL PriceLOCQ, or any other) and match each charge to a fill from the Driver app:
- * same truck, within 3 hours, and the same liters (3% either way).
- */
-class FuelStatements
-{
-    /** Words in the column titles, for each thing we need. The first match wins. */
-    protected const COLUMNS = [
-        'datetime' => ['transaction date time', 'date/time', 'date time', 'datetime', 'txn date time', 'trans date time'],
-        'date' => ['transaction date', 'trans date', 'txn date', 'date'],
-        'time' => ['transaction time', 'trans time', 'txn time', 'time'],
-        'card' => ['card number', 'card no', 'card #', 'pan', 'card'],
-        'plate' => ['plate number', 'plate no', 'vehicle plate', 'plate', 'vehicle', 'registration'],
-        'station' => ['station name', 'merchant name', 'site name', 'station', 'merchant', 'site', 'location'],
-        'product' => ['product name', 'product description', 'product', 'item', 'fuel type', 'description'],
-        'liters' => ['liters', 'litres', 'volume', 'quantity', 'qty', 'ltrs', 'ltr'],
-        'amount' => ['net amount', 'total amount', 'amount', 'total', 'value', 'gross'],
-        'odometer' => ['odometer', 'odo', 'mileage', 'km reading'],
-    ];
-
-    public const STATUS = [
-        'matched' => 'Matched',
-        'liters_differ' => 'Liters differ',
-        'no_fill' => 'No fill in the app',
-        'no_truck' => 'Card or plate not known',
-    ];
-
-    /** Read a CSV file and save the statement with each line matched. */
-    public static function import(string $file, string $provider, ?int $userId, ?int $hub, string $name): FuelStatement
-    {
-        $rows = static::read($file);
-        $statement = FuelStatement::create([
-            'provider' => array_key_exists($provider, Fuel::PROVIDERS) ? $provider : 'other', 'filename' => Str::limit($name, 180, ''),
-            'logistichub_id' => $hub, 'uploaded_by' => $userId, 'lines' => 0,
-        ]);
-        $trucks = Truck::query()->when($hub, fn ($q) => $q->where('logistichub_id', $hub))->get();
-        $byCard = $trucks->filter(fn ($t) => $t->fuel_card_last4)->keyBy(fn ($t) => substr(preg_replace('/\D/', '', $t->fuel_card_last4), -4));
-        $byPlate = $trucks->keyBy(fn ($t) => static::plate($t->plate_no));
-        $used = [];
-        $dates = [];
-
-        foreach ($rows as $r) {
-            if (! $r['amount'] && ! $r['liters']) {
-                continue;
-            }
-            $card4 = $r['card'] ? substr(preg_replace('/\D/', '', $r['card']), -4) : null;
-            $truck = ($card4 ? $byCard->get($card4) : null) ?? ($r['plate'] ? $byPlate->get(static::plate($r['plate'])) : null);
-            [$status, $fillId] = $truck ? static::match($truck->id, $r['at'], $r['liters'], $used) : ['no_truck', null];
-            if ($fillId) {
-                $used[$fillId] = true;
-            }
-            FuelStatementLine::create([
-                'fuel_statement_id' => $statement->id, 'truck_id' => $truck?->id, 'fuel_fill_id' => $fillId, 'charged_at' => $r['at'],
-                'card' => $r['card'] ? '****'.$card4 : null, 'plate' => $r['plate'], 'station' => $r['station'], 'product' => $r['product'],
-                'fuel_type' => Fuel::typeOf($r['product']), 'liters' => $r['liters'], 'amount' => $r['amount'], 'odometer' => $r['odometer'],
-                'status' => $status,
-            ]);
-            if ($r['at']) {
-                $dates[] = $r['at'];
-            }
-        }
-        $statement->update([
-            'lines' => $statement->lines()->count(),
-            'from' => $dates ? min($dates)->toDateString() : null, 'to' => $dates ? max($dates)->toDateString() : null,
-        ]);
-
-        return $statement;
-    }
-
-    /** @return array{0: string, 1: ?int} */
-    protected static function match(int $truckId, ?Carbon $at, ?float $liters, array $used): array
-    {
-        if (! $at) {
-            return ['no_fill', null];
-        }
-        $fill = FuelFill::where('truck_id', $truckId)->whereBetween('filled_at', [$at->copy()->subHours(3), $at->copy()->addHours(3)])
-            ->whereNotIn('id', array_keys($used))->get()
-            ->sortBy(fn ($f) => [abs(($f->liters ?? 0) - ($liters ?? 0)) > max(1, ($liters ?? 0) * 0.03) ? 1 : 0, abs($f->filled_at->diffInSeconds($at))])
-            ->first();
-        if (! $fill) {
-            return ['no_fill', null];
-        }
-        $same = $liters === null || abs($fill->liters - $liters) <= max(1, $liters * 0.03);
-
-        return [$same ? 'matched' : 'liters_differ', $fill->id];
-    }
-
-    public static function plate(?string $p): string
-    {
-        return strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string) $p));
     }
 
     /**
-     * The rows of a CSV statement, with the columns found by their titles.
-     *
-     * @return list<array{at: ?Carbon, card: ?string, plate: ?string, station: ?string, product: ?string, liters: ?float, amount: ?float, odometer: ?int}>
+     * The section for a box. A box with no province, or a province no section has, goes to the
+     * Check address section (when the warehouse has one).
      */
-    public static function read(string $file): array
+    public static function forInvoice(Invoice $invoice, ?int $warehouseId = null): ?WhSection
     {
-        $fh = fopen($file, 'r');
-        if (! $fh) {
-            return [];
+        $sections = static::of($warehouseId ?? $invoice->warehouse_id);
+        if ($sections->isEmpty()) {
+            return null;
         }
-        $first = (string) fgets($fh);
-        rewind($fh);
-        $sep = substr_count($first, ';') > substr_count($first, ',') ? ';' : (substr_count($first, "\t") > substr_count($first, ',') ? "\t" : ',');
-
-        $map = null;
-        $rows = [];
-        while (($cells = fgetcsv($fh, 0, $sep, '"', '\\')) !== false) {
-            $cells = array_map(fn ($c) => trim((string) preg_replace('/^\xEF\xBB\xBF/', '', (string) $c)), $cells);
-            if ($map === null) {
-                $map = static::header($cells);
-                if (count(array_intersect(array_keys($map), ['amount', 'liters'])) === 0) {
-                    $map = null; // not the title row yet (statements often start with account details)
-                }
-
-                continue;
-            }
-            $get = fn ($k) => isset($map[$k]) && isset($cells[$map[$k]]) && $cells[$map[$k]] !== '' ? $cells[$map[$k]] : null;
-            $num = fn ($v) => $v !== null && is_numeric($n = str_replace([',', '₱', 'PHP', ' '], '', $v)) ? (float) $n : null;
-            $rows[] = [
-                'at' => static::when($get('datetime') ?? trim(($get('date') ?? '').' '.($get('time') ?? ''))),
-                'card' => $get('card'), 'plate' => $get('plate'), 'station' => $get('station'), 'product' => $get('product'),
-                'liters' => $num($get('liters')), 'amount' => $num($get('amount')),
-                'odometer' => ($o = $num($get('odometer'))) ? (int) $o : null,
-            ];
-        }
-        fclose($fh);
-
-        return $rows;
-    }
-
-    /** column => index */
-    protected static function header(array $cells): array
-    {
-        $titles = array_map(fn ($c) => trim(preg_replace('/\s+/', ' ', Str::lower(str_replace(['_', '.'], ' ', $c)))), $cells);
-        $map = [];
-        foreach (static::COLUMNS as $key => $words) {
-            foreach ($words as $w) {
-                foreach ($titles as $i => $t) {
-                    if (! in_array($i, $map, true) && ($t === $w || str_contains($t, $w))) {
-                        $map[$key] = $i;
-
-                        continue 3;
+        $province = static::clean($invoice->receiver_province);
+        if ($province !== '') {
+            foreach ($sections->where('kind', 'area') as $s) {
+                foreach ((array) $s->provinces as $p) {
+                    if (static::clean($p) === $province) {
+                        return $s;
                     }
                 }
             }
         }
 
-        return $map;
+        return $sections->firstWhere('kind', 'check');
     }
 
-    protected static function when(?string $v): ?Carbon
+    /** Why a box went to Check address (shown in the Scan app). */
+    public static function whyCheck(Invoice $invoice): string
     {
-        $v = trim((string) $v);
-        if ($v === '') {
-            return null;
-        }
-        foreach (['m/d/Y H:i:s', 'm/d/Y H:i', 'm/d/Y g:i A', 'm/d/Y g:i:s A', 'Y-m-d H:i:s', 'Y-m-d H:i', 'd-M-Y H:i', 'd/m/Y H:i', 'm/d/Y', 'Y-m-d'] as $f) {
-            try {
-                $d = Carbon::createFromFormat($f, $v);
-                if ($d !== false && $d->format($f) === $v) {
-                    return $d;
-                }
-            } catch (\Throwable) {
-            }
-        }
-        try {
-            return Carbon::parse($v);
-        } catch (\Throwable) {
-            return null;
-        }
+        return blank($invoice->receiver_province)
+            ? 'No province in the address.'
+            : 'No section is set for "'.Str::title($invoice->receiver_province).'".';
+    }
+
+    /** The section a section-label QR names ("SEC-12"), or null. */
+    public static function fromCode(string $code): ?WhSection
+    {
+        return preg_match('/^SEC-(\d+)$/', $code, $m) && static::ready() ? WhSection::find((int) $m[1]) : null;
+    }
+
+    /** The section for boxes going to another warehouse (for "put in section instead"). */
+    public static function forWarehouse(?int $warehouseId, int $toWarehouseId): ?WhSection
+    {
+        return static::of($warehouseId)->firstWhere('to_warehouse_id', $toWarehouseId);
+    }
+
+    /** Also scan the section label at unload? Off by default, set for each warehouse. */
+    public static function labelScan(?int $warehouseId): bool
+    {
+        return (bool) AppSetting::get('sections.label_scan.'.(int) $warehouseId, false);
+    }
+
+    public static function setLabelScan(?int $warehouseId, bool $on): void
+    {
+        AppSetting::put('sections.label_scan.'.(int) $warehouseId, $on ? '1' : null);
+    }
+
+    /** For the Scan app: the big tile. */
+    public static function tile(?WhSection $s): ?array
+    {
+        return $s ? ['code' => $s->code, 'name' => $s->name ?: $s->goesTo(), 'color' => $s->color, 'kind' => $s->kind] : null;
     }
 }
-DISPATCH_FILE_END_22
+DISPATCH_FILE_END_12
 
 # ---------------------------------------------------------------- app/Support/Help/DefaultGuides.php
 mkdir -p 'app/Support/Help'
-cat > 'app/Support/Help/DefaultGuides.php' <<'DISPATCH_FILE_END_23'
+cat > 'app/Support/Help/DefaultGuides.php' <<'DISPATCH_FILE_END_13'
 <?php
 
 namespace App\Support\Help;
@@ -3108,153 +2957,137 @@ class DefaultGuides
                 'links' => ['admin' => 'pages.fuel', 'warehouse' => 'pages.fuel', 'company' => 'pages.fuel'],
                 'related' => ['truck-tracking', 'create-trip'], 'sort' => 40,
             ],
+            // ───────────────────────────── warehouse sections ─────────────────────────────
+            [
+                'slug' => 'warehouse-sections', 'topic' => 'boxes', 'icon' => '🗂️', 'apps' => ['admin', 'warehouse', 'scan'],
+                'title_en' => 'Warehouse sections, box sets and the waiting truck', 'title_tl' => 'Mga seksyon ng bodega, set ng box at truck na naghihintay',
+                'summary_en' => 'At unload the Scan app shows the section of each box from the receiver\'s province, keeps a customer\'s boxes together, and can load boxes straight onto a waiting truck.',
+                'summary_tl' => 'Sa unloading, ipinapakita ng Scan app ang seksyon ng bawat box ayon sa probinsya ng receiver, pinagsasama ang mga box ng isang customer, at puwedeng ikarga agad sa truck na naghihintay.',
+                'when_en' => 'Every container unload and every truck you load.',
+                'when_tl' => 'Sa bawat pag-unload ng container at bawat truck na kinakargahan.',
+                'steps' => [
+                    $s('Set the sections once', 'Admin → Settings → Warehouse sections: one section per destination, with its provinces. Print the QR labels if you use the label scan.', 'I-set ang mga seksyon minsan', 'Admin → Settings → Warehouse sections: isang seksyon bawat destinasyon, kasama ang mga probinsya. I-print ang QR labels kung gagamit ng label scan.'),
+                    $s('Scan at the container door', 'Scan each box as it comes off. The big letter on the phone is its section: put the box there. X means check the address first.', 'Mag-scan sa pinto ng container', 'I-scan ang bawat box pagbaba. Ang malaking letra sa phone ang seksyon nito: doon ilagay. Ang X ay check address muna.'),
+                    $s('Keep sets together', '"Box 2 of 3" shows where the customer\'s other boxes are: still in this container, or in another one.', 'Pagsamahin ang set', 'Ang "Box 2 of 3" ay nagsasabi kung nasaan ang ibang box ng customer: nasa container pa, o nasa ibang container.'),
+                    $s('A truck is waiting', 'Tap "A truck is waiting" and pick the warehouse trip. Its boxes show 🚚: put them straight on the truck. "Put in section instead" keeps one box in its section.', 'May truck na naghihintay', 'Pindutin ang "A truck is waiting" at piliin ang warehouse trip. Ang mga box nito ay may 🚚: diretso sa truck. Ang "Put in section instead" ay itatabi ang box sa seksyon.'),
+                    $s('Many phones at once', 'Several people can scan the same container or truck. The counter is shared; a box already scanned by someone else is not counted again.', 'Sabay-sabay ang maraming phone', 'Puwedeng sabay-sabay mag-scan ang ilang tao sa iisang container o truck. Iisa ang bilang; hindi na binibilang ulit ang box na na-scan na ng iba.'),
+                ],
+                'result_en' => 'Every box is in its section or on its truck, and a customer\'s boxes stay together.',
+                'result_tl' => 'Nasa tamang seksyon o truck ang bawat box, at magkakasama ang mga box ng isang customer.',
+                'problems' => [
+                    $p('It says Wrong hub when loading', 'The box is for another partner hub than this trip. Put it back in its section and tell the office.', 'Sabi ay Wrong hub sa loading', 'Ang box ay para sa ibang partner hub. Ibalik sa seksyon nito at sabihan ang office.'),
+                    $p('Customers missing boxes at the end', 'On the Done screen, find the boxes, or pick why each one stays behind (not arrived, damaged, cannot find, truck full).', 'May customer na kulang ang box sa dulo', 'Sa Done screen, hanapin ang box, o piliin kung bakit naiwan (wala pa, sira, hindi makita, puno ang truck).'),
+                ],
+                'pages' => ['pages.warehouse-sections', 'pages.scaninvoice', 'pages.unloadedcontainer'],
+                'links' => ['admin' => 'pages.warehouse-sections'],
+                'related' => ['unload-container', 'load-truck'], 'sort' => 25,
+            ],
         ];
     }
 }
-DISPATCH_FILE_END_23
+DISPATCH_FILE_END_13
 
-# ---------------------------------------------------------------- database/migrations/2026_11_14_000022_create_fuel_tables.php
+# ---------------------------------------------------------------- database/migrations/2026_11_15_000023_create_warehouse_sections.php
 mkdir -p 'database/migrations'
-cat > 'database/migrations/2026_11_14_000022_create_fuel_tables.php' <<'DISPATCH_FILE_END_24'
+cat > 'database/migrations/2026_11_15_000023_create_warehouse_sections.php' <<'DISPATCH_FILE_END_14'
 <?php
 
+use App\Support\Boxes\BoxSets;
 use App\Support\Help\Help;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
-/** Fuel: fills from the Driver app, fuel cash per trip, fuel card statements. */
+/**
+ * Warehouse sections (each one for a destination, chosen by the receiver's province),
+ * box sets (all boxes of one customer), who scanned each box, and the truck waiting
+ * at a container unload (boxes go straight from the container onto the truck).
+ */
 return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('trucks', function (Blueprint $table) {
-            if (! Schema::hasColumn('trucks', 'fuel_type')) {
-                $table->string('fuel_type', 10)->nullable();          // diesel / gasoline
-            }
-            if (! Schema::hasColumn('trucks', 'tank_liters')) {
-                $table->unsignedSmallInteger('tank_liters')->nullable();
-            }
-            if (! Schema::hasColumn('trucks', 'fuel_card_last4')) {
-                $table->string('fuel_card_last4', 8)->nullable();
-            }
+        Schema::create('wh_sections', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('warehouse_id')->nullable()->index();
+            $t->string('code', 8);
+            $t->string('name', 80);
+            $t->string('color', 7)->default('#1d6fb8');
+            $t->string('kind', 12)->default('area'); // area, returns, check
+            $t->foreignId('logistichub_id')->nullable();   // boxes for this partner hub
+            $t->foreignId('to_warehouse_id')->nullable();  // boxes for this other warehouse (e.g. Tarlac)
+            $t->json('provinces')->nullable();
+            $t->unsignedSmallInteger('sort')->default(0);
+            $t->boolean('is_active')->default(true);
+            $t->timestamps();
         });
 
-        if (! Schema::hasTable('fuel_fills')) {
-            Schema::create('fuel_fills', function (Blueprint $table) {
-                $table->id();
-                $table->foreignId('truck_id')->index();
-                $table->foreignId('deliverylog_id')->nullable()->index();
-                $table->foreignId('driver_id')->nullable();
-                $table->foreignId('logistichub_id')->nullable()->index();
-                $table->timestamp('filled_at')->index();
-                $table->string('station', 120)->nullable();
-                $table->string('product', 80)->nullable();
-                $table->string('fuel_type', 10)->nullable();
-                $table->decimal('liters', 8, 2);
-                $table->decimal('price_per_liter', 8, 2)->nullable();
-                $table->decimal('total', 10, 2);
-                $table->decimal('vatable', 10, 2)->nullable();
-                $table->decimal('vat', 10, 2)->nullable();
-                $table->string('station_tin', 30)->nullable();
-                $table->string('invoice_no', 40)->nullable();
-                $table->boolean('buyer_tin_ok')->nullable();
-                $table->string('paid_with', 8)->default('card');      // card / cash
-                $table->string('card_last4', 8)->nullable();
-                $table->unsignedInteger('odometer')->nullable();
-                $table->unsignedInteger('km_since')->nullable();
-                $table->decimal('km_per_liter', 6, 2)->nullable();
-                $table->string('receipt_path')->nullable();
-                $table->string('odometer_path')->nullable();
-                $table->decimal('lat', 10, 7)->nullable();
-                $table->decimal('lng', 10, 7)->nullable();
-                $table->boolean('gps_ok')->nullable();
-                $table->unsignedInteger('gps_distance_m')->nullable();
-                $table->boolean('ai_read')->default(false);
-                $table->json('ai_data')->nullable();
-                $table->timestamps();
-            });
-        }
+        Schema::table('invoices', function (Blueprint $t) {
+            $t->foreignId('wh_section_id')->nullable()->index();
+            $t->timestamp('sectioned_at')->nullable();
+            $t->foreignId('verified_by')->nullable();
+            $t->string('set_key', 40)->nullable()->index();
+        });
+        Schema::table('tripinvoices', function (Blueprint $t) {
+            $t->foreignId('loaded_by')->nullable();
+            $t->timestamp('loaded_at')->nullable();
+        });
+        Schema::table('whtripinvoices', function (Blueprint $t) {
+            $t->foreignId('loaded_by')->nullable();
+            $t->timestamp('loaded_at')->nullable();
+        });
 
-        if (! Schema::hasTable('fuel_cash')) {
-            Schema::create('fuel_cash', function (Blueprint $table) {
-                $table->id();
-                $table->foreignId('deliverylog_id')->unique();
-                $table->foreignId('truck_id')->nullable();
-                $table->foreignId('driver_id')->nullable();
-                $table->decimal('km', 8, 1)->nullable();
-                $table->decimal('km_per_liter', 6, 2)->nullable();
-                $table->decimal('price', 8, 2)->nullable();
-                $table->unsignedTinyInteger('buffer_pct')->default(10);
-                $table->decimal('estimate', 10, 2)->nullable();
-                $table->decimal('given', 10, 2);
-                $table->timestamp('given_at');
-                $table->foreignId('given_by')->nullable();
-                $table->decimal('returned', 10, 2)->nullable();
-                $table->timestamp('settled_at')->nullable();
-                $table->foreignId('settled_by')->nullable();
-                $table->string('note')->nullable();
-                $table->timestamps();
-            });
-        }
+        Schema::create('wh_crossdocks', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('container_id')->index();
+            $t->foreignId('whdeliverylog_id');
+            $t->foreignId('started_by')->nullable();
+            $t->boolean('paused')->default(false);
+            $t->timestamp('ended_at')->nullable();
+            $t->timestamps();
+        });
 
-        if (! Schema::hasTable('fuel_statements')) {
-            Schema::create('fuel_statements', function (Blueprint $table) {
-                $table->id();
-                $table->string('provider', 20);
-                $table->string('filename');
-                $table->foreignId('logistichub_id')->nullable();
-                $table->date('from')->nullable();
-                $table->date('to')->nullable();
-                $table->unsignedInteger('lines')->default(0);
-                $table->foreignId('uploaded_by')->nullable();
-                $table->timestamps();
-            });
-        }
+        Schema::create('set_splits', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('invoice_id')->index();
+            $t->string('set_key', 40)->nullable();
+            $t->foreignId('deliverylog_id')->nullable();
+            $t->string('reason', 40);
+            $t->foreignId('user_id')->nullable();
+            $t->timestamps();
+        });
 
-        if (! Schema::hasTable('fuel_statement_lines')) {
-            Schema::create('fuel_statement_lines', function (Blueprint $table) {
-                $table->id();
-                $table->foreignId('fuel_statement_id')->index();
-                $table->foreignId('truck_id')->nullable()->index();
-                $table->foreignId('fuel_fill_id')->nullable()->index();
-                $table->timestamp('charged_at')->nullable();
-                $table->string('card', 30)->nullable();
-                $table->string('plate', 20)->nullable();
-                $table->string('station', 120)->nullable();
-                $table->string('product', 80)->nullable();
-                $table->string('fuel_type', 10)->nullable();
-                $table->decimal('liters', 8, 2)->nullable();
-                $table->decimal('amount', 10, 2)->nullable();
-                $table->unsignedInteger('odometer')->nullable();
-                $table->string('status', 16)->index();                // matched / liters_differ / no_fill / no_truck
-                $table->timestamps();
+        // sets for the boxes already in the system
+        DB::table('invoices')->select('id', 'receiver_name', 'receiver_mobile_no', 'receiver_city')->orderBy('id')
+            ->chunkById(500, function ($rows) {
+                foreach ($rows as $r) {
+                    DB::table('invoices')->where('id', $r->id)->update(['set_key' => BoxSets::keyFor($r->receiver_name, $r->receiver_mobile_no, $r->receiver_city)]);
+                }
             });
-        }
 
         Help::installDefaults();
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('fuel_statement_lines');
-        Schema::dropIfExists('fuel_statements');
-        Schema::dropIfExists('fuel_cash');
-        Schema::dropIfExists('fuel_fills');
-        Schema::table('trucks', function (Blueprint $table) {
-            foreach (['fuel_type', 'tank_liters', 'fuel_card_last4'] as $c) {
-                if (Schema::hasColumn('trucks', $c)) {
-                    $table->dropColumn($c);
-                }
-            }
+        Schema::dropIfExists('set_splits');
+        Schema::dropIfExists('wh_crossdocks');
+        Schema::table('whtripinvoices', fn (Blueprint $t) => $t->dropColumn(['loaded_by', 'loaded_at']));
+        Schema::table('tripinvoices', fn (Blueprint $t) => $t->dropColumn(['loaded_by', 'loaded_at']));
+        Schema::table('invoices', function (Blueprint $t) {
+            $t->dropIndex(['wh_section_id']);
+            $t->dropIndex(['set_key']);
+            $t->dropColumn(['wh_section_id', 'sectioned_at', 'verified_by', 'set_key']);
         });
+        Schema::dropIfExists('wh_sections');
     }
 };
-DISPATCH_FILE_END_24
+DISPATCH_FILE_END_14
 
 # ---------------------------------------------------------------- resources/css/filament/admin/theme.css
 mkdir -p 'resources/css/filament/admin'
-cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_25'
+cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_15'
 @import '../../../../vendor/filament/filament/resources/css/theme.css';
 
 /* The Archivo font comes with the app (no internet needed): pages open fast even on a slow connection. */
@@ -6949,144 +6782,279 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-fd__kml small { color: var(--sa-muted); font-size: 0.76rem; }
 .ds-fd__kml b { font-size: 1.4rem; }
 .ds-fd__btn { display: grid; place-items: center; margin-top: auto; }
-DISPATCH_FILE_END_25
 
-# ---------------------------------------------------------------- resources/views/filament/delivery/pages/driver-app.blade.php
-mkdir -p 'resources/views/filament/delivery/pages'
-cat > 'resources/views/filament/delivery/pages/driver-app.blade.php' <<'DISPATCH_FILE_END_26'
-@php
-    $ring = fn (int $done, int $total, int $len = 289) => $len - ($total > 0 ? round($len * min($done, $total) / $total) : 0);
-    $p = $progress ?? ['total' => 0, 'delivered' => 0, 'notDelivered' => 0, 'left' => 0];
-    $user = auth()->user();
-    $initials = mb_strtoupper(mb_substr($user?->first_name ?? '', 0, 1).mb_substr($user?->last_name ?? '', 0, 1)) ?: '·';
-    $photoJs = "{ busy: false, failed: false, pct: 0,
-        take() { this.failed = false; this.\$refs.file.value = ''; this.\$refs.file.click() },
-        async send(e) {
-            const files = [...e.target.files]; if (! files.length) return;
-            for (const file of files) {
-                this.busy = true; this.pct = 0; let out = file;
-                out = window.dsShrinkPhoto ? await window.dsShrinkPhoto(file) : file;
-                await new Promise(done => \$wire.upload('upload', out, () => \$wire.savePhoto().then(done), () => { this.failed = true; done() }, (ev) => { this.pct = ev.detail.progress }));
-            }
-            this.busy = false;
-        } }";
-@endphp
+/* ------------------------------------------------------------------ Warehouse sections, sets, truck waiting (Scan app) */
+.ds-sx__tile { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; padding: 0.9rem 1rem; border-radius: 1.2rem; background: var(--sx, #1d6fb8); color: #fff; text-align: center; animation: ds-sx-in .2s ease-out; }
+.ds-sx__tile small { font-size: 0.8rem; font-weight: 700; opacity: .85; }
+.ds-sx__tile strong { font-size: 3.6rem; line-height: 1; font-weight: 900; letter-spacing: -0.02em; }
+.ds-sx__tile span { font-size: 1.05rem; font-weight: 800; }
+.ds-sx__tile em { font-style: normal; font-size: 0.8rem; opacity: .9; }
+.ds-sx__tile.is-truck strong { font-size: 2.8rem; }
+@keyframes ds-sx-in { from { transform: scale(.96); opacity: .4; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ds-sx__tile { animation: none; } }
+.ds-sx__set { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.7rem 0.9rem; border-radius: 1rem; background: rgb(255 255 255 / .06); font-size: 0.92rem; }
+.ds-sx__set small { color: var(--sa-muted); font-size: 0.8rem; }
+.ds-sx__set.is-done { background: rgb(52 195 143 / .14); }
+.ds-sx__set.is-split { background: rgb(240 169 59 / .14); }
+.ds-sx__set.is-split small { color: #f6c46b; }
+.ds-sx__dots { display: flex; gap: 0.25rem; }
+.ds-sx__dots i { flex: 1; max-width: 2.2rem; height: 0.4rem; border-radius: 999px; background: rgb(255 255 255 / .15); }
+.ds-sx__dots i.is-on { background: var(--sa-ok); }
+.ds-sx__link { align-self: center; padding: 0.35rem 0.6rem; color: var(--sa-gold); font-size: 0.88rem; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.ds-sx__team { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.ds-sx__team span { padding: 0.25rem 0.65rem; border-radius: 999px; background: rgb(255 255 255 / .06); font-size: 0.8rem; color: var(--sa-muted); }
+.ds-sx__team span.is-me { color: var(--sa-gold); box-shadow: inset 0 0 0 1px rgb(246 190 0 / .4); }
+.ds-sx__team b { color: var(--sa-text); margin-left: 0.2rem; }
+.ds-sx__truck { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem 0.9rem; border-radius: 1rem; background: rgb(232 89 12 / .16); box-shadow: inset 0 0 0 1px rgb(232 89 12 / .5); }
+.ds-sx__truck.is-paused { background: rgb(255 255 255 / .05); box-shadow: inset 0 0 0 1px var(--sa-line); }
+.ds-sx__truckhead { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+.ds-sx__truckhead button { padding: 0.3rem 0.6rem; border-radius: 0.6rem; background: rgb(255 255 255 / .1); color: var(--sa-text); font-size: 0.78rem; font-weight: 700; margin-left: 0.25rem; }
+.ds-sx__truckn { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; font-size: 0.74rem; color: var(--sa-muted); }
+.ds-sx__truckn b { display: block; font-size: 1.15rem; color: var(--sa-text); }
+.ds-sx__picker { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.8rem; border-radius: 1rem; background: rgb(255 255 255 / .05); }
+.ds-sx__picker > button:not(.ds-sx__link) { display: flex; flex-direction: column; align-items: flex-start; padding: 0.65rem 0.8rem; border-radius: 0.8rem; background: rgb(255 255 255 / .07); color: var(--sa-text); text-align: left; }
+.ds-sx__picker small, .ds-sx__picker p { color: var(--sa-muted); font-size: 0.8rem; margin: 0; }
+.ds-sx__open { display: flex; flex-direction: column; gap: 0.6rem; width: 100%; padding: 0.9rem; border-radius: 1rem; background: rgb(240 169 59 / .1); box-shadow: inset 0 0 0 1px rgb(240 169 59 / .4); text-align: left; }
+.ds-sx__open > small { color: var(--sa-muted); font-size: 0.78rem; }
+.ds-sx__openrow { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.9rem; }
+.ds-sx__miss { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.5rem 0.6rem; border-radius: 0.7rem; background: rgb(255 255 255 / .05); }
+.ds-sx__miss small { color: var(--sa-muted); }
+.ds-sx__why { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.ds-sx__why button { padding: 0.3rem 0.55rem; border-radius: 999px; background: rgb(255 255 255 / .08); color: var(--sa-muted); font-size: 0.74rem; font-weight: 700; }
+.ds-sx__why button.is-on { background: var(--sa-gold); color: #0a1219; }
+
+/* ------------------------------------------------------------------ Settings · Warehouse sections */
+.ds-ws { display: flex; flex-direction: column; gap: 1rem; }
+.ds-ws__top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 0.75rem; }
+.ds-ws__wh { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: #6b7b88; }
+.ds-ws__acts { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.ds-ws select, .ds-ws input[type=text], .ds-ws textarea { min-height: 2.25rem; padding: 0.35rem 0.6rem; border-radius: 0.55rem; border: 1px solid #d5dde3; background: #fff; font-size: 0.85rem; color: inherit; width: 100%; box-sizing: border-box; }
+.dark .ds-ws select, .dark .ds-ws input[type=text], .dark .ds-ws textarea { background: #0b1d2a; border-color: rgb(255 255 255 / .12); }
+.ds-ws__list { padding: 0.25rem 0; overflow-x: auto; }
+.ds-ws__row { display: grid; grid-template-columns: 7.5rem 1.2fr 0.9fr 1.3fr 2fr 4rem 2rem; gap: 0.6rem; align-items: center; padding: 0.6rem 1rem; border-top: 1px solid rgb(0 0 0 / .06); min-width: 62rem; }
+.dark .ds-ws__row { border-color: rgb(255 255 255 / .07); }
+.ds-ws__row.is-head { border-top: 0; font-size: 0.72rem; font-weight: 700; color: #6b7b88; }
+.ds-ws__code { display: grid; grid-template-columns: 2.6rem 1fr; gap: 0.3rem; align-items: center; }
+.ds-ws__code input { text-align: center; font-weight: 900; font-size: 1.05rem !important; color: #fff !important; background: var(--c) !important; border-color: var(--c) !important; }
+.ds-ws__code select { font-size: 0.7rem !important; padding: 0.2rem !important; }
+.ds-ws__muted { color: #6b7b88; font-size: 0.8rem; margin: 0; }
+.ds-ws__del { width: 2rem; height: 2rem; border-radius: 0.5rem; color: #c8372d; }
+.ds-ws__del:hover { background: #fde8e6; }
+.ds-ws__empty { padding: 1.25rem; display: flex; flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+.ds-ws__empty p { margin: 0; color: #6b7b88; }
+.ds-ws__err { margin: 0.5rem 1rem; color: #c8372d; font-size: 0.85rem; }
+.ds-ws__two { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.ds-ws__box { padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.ds-ws__box h3 { margin: 0; font-size: 0.98rem; font-weight: 800; }
+.ds-ws__toggle { display: flex; gap: 0.7rem; align-items: flex-start; cursor: pointer; }
+.ds-ws__toggle input { margin-top: 0.25rem; width: 1.1rem; height: 1.1rem; }
+.ds-ws__toggle small { display: block; color: #6b7b88; font-size: 0.8rem; margin-top: 0.15rem; }
+@media (max-width: 900px) { .ds-ws__two { grid-template-columns: 1fr; } }
+.ds-ws__result { display: flex; gap: 0.9rem; align-items: center; margin-top: 0.75rem; padding: 0.75rem 1rem; border-radius: 0.9rem; background: color-mix(in srgb, var(--c) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 40%, transparent); }
+.ds-ws__result > strong { display: grid; place-items: center; min-width: 3rem; height: 3rem; padding: 0 0.4rem; border-radius: 0.7rem; background: var(--c); color: #fff; font-size: 1.6rem; font-weight: 900; }
+.ds-ws__result small { display: block; color: #6b7b88; font-size: 0.8rem; }
+DISPATCH_FILE_END_15
+
+# ---------------------------------------------------------------- resources/views/boxes/section-labels.blade.php
+mkdir -p 'resources/views/boxes'
+cat > 'resources/views/boxes/section-labels.blade.php' <<'DISPATCH_FILE_END_16'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Section labels · {{ $warehouse->name }}</title>
+<style>
+    @page { size: A4; margin: 12mm; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #0b1620; }
+    .bar { padding: 14px 18px; display: flex; gap: 12px; align-items: center; justify-content: space-between; background: #f3f5f7; }
+    .bar button { padding: 10px 16px; border: 0; border-radius: 10px; background: #f6be00; font-weight: 800; cursor: pointer; }
+    .label { page-break-after: always; break-after: page; min-height: 255mm; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10mm; padding: 10mm; }
+    .code { width: 120mm; height: 120mm; border-radius: 10mm; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 90mm; font-weight: 900; line-height: 1; }
+    .name { font-size: 16mm; font-weight: 800; text-align: center; }
+    .prov { font-size: 6mm; color: #44525e; text-align: center; max-width: 170mm; }
+    .qr svg { width: 55mm; height: 55mm; }
+    .hint { font-size: 4.5mm; color: #6b7b88; }
+    @media print { .bar { display: none; } }
+</style>
+</head>
+<body>
+<div class="bar"><strong>{{ $sections->count() }} section labels · {{ $warehouse->name }}</strong><button type="button" onclick="window.print()">Print</button></div>
+@forelse ($sections as $s)
+    <div class="label">
+        <div class="code" style="background: {{ $s['color'] }}">{{ $s['code'] }}</div>
+        <div class="name">{{ $s['name'] }}</div>
+        @if ($s['provinces'])<div class="prov">{{ $s['provinces'] }}</div>@endif
+        <div class="qr">{!! $s['qr'] !!}</div>
+        <div class="hint">Scan this label in the Scan app (only when "section label scan" is on)</div>
+    </div>
+@empty
+    <p style="padding: 20px">No sections for this warehouse yet.</p>
+@endforelse
+</body>
+</html>
+DISPATCH_FILE_END_16
+
+# ---------------------------------------------------------------- resources/views/filament/boxes/sections.blade.php
+mkdir -p 'resources/views/filament/boxes'
+cat > 'resources/views/filament/boxes/sections.blade.php' <<'DISPATCH_FILE_END_17'
 <x-filament-panels::page>
-<div class="ds-sa ds-dr" x-data x-on:driver-app-buzz.window="if (navigator.vibrate) navigator.vibrate($event.detail.ok ? 60 : [80, 60, 80])">
-    {{-- Signal bar: drawn by driver-offline.js (shows "No signal", "waiting to send", "needs attention"). --}}
-    <div id="ds-net" class="dso-net" wire:ignore aria-live="polite"></div>
+<form wire:submit="save" class="ds-ws">
+    <div class="ds-ws__top">
+        <label class="ds-ws__wh"><span>Warehouse</span>
+            <select wire:model.live="warehouseId">@foreach ($warehouses as $id => $name)<option value="{{ $id }}">{{ $name }}</option>@endforeach</select>
+        </label>
+        <span class="ds-ws__acts">
+            @if ($labelsUrl && count($rows))<x-filament::button tag="a" :href="$labelsUrl" target="_blank" color="gray" icon="heroicon-o-printer">Print QR labels</x-filament::button>@endif
+            <x-filament::button type="button" color="gray" wire:click="addRow" icon="heroicon-o-plus">Add section</x-filament::button>
+        </span>
+    </div>
 
-    {{-- Truck tracking: location during trips, after the driver agrees once. --}}
-    @include('filament.delivery.partials.tracking', ['tracking' => $tracking])
+    <section class="ds-board__panel ds-ws__list">
+        <div class="ds-ws__row is-head"><span>Code</span><span>Name</span><span>Kind</span><span>Goes to</span><span>Receiver provinces (comma between)</span><span>Boxes</span><span></span></div>
+        @forelse ($rows as $i => $r)
+            <div class="ds-ws__row" wire:key="sec-{{ $r['id'] ?? 'n'.$i }}">
+                <span class="ds-ws__code" style="--c: {{ $r['color'] }}"><input type="text" wire:model.live.debounce.400ms="rows.{{ $i }}.code" maxlength="8" aria-label="Code">
+                    <select wire:model.live="rows.{{ $i }}.color" aria-label="Color">@foreach ($colors as $c)<option value="{{ $c }}">{{ $c }}</option>@endforeach</select></span>
+                <input type="text" wire:model="rows.{{ $i }}.name" placeholder="Cebu hub" aria-label="Name">
+                <select wire:model.live="rows.{{ $i }}.kind" aria-label="Kind">@foreach ($kinds as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select>
+                <select wire:model="rows.{{ $i }}.to" aria-label="Goes to">@foreach ($targets as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select>
+                @if ($r['kind'] === 'area')
+                    <textarea wire:model="rows.{{ $i }}.provinces" rows="2" placeholder="Cebu, Bohol, Negros Oriental" aria-label="Provinces"></textarea>
+                @else
+                    <small class="ds-ws__muted">{{ $r['kind'] === 'check' ? 'Boxes with no province, or a province no section has.' : 'Boxes coming back from the hubs.' }}</small>
+                @endif
+                <b class="num">{{ $r['id'] ? ($counts[$r['id']] ?? 0) : '—' }}</b>
+                <button type="button" class="ds-ws__del" wire:click="removeRow({{ $i }})" wire:confirm="Remove section {{ $r['code'] }}?" aria-label="Remove">✕</button>
+            </div>
+        @empty
+            <div class="ds-ws__empty">
+                <p>No sections yet for this warehouse. Without sections, unloading works as before.</p>
+                <x-filament::button type="button" wire:click="suggest">Start with one section per hub</x-filament::button>
+            </div>
+        @endforelse
+        @error('rows')<p class="ds-ws__err">{{ $message }}</p>@enderror
+        @foreach ($errors->get('rows.*') as $msgs)<p class="ds-ws__err">{{ $msgs[0] }}</p>@break @endforeach
+    </section>
 
-    {{-- ============================== today ============================== --}}
-    @if ($screen === 'home')
-        <section class="ds-sa__screen" wire:key="home">
-            <header class="ds-sa__hello">
-                <span>
-                    <small>{{ $trip ? 'Trip '.$trip->trip_number.($trip->truck?->plate_no ? ' · Truck '.$trip->truck->plate_no : '') : now()->format('l, F j') }}</small>
-                    <strong>{{ $greeting }}, {{ $user?->first_name }}</strong>
-                </span>
-                <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help')" aria-label="Help">?</button>
-                <span class="ds-sa__avatar is-green">{{ $initials }}</span>
-            </header>
+    <div class="ds-ws__two">
+        <section class="ds-board__panel ds-ws__box">
+            <h3>At unload</h3>
+            <label class="ds-ws__toggle"><input type="checkbox" wire:model="labelScan"><span><b>Also scan the section label</b><small>Off: a box is saved in its section when it is scanned at the container. On: the crew also scans the QR on the section (once for a cartful of boxes).</small></span></label>
+            <p class="ds-ws__muted">Start with this off, for speed. Switch it on if boxes are often not where the system says.</p>
+        </section>
+        <section class="ds-board__panel ds-ws__box">
+            <h3>How it works</h3>
+            <p class="ds-ws__muted">At unload the Scan app shows the section for each box, from the receiver's province, and keeps a customer's boxes together ("box 2 of 3"). A box with no province, or a province no section has, goes to <b>Check address</b>. Boxes for another warehouse can go straight onto a waiting truck.</p>
+        </section>
+    </div>
+    <div><x-filament::button type="submit">Save</x-filament::button></div>
+</form>
+</x-filament-panels::page>
+DISPATCH_FILE_END_17
 
-            @if (\App\Support\Fuel\Fuel::ready())
-                <a href="{{ \App\Filament\Delivery\Pages\Fuel::getUrl() }}" class="ds-fd__home"><span aria-hidden="true">⛽</span><span><b>Add fuel</b><small>Photo of the receipt and the odometer</small></span><span class="ds-sa__chev">›</span></a>
+# ---------------------------------------------------------------- resources/views/filament/pages/scaninvoice.blade.php
+mkdir -p 'resources/views/filament/pages'
+cat > 'resources/views/filament/pages/scaninvoice.blade.php' <<'DISPATCH_FILE_END_18'
+<x-filament-panels::page>
+    @php($progress = $this->progress())
+
+    <x-scan.station :heading="$this->stationHeading()" :description="$this->stationDescription()" :icon="$this->stationIcon()">
+        <x-slot name="form">
+            {{ $this->form }}
+
+            <x-barcode-scanner method="scan" continuous :cooldown="1500" />
+        </x-slot>
+
+        <x-slot name="progress">
+            @if ($this->data['container_id'] ?? null)
+                <x-scan.progress :loaded="$progress['loaded']" :total="$progress['total']" :label="$this->progressLabel()"
+                    :last="$progress['last'] ?? null" :issues="$progress['issues'] ?? 0" :unmanifested="$progress['unmanifested'] ?? 0"
+                    done-text="Every box on the manifest is scanned." />
+            @endif
+        </x-slot>
+
+        <x-slot name="result">
+            <x-scan.result :invoice="$this->lastInvoice()" :status="$lastStatus" :title="$lastMessage">
+                <div class="ds-result__actions">
+                    {{ $this->reportIssueAction }}
+                </div>
+            </x-scan.result>
+
+            @if ($route)
+                <div class="ds-ws__result" style="--c: {{ $route['color'] ?? '#1d6fb8' }}">
+                    <strong>{{ ($route['kind'] ?? '') === 'truck' ? '🚚' : $route['code'] }}</strong>
+                    <span><b>{{ ($route['kind'] ?? '') === 'truck' ? 'Truck '.$route['trip'].' → '.$route['name'] : 'Section '.$route['code'].' · '.$route['name'] }}</b>
+                        @if ($setInfo)<small>{{ $setInfo['name'] }} · box {{ $setInfo['n'] }} of {{ $setInfo['of'] }} · {{ $setInfo['text'] }}</small>@endif
+                        @if (! empty($route['why']))<small>{{ $route['why'] }}</small>@endif</span>
+                </div>
             @endif
 
-            @if (! $trip)
-                <div class="ds-sa__empty">
-                    <span class="ds-sa__empty-icon">@include('filament.scan.icon', ['name' => 'truck'])</span>
-                    <strong>You're not on a trip right now</strong>
-                    <p>When the office puts you on a truck, today's boxes show up here. Pull down or reopen the app to refresh.</p>
+            @if ($missingCode)
+                <div class="ds-result__actions">
+                    {{ $this->unmanifestedAction }}
+                </div>
+            @endif
+            @include('filament.partials.scan-photo')
+        </x-slot>
+
+        <x-slot name="aside">
+            <x-scan.household :rows="$this->household()" done-label="verified" />
+        </x-slot>
+    </x-scan.station>
+
+</x-filament-panels::page>
+DISPATCH_FILE_END_18
+
+# ---------------------------------------------------------------- resources/views/filament/scan/app.blade.php
+mkdir -p 'resources/views/filament/scan'
+cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_19'
+@php
+    $ring = fn (int $done, int $total, int $len = 289) => $len - ($total > 0 ? round($len * min($done, $total) / $total) : 0);
+    $condOrder = array_keys($conditions);
+@endphp
+<x-filament-panels::page>
+<div class="ds-sa" x-data x-on:scan-app-result.window="if (navigator.vibrate) navigator.vibrate($event.detail.status === 'success' ? 60 : [80, 60, 80])">
+
+    {{-- ============================== start ============================== --}}
+    @if ($screen === 'home')
+        <section class="ds-sa__screen ds-sa__home" wire:key="home">
+            <header class="ds-sa__hello">
+                <span><small>{{ $place }}</small><strong>{{ $greeting }}, {{ $firstName }}</strong></span>
+                <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: 'scan-tips' })" aria-label="Help">?</button>
+                <span class="ds-sa__avatar">{{ $initials }}</span>
+            </header>
+
+            <div class="ds-sa__today">
+                <span class="ds-sa__ring">
+                    <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring(min($today['scans'], 500), 500) }}"/></svg>
+                    <span><strong>{{ $today['scans'] }}</strong><small>today</small></span>
+                </span>
+                <dl>
+                    <dt>Boxes scanned</dt><dd>{{ number_format($today['scans']) }}</dd>
+                    <dt>Photos</dt><dd>{{ number_format($today['photos']) }}</dd>
+                    <dt>Problems</dt><dd class="is-bad">{{ $today['problems'] }}</dd>
+                </dl>
+            </div>
+
+            @if ($modes)
+                <p class="ds-sa__label">Start scanning</p>
+                <div class="ds-sa__list">
+                    @foreach ($modes as $key => $m)
+                        <button type="button" class="ds-sa__row" wire:click="open('{{ $key }}')">
+                            <span class="ds-sa__chip">@include('filament.scan.icon', ['name' => $m['icon']])</span>
+                            <span class="ds-sa__rowtext"><strong>{{ $m['label'] }}</strong><small>{{ $m['sub'] }}</small></span>
+                            @php($w = $waiting[$key] ?? 0)
+                            <span @class(['ds-sa__waiting', 'is-none' => ! $w])>{{ $w ? $w.' waiting' : 'All done' }}</span>
+                            <span class="ds-sa__chev" aria-hidden="true">›</span>
+                        </button>
+                    @endforeach
                 </div>
             @else
-                @if ($finished)
-                    <div class="ds-dr__celebrate">
-                        <span class="ds-sa__ring is-big"><svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="48" class="is-track"/><circle cx="55" cy="55" r="48" class="is-fill is-ok" style="stroke-dasharray: 302; stroke-dashoffset: 0"/></svg><span><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></i></span></span>
-                        <strong>All {{ $p['total'] }} boxes delivered</strong>
-                        <p>Great work. The office can see every delivery and photo.</p>
-                    </div>
-                @else
-                    <div class="ds-sa__today">
-                        <span class="ds-sa__ring is-mid">
-                            <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill is-green" style="stroke-dashoffset: {{ $ring($p['delivered'], $p['total']) }}"/></svg>
-                            <span><strong>{{ $p['delivered'] }}</strong><small>of {{ $p['total'] }} delivered</small></span>
-                        </span>
-                        <dl>
-                            <dt>Delivered</dt><dd class="is-ok">{{ $p['delivered'] }}</dd>
-                            <dt>Still on the truck</dt><dd>{{ $p['left'] }} left</dd>
-                            <dt>Not delivered</dt><dd class="is-warn">{{ $p['notDelivered'] }}</dd>
-                        </dl>
-                    </div>
-
-                    <button type="button" class="ds-sa__primary ds-dr__scanbtn" wire:click="go('scan')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
-                        Scan a box to deliver
-                    </button>
-                @endif
-
-                @if ($priority->isNotEmpty())
-                    <p class="ds-sa__label">Priority boxes</p>
-                    <div class="ds-sa__list">
-                        @foreach ($priority as $b)
-                            <button type="button" class="ds-sa__row" wire:click="scan(@js($b['invoice']))"><span class="ds-sa__rowtext"><strong>{{ $b['invoice'] }} · {{ $b['name'] }}</strong><small>{{ $b['address'] }}</small></span><span class="ds-sa__chev">›</span></button>
-                        @endforeach
-                    </div>
-                @endif
-
-                @if ($problems->isNotEmpty())
-                    <p class="ds-sa__label">Check before handing over</p>
-                    <div class="ds-sa__list is-warn">
-                        @foreach ($problems as $b)
-                            <button type="button" class="ds-sa__row" wire:click="scan(@js($b['invoice']))"><span class="ds-sa__rowtext"><strong>{{ $b['invoice'] }} · {{ $b['issue'] }}</strong><small>{{ $b['name'] }}{{ $b['remarks'] ? ' · '.$b['remarks'] : '' }}</small></span><span class="ds-sa__chev">›</span></button>
-                        @endforeach
-                    </div>
-                @endif
-
-                @if ($stops->isNotEmpty())
-                    @include('filament.delivery.partials.stops', ['stops' => $stops])
-                @elseif ($areas->isNotEmpty())
-                    <div class="ds-dr__labelrow"><p class="ds-sa__label">Where to go next</p><button type="button" wire:click="go('list')">All boxes ›</button></div>
-                    <div class="ds-sa__list">
-                        @foreach ($areas->take(6) as $a)
-                            <button type="button" class="ds-sa__row" wire:click="area(@js($a['barangay'] ?: $a['city']))">
-                                <span class="ds-sa__rowtext"><strong>{{ $a['barangay'] ? $a['barangay'].', ' : '' }}{{ $a['city'] }}</strong><small>{{ $a['boxes'] }} {{ str('box')->plural($a['boxes']) }} · {{ $a['stops']->count() }} {{ str('stop')->plural($a['stops']->count()) }}</small></span>
-                                <span class="ds-sa__chev">›</span>
-                            </button>
-                        @endforeach
-                    </div>
-                @endif
-
-                @if ($delivered->isNotEmpty())
-                    <p class="ds-sa__label">Delivered today</p>
-                    <div class="ds-sa__list">
-                        @foreach ($delivered as $d)
-                            <div class="ds-sa__row ds-dr__done">
-                                @if ($d['photo'])<img src="{{ $d['photo'] }}" alt="" class="ds-dr__thumb">@endif
-                                <span class="ds-sa__rowtext"><strong>{{ $d['invoice'] }} · {{ $d['name'] }}</strong><small>{{ $d['time'] }}</small></span>
-                                @if ($d['undoMinutesLeft'])
-                                    <button type="button" class="ds-dr__undo" wire:click="mountAction('undoDelivery', { tripinvoice: {{ $d['id'] }} })">Undo · {{ $d['undoMinutesLeft'] }} min left</button>
-                                @else
-                                    <span class="ds-dr__office">Office only</span>
-                                @endif
-                            </div>
-                        @endforeach
-                    </div>
-                @endif
-
-                @if ($crew->isNotEmpty())
-                    <div class="ds-dr__crew">
-                        @foreach ($crew as $c)
-                            <span><i>{{ mb_strtoupper(mb_substr($c['name'], 0, 2)) }}</i>With {{ $c['name'] }}{{ $c['role'] ? ' ('.strtolower($c['role']).')' : '' }}</span>
-                        @endforeach
-                    </div>
-                @endif
+                <div class="ds-sa__note">Your account can't scan here. Ask the office to set your account to Warehouse or Company.</div>
             @endif
 
             <footer class="ds-sa__foot">
-                <span class="ds-sa__online"><i></i>Online · every delivery is saved</span>
+                <span class="ds-sa__online"><i></i>Online · every scan is saved</span>
                 <span class="ds-sa__footlinks">
                     <button type="button" class="ds-pwa-install" onclick="window.dsInstallApp && window.dsInstallApp()">Install app</button>
                     <form method="POST" action="{{ filament()->getLogoutUrl() }}">@csrf<button type="submit">Sign out</button></form>
@@ -7095,724 +7063,290 @@ cat > 'resources/views/filament/delivery/pages/driver-app.blade.php' <<'DISPATCH
         </section>
     @endif
 
-    {{-- ============================== boxes ============================== --}}
-    @if ($screen === 'list')
-        <section class="ds-sa__screen" wire:key="list">
-            <div class="ds-dr__listhead">
-                <button type="button" class="ds-sa__back" wire:click="go('home')" aria-label="Back">‹</button>
-                <strong>Boxes</strong>
-                <button type="button" class="ds-dr__scanmini" wire:click="go('scan')" aria-label="Scan a box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></button>
-            </div>
-            <label class="ds-dr__search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-                <input type="search" wire:model.live.debounce.350ms="search" placeholder="Name, box number or barangay" aria-label="Search boxes">
-            </label>
-            @php($tabs = ['todo' => 'To deliver', 'delivered' => 'Delivered', 'missed' => 'Not delivered'])
-            @php($ti = array_search($tab, array_keys($tabs), true) ?: 0)
-            <div class="ds-sa__seg is-3">
-                <span class="ds-sa__segthumb is-light" style="left: calc(4px + {{ $ti }} * (100% - 8px) / 3)"></span>
-                @foreach ($tabs as $k => $l)
-                    <button type="button" wire:click="setTab('{{ $k }}')" @class(['is-on' => $tab === $k])>{{ $l }} · {{ $counts[$k] ?? 0 }}</button>
-                @endforeach
-            </div>
-            <div class="ds-dr__rows">
-                @forelse ($rows as $r)
-                    @php($inv = $r->invdata)
-                    <div class="ds-dr__card" wire:key="r-{{ $r->id }}">
-                        <button type="button" class="ds-dr__cardmain" @if (! $r->is_delivered) wire:click="openBox({{ $r->id }})" @endif>
-                            <span class="ds-dr__cardtop"><strong>{{ $r->invoice }}</strong>
-                                @if ($r->is_delivered)
-                                    <em class="is-ok">{{ ($r->delivered_at ?? $r->updated_at)?->format('g:i A') }}</em>
-                                @elseif ($r->latestDeliveryAttempt)
-                                    <em class="is-warn">{{ $r->latestDeliveryAttempt->reason->getLabel() }}</em>
-                                @else
-                                    <em>To deliver</em>
-                                @endif
-                            </span>
-                            <span class="ds-dr__name">{{ \Illuminate\Support\Str::title($inv?->receiver_name) }}</span>
-                            <small>{{ collect([$inv?->receiver_address, $inv?->receiver_barangay, $inv?->receiver_city])->filter()->map(fn ($x) => \Illuminate\Support\Str::title($x))->join(', ') }}</small>
-                        </button>
-                        @if ($inv?->receiver_mobile_no)
-                            <a class="ds-dr__call" href="tel:{{ preg_replace('/[^0-9+]/', '', $inv->receiver_mobile_no) }}" aria-label="Call {{ $inv->receiver_name }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg></a>
-                        @endif
-                    </div>
-                @empty
-                    <div class="ds-sa__note">{{ $search !== '' ? 'No boxes match “'.$search.'”.' : 'Nothing here.' }}</div>
-                @endforelse
-            </div>
+    {{-- ============================== pick ============================== --}}
+    @if ($screen === 'pick' && $def)
+        <section class="ds-sa__screen ds-sa__pick" wire:key="pick-{{ $this->mode }}">
+            <button type="button" class="ds-sa__pill" wire:click="home"><span aria-hidden="true">‹</span> Back</button>
+            <header class="ds-sa__title ds-sa__title--help"><span><small>{{ $def['label'] }}</small><strong>Choose the {{ $def['kind'] }}</strong></span><button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button></header>
+
+            @forelse ($choices as $i => $c)
+                <button type="button" @class(['ds-sa__choice', 'is-finished' => $c['finished']]) style="animation-delay: {{ $i * 50 }}ms" wire:click="pick({{ $c['id'] }})" wire:key="c-{{ $c['id'] }}">
+                    <span class="ds-sa__choicetext">
+                        <strong>{{ $c['name'] }}</strong>
+                        @if ($c['sub'])<small>{{ $c['sub'] }}</small>@endif
+                        <small class="is-num">{{ $c['done'] }} of {{ $c['total'] }} scanned{{ $c['finished'] ? (($c['active'] ?? true) ? ' · finished' : ' · closed') : '' }}</small>
+                    </span>
+                    <span class="ds-sa__ring is-small">
+                        <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring($c['done'], $c['total']) }}"/></svg>
+                        <span><b>{{ $c['total'] ? round($c['done'] / $c['total'] * 100) : 0 }}%</b></span>
+                    </span>
+                </button>
+            @empty
+                <div class="ds-sa__note">Nothing left to scan for {{ strtolower($def['label']) }}. Everything open is 100% scanned.</div>
+            @endforelse
+
+            @if ($finishedCount)
+                <button type="button" class="ds-sa__more" wire:click="toggleFinished">
+                    {{ $showFinished ? 'Hide finished' : 'Show finished ('.$finishedCount.')' }}
+                </button>
+            @endif
         </section>
     @endif
 
     {{-- ============================== scan ============================== --}}
-    @if ($screen === 'scan')
-        <section class="ds-sa__screen ds-sa__scan" wire:key="scan">
+    @if ($screen === 'scan' && $def)
+        <section class="ds-sa__screen ds-sa__scan" wire:key="scan-{{ $this->mode }}-{{ $choice }}">
+            @if ($aiFlag)
+                <div class="ds-sa__aiflag" wire:key="aiflag-{{ $aiFlag->id }}">
+                    <span class="ds-sa__aibadge">AI</span>
+                    <span><b>{{ $aiFlag->invoice }} looks {{ strtolower($aiFlag->label()) }}?</b><small>{{ $aiFlag->note }}</small></span>
+                    <button type="button" wire:click="aiFlagAnswer({{ $aiFlag->id }}, true)">Yes, mark it</button>
+                    <button type="button" class="is-plain" wire:click="aiFlagAnswer({{ $aiFlag->id }}, false)">It's fine</button>
+                </div>
+            @elseif ($aiPending)
+                <span wire:poll.8s class="hidden"></span>
+            @endif
             <div class="ds-sa__cam" wire:ignore
-                 x-data="barcodeScanner(@js(['method' => 'scan', 'formats' => ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'itf', 'qr_code'], 'autoStart' => true, 'continuous' => true, 'cooldown' => 3000, 'beep' => true]))">
+                 x-data="barcodeScanner(@js(['method' => 'scan', 'formats' => ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'itf', 'qr_code'], 'autoStart' => true, 'continuous' => true, 'cooldown' => 2500, 'beep' => true]))">
                 <video x-ref="video" playsinline muted autoplay></video>
                 <div class="ds-sa__frame" x-bind:class="{ 'is-hit': flash }"><i></i><i></i><i></i><i></i><span x-show="scanning" class="ds-sa__sweep"></span></div>
                 <p class="ds-sa__camtext" x-show="loading" x-cloak>Starting camera…</p>
                 <p class="ds-sa__camtext" x-show="! scanning && ! loading && ! error">Camera is off · tap the round button</p>
                 <p class="ds-sa__camtext is-error" x-show="error" x-text="error" x-cloak></p>
                 <p class="ds-sa__camtext is-hint" x-show="hint && ! error" x-text="hint" x-cloak></p>
+
                 <div class="ds-sa__controls">
                     <label class="ds-sa__type">
-                        <input type="text" x-model="manualCode" x-on:keydown.enter.prevent="submitManual()" placeholder="Type a box number" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go" aria-label="Box number">
+                        <input type="text" x-model="manualCode" x-on:keydown.enter.prevent="submitManual()" placeholder="Type or use a handheld scanner" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go" aria-label="Box number">
                         <button type="button" x-on:click="submitManual()" aria-label="Find">→</button>
                     </label>
                     <div class="ds-sa__buttons">
-                        <button type="button" class="ds-sa__round" x-show="torchSupported && scanning" x-on:click="toggleTorch()" x-bind:class="{ 'is-on': torchOn }" aria-label="Flashlight" x-cloak><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6l-1 6h-4zM10 8h4v12a2 2 0 0 1-4 0z"/></svg></button>
-                        <button type="button" class="ds-sa__shutter" x-on:click="toggle()" x-bind:aria-label="scanning ? 'Stop camera' : 'Start camera'"><span x-bind:class="{ 'is-live': scanning }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></span></button>
-                        <button type="button" class="ds-sa__round is-text" wire:click="go('list')" aria-label="Boxes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg></button>
+                        <button type="button" class="ds-sa__round" x-show="torchSupported && scanning" x-on:click="toggleTorch()" x-bind:class="{ 'is-on': torchOn }" aria-label="Flashlight" x-cloak>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6l-1 6h-4zM10 8h4v12a2 2 0 0 1-4 0z"/></svg>
+                        </button>
+                        <button type="button" class="ds-sa__shutter" x-on:click="toggle()" x-bind:aria-label="scanning ? 'Stop camera' : 'Start camera'">
+                            <span x-bind:class="{ 'is-live': scanning }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></span>
+                        </button>
+                        <button type="button" class="ds-sa__round is-text" wire:click="finish">Done</button>
                     </div>
                 </div>
             </div>
 
             <header class="ds-sa__bar">
-                <button type="button" class="ds-sa__back" wire:click="go('home')" aria-label="Back">‹</button>
-                <span class="ds-sa__bartext"><small>Deliver</small><strong>{{ $trip ? 'Trip '.$trip->trip_number : 'No trip' }}</strong></span>
-                <span class="ds-sa__ring is-tiny"><svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill is-green" style="stroke-dashoffset: {{ $ring($p['delivered'], $p['total']) }}"/></svg></span>
-                <span class="ds-sa__count"><strong>{{ $p['delivered'] }}</strong><small>of {{ $p['total'] }}</small></span>
+                <button type="button" class="ds-sa__back" wire:click="back" aria-label="Back">‹</button>
+                <span class="ds-sa__bartext"><small>{{ $def['label'] }}</small><strong>{{ $target['name'] ?? '' }}{{ ! empty($target['sub']) ? ' · '.$target['sub'] : '' }}</strong></span>
+                <span class="ds-sa__ring is-tiny">
+                    <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring($progress['loaded'] ?? 0, $progress['total'] ?? 0) }}"/></svg>
+                </span>
+                <span class="ds-sa__count"><strong>{{ $progress['loaded'] ?? 0 }}</strong><small>of {{ $progress['total'] ?? 0 }}</small></span>
+                <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button>
             </header>
 
-            @if ($just)
-                <div class="ds-dr__toast" wire:key="toast-{{ $just->id }}" x-data="{ left: 15 }" x-init="const t = setInterval(() => { left--; if (left <= 0) { clearInterval(t); $wire.set('justDelivered', null) } }, 1000)">
-                    <span class="ds-sa__mark is-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
-                    <span><strong>{{ $just->invoice }} delivered</strong><small>{{ $justPhotos }} {{ str('photo')->plural($justPhotos) }} saved · undo for <span x-text="left"></span> s</small></span>
-                    <button type="button" wire:click="undoJust"><svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" class="is-track"/><circle cx="20" cy="20" r="18" class="is-fill"/></svg>Undo</button>
+            @if (count($team) > 1)
+                <div class="ds-sx__team" aria-label="Who scanned">
+                    @foreach (array_slice($team, 0, 4) as $m)<span @class(['is-me' => $m['me']])>{{ $m['name'] }} <b>{{ $m['n'] }}</b></span>@endforeach
                 </div>
             @endif
 
-            @if ($sheet === 'found' && $box)
-                @php($inv = $box->invdata)
-                @php($addr = collect([$inv?->receiver_address, $inv?->receiver_barangay, $inv?->receiver_city, $inv?->receiver_province])->filter()->map(fn ($x) => \Illuminate\Support\Str::title($x))->join(', '))
-                <div class="ds-sa__sheet" wire:key="found-{{ $box->id }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-dr__tags"><span class="ds-dr__ontruck">On your truck</span><strong>{{ $box->invoice }}</strong>@if ($inv?->boxtype)<em>{{ $inv->boxtype }}</em>@endif</div>
-                    <div class="ds-dr__receiver"><strong>{{ \Illuminate\Support\Str::title($inv?->receiver_name) }}</strong><span>{{ $addr }}</span></div>
-                    <div class="ds-dr__two">
-                        @if ($inv?->receiver_mobile_no)
-                            <a href="tel:{{ preg_replace('/[^0-9+]/', '', $inv->receiver_mobile_no) }}"><svg viewBox="0 0 24 24" fill="none" stroke="#34c38f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>Call</a>
-                        @endif
-                        <a href="https://www.google.com/maps/search/?api=1&query={{ urlencode($addr.', Philippines') }}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="#5aa8ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-8-8 18-2-8z"/></svg>Directions</a>
-                    </div>
-                    <span class="ds-dr__meta">From {{ \Illuminate\Support\Str::title($inv?->sender_name) ?: 'sender' }}@if ($household && $household['count'] > 1) · {{ $household['count'] }} boxes for this house, {{ $household['delivered'] }} delivered @endif</span>
-                    @if ($box->latestDeliveryAttempt)
-                        <span class="ds-dr__prev">Tried before: {{ $box->latestDeliveryAttempt->reason->getLabel() }} · {{ $box->latestDeliveryAttempt->created_at->diffForHumans() }}</span>
-                    @endif
-                    @if ($risk && $risk['score'] >= 50)
-                        <span class="ds-dr__risk"><b>Heads up · may not be delivered</b>{{ implode(' · ', $risk['reasons']) }}. {{ $inv?->receiver_mobile_no ? 'Call before you go.' : '' }}</span>
-                    @endif
-                    <button type="button" class="ds-sa__primary is-green" wire:click="startDeliver">Deliver this box</button>
-                    <button type="button" class="ds-sa__secondary" wire:click="startMiss">Can't deliver</button>
-                </div>
-            @endif
-
-            @if ($sheet === 'deliver' && $box)
-                <div class="ds-sa__sheet" wire:key="deliver-{{ $box->id }}">
-                    <span class="ds-sa__grab"></span>
-                    <span class="ds-dr__sheethead"><small>{{ $box->invoice }} · {{ \Illuminate\Support\Str::title($box->invdata?->receiver_name) }}</small><strong>Proof of delivery</strong><span>Take as many photos as you need: the house, the box at the door, the receiver.</span></span>
-                    <div class="ds-dr__grid" x-data="{{ $photoJs }}">
-                        <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
-                        @foreach ($photoUrls as $i => $url)
-                            <span class="ds-dr__proof" wire:key="ph-{{ $i }}-{{ md5($url) }}"><img src="{{ $url }}" alt="Photo {{ $i + 1 }}"><b>{{ $i + 1 }}</b><button type="button" wire:click="removePhoto({{ $i }})" aria-label="Remove photo {{ $i + 1 }}">✕</button></span>
-                        @endforeach
-                        <button type="button" class="ds-dr__add" x-on:click="take()" x-bind:disabled="busy">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-                            <span x-show="! busy">{{ $photoUrls ? 'Add another' : 'Take photo' }}</span>
-                            <span x-show="busy" x-cloak>Saving… <span x-text="pct + '%'"></span></span>
-                        </button>
-                        <p class="ds-sa__err" x-show="failed" x-cloak>The photo did not upload. Try again.</p>
-                    </div>
-                    <button type="button" @class(['ds-sa__primary', 'is-green' => $photoUrls, 'is-off' => ! $photoUrls]) wire:click="confirmDelivered" @disabled(! $photoUrls)>
-                        {{ $photoUrls ? 'Delivered · '.count($photoUrls).' '.str('photo')->plural(count($photoUrls)) : 'Take at least 1 photo' }}
-                    </button>
-                    <button type="button" class="ds-dr__link" wire:click="backToBox">Back</button>
-                </div>
-            @endif
-
-            @if ($sheet === 'miss' && $box)
-                <div class="ds-sa__sheet is-warn" wire:key="miss-{{ $box->id }}">
-                    <span class="ds-sa__grab"></span>
-                    <span class="ds-dr__sheethead is-warn"><small>{{ $box->invoice }} · {{ \Illuminate\Support\Str::title($box->invdata?->receiver_name) }}</small><strong>Why couldn't you deliver it?</strong></span>
-                    <div class="ds-dr__chips" role="group" aria-label="Reason">
-                        @foreach ($reasons as $r)
-                            <button type="button" wire:click="$set('reason', '{{ $r->value }}')" @class(['is-on' => $reason === $r->value])>{{ $r->getLabel() }}</button>
-                        @endforeach
-                    </div>
-                    @if ($voiceOn)
-                        <div class="ds-dr__voice" x-data="{
-                            ok: !! (window.SpeechRecognition || window.webkitSpeechRecognition), on: false, busy: false, heard: '',
-                            start() {
-                                const R = window.SpeechRecognition || window.webkitSpeechRecognition; if (! R) return;
-                                const r = new R(); r.lang = 'fil-PH'; r.interimResults = true; r.continuous = false;
-                                this.heard = ''; this.on = true;
-                                r.onresult = (e) => { this.heard = Array.from(e.results).map(x => x[0].transcript).join(' ') };
-                                r.onerror = () => { this.on = false };
-                                r.onend = () => { this.on = false; if (this.heard.trim()) { this.busy = true; $wire.voiceFill(this.heard).then(() => this.busy = false) } };
-                                r.start(); this.rec = r;
-                            },
-                            stop() { this.rec && this.rec.stop() }
-                        }" x-show="ok" x-cloak>
-                            <button type="button" x-on:click="on ? stop() : start()" x-bind:class="{ 'is-on': on }" x-bind:disabled="busy" aria-label="Say what happened">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-                            </button>
+            @if ($this->mode === 'unload')
+                @if ($truck)
+                    <div @class(['ds-sx__truck', 'is-paused' => $truck['paused']])>
+                        <span class="ds-sx__truckhead"><b>🚚 {{ $truck['paused'] ? 'Paused · ' : '' }}Truck {{ $truck['trip'] }} → {{ $truck['to'] }}</b>
                             <span>
-                                <b x-text="on ? 'Listening… tap to stop' : (busy ? 'Filling in…' : 'Say what happened')"></b>
-                                <small x-text="heard || 'Tagalog, Bisaya or English. The reason and note are filled in for you.'"></small>
+                                <button type="button" wire:click="truckPause({{ $truck['paused'] ? 'false' : 'true' }})">{{ $truck['paused'] ? 'Resume' : 'Pause' }}</button>
+                                <button type="button" wire:click="truckStop" wire:confirm="The truck leaves now? Its boxes still in the container go to section {{ $truck['section'] ?? '' }}.">Truck leaves</button>
                             </span>
+                        </span>
+                        <span class="ds-sx__truckn"><span><b>{{ $truck['onTruck'] }}</b> on truck</span><span><b>{{ max(0, $truck['inSection']) }}</b> in section {{ $truck['section'] ?? '' }}</span><span><b>{{ $truck['inContainer'] }}</b> still in container</span></span>
+                    </div>
+                @elseif ($truckPicker)
+                    <div class="ds-sx__picker">
+                        <strong>Which truck is waiting?</strong>
+                        @forelse ($trucks as $tk)
+                            <button type="button" wire:click="truckStart({{ $tk['id'] }})"><b>{{ $tk['name'] }}</b><small>→ {{ $tk['to'] }}{{ $tk['truck'] ? ' · '.$tk['truck'] : '' }}</small></button>
+                        @empty
+                            <p>No open warehouse trip from this warehouse. Make the trip first (Warehouse → Warehouse trips).</p>
+                        @endforelse
+                        <button type="button" class="ds-sx__link" wire:click="openTruckPicker(false)">Cancel</button>
+                    </div>
+                @elseif (! $status)
+                    <button type="button" class="ds-sx__link" wire:click="openTruckPicker">🚚 A truck is waiting for some of these boxes?</button>
+                @endif
+            @endif
+
+            @if (! $status && $loadNext && $loadNext['stop'])
+                @include('filament.partials.load-next', ['next' => $loadNext, 'dark' => true])
+            @endif
+
+            @if ($status === 'success' && $box)
+                <div class="ds-sa__sheet is-ok" wire:key="ok-{{ $invoiceId }}-{{ $sessionScans }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-sa__hit">
+                        <span class="ds-sa__mark is-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
+                        <span><strong>{{ $box->invoice }}</strong><small>{{ $def['ok'] }}</small></span>
+                        @if ($box->boxtype)<em>{{ $box->boxtype }}</em>@endif
+                    </div>
+                    @if ($route)
+                        <div @class(['ds-sx__tile', 'is-truck' => ($route['kind'] ?? '') === 'truck']) style="--sx: {{ $route['color'] ?? '#1d6fb8' }}">
+                            <small>{{ ($route['kind'] ?? '') === 'truck' ? 'Put it on the truck' : 'Put this box in' }}</small>
+                            <strong>{{ ($route['kind'] ?? '') === 'truck' ? '🚚' : $route['code'] }}</strong>
+                            <span>{{ ($route['kind'] ?? '') === 'truck' ? 'Truck '.$route['trip'].' → '.$route['name'] : $route['name'] }}</span>
+                            @if (! empty($route['why']))<em>{{ $route['why'] }}</em>@endif
+                            @if (! empty($route['pending']))<em>Then scan the QR on section {{ $route['code'] }}.</em>@endif
+                        </div>
+                        @if (($route['kind'] ?? '') === 'truck')
+                            <button type="button" class="ds-sx__link" wire:click="putInSection">Put in section instead</button>
+                        @endif
+                    @endif
+                    @if ($setInfo)
+                        <div @class(['ds-sx__set', 'is-'.$setInfo['kind']])>
+                            <span><b>{{ $setInfo['name'] }}</b> · box {{ $setInfo['n'] }} of {{ $setInfo['of'] }}</span>
+                            <span class="ds-sx__dots">@for ($i = 1; $i <= min(12, $setInfo['of']); $i++)<i @class(['is-on' => $i <= $setInfo['n']])></i>@endfor</span>
+                            <small>{{ $setInfo['text'] }}</small>
                         </div>
                     @endif
-                    <input type="text" class="ds-sa__note-in" wire:model.blur="note" maxlength="500" placeholder="{{ $reasonCase?->notePrompt() ?? 'Note' }}{{ $reasonCase?->requiresNote() ? '' : ' (optional)' }}" aria-label="Note">
-                    <div class="ds-sa__photos" x-data="{{ $photoJs }}">
-                        <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
-                        @foreach ($photoUrls as $i => $url)
-                            <span class="ds-sa__shot ds-dr__proof is-small"><img src="{{ $url }}" alt=""><button type="button" wire:click="removePhoto({{ $i }})" aria-label="Remove photo">✕</button></span>
-                        @endforeach
-                        @if (count($photoUrls) < 3)
+                    @if ($spot)
+                        <div class="ds-ld__spot is-{{ $spot['zone'] }}"><strong>{{ \App\Models\Maps\TripStop::ZONES[$spot['zone']] ?? '' }}</strong><span>Stop {{ $spot['stop'] }} · {{ ['front' => 'deep inside, next to the cab', 'middle' => 'in the middle', 'back' => 'near the door'][$spot['zone']] ?? '' }}</span></div>
+                    @endif
+                    <div class="ds-sa__who">
+                        <span>{{ mb_strtoupper(mb_substr($box->receiver_name ?? '?', 0, 2)) }}</span>
+                        <span><strong>{{ \Illuminate\Support\Str::title($box->receiver_name) }}</strong><small>{{ collect([$box->receiver_barangay, $box->receiver_city])->filter()->map(fn ($p) => \Illuminate\Support\Str::title($p))->join(', ') }}</small></span>
+                    </div>
+
+                    @if ($this->photosOn())
+                        @php($ci = max(0, (int) array_search($condition ?? 'good', $condOrder, true)))
+                        <div class="ds-sa__seg" role="group" aria-label="How does the box look?">
+                            <span class="ds-sa__segthumb is-{{ $condition ?? 'good' }}" style="left: calc(4px + {{ $ci }} * (100% - 8px) / 4)"></span>
+                            @foreach ($conditions as $key => $label)
+                                <button type="button" wire:click="setCondition('{{ $key }}')" @class(['is-on' => ($condition ?? 'good') === $key]) aria-pressed="{{ ($condition ?? 'good') === $key ? 'true' : 'false' }}"><i class="is-{{ $key }}"></i>{{ $label }}</button>
+                            @endforeach
+                        </div>
+                        @if (in_array($condition, ['damaged', 'wet', 'open'], true))
+                            <input type="text" class="ds-sa__note-in" wire:model.blur="note" maxlength="250" placeholder="What is wrong? (optional)" aria-label="What is wrong?">
+                        @endif
+
+                        <div class="ds-sa__photos"
+                             x-data="{ busy: false, failed: false, pct: 0,
+                                take() { this.failed = false; this.$refs.file.value = ''; this.$refs.file.click() },
+                                async send(e) {
+                                    const file = e.target.files[0]; if (! file) return;
+                                    this.busy = true; this.pct = 0; let out = file;
+                                    out = window.dsShrinkPhoto ? await window.dsShrinkPhoto(file) : file;
+                                    $wire.upload('boxPhoto', out, () => $wire.saveBoxPhoto().then(() => { this.busy = false }), () => { this.busy = false; this.failed = true }, (ev) => { this.pct = ev.detail.progress });
+                                } }">
+                            <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
+                            @foreach ($shots as $shot)
+                                <a href="{{ $shot->url() }}" target="_blank" class="ds-sa__shot"><img src="{{ $shot->url() }}" alt="Photo {{ $loop->iteration }}"></a>
+                            @endforeach
                             <button type="button" class="ds-sa__addphoto" x-on:click="take()" x-bind:disabled="busy">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-                                <span x-show="! busy">{{ $reasonCase?->requiresPhoto() ? 'Add photo (needed)' : 'Add photo' }}</span><span x-show="busy" x-cloak>Saving…</span>
+                                <span x-show="! busy">{{ $shots->isEmpty() ? 'Add photo · optional' : 'Add another' }}</span>
+                                <span x-show="busy" x-cloak>Saving… <span x-text="pct + '%'"></span></span>
                             </button>
-                        @endif
-                    </div>
-                    <button type="button" class="ds-sa__primary is-amber" wire:click="saveMissed">Keep it on the truck</button>
-                    <button type="button" class="ds-dr__link" wire:click="backToBox">Back</button>
+                            <p class="ds-sa__err" x-show="failed" x-cloak>The photo did not upload. Try again.</p>
+                        </div>
+                    @endif
+                    <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
                 </div>
-            @endif
-
-            @if ($sheet === 'wrong')
-                <div class="ds-sa__sheet is-bad" wire:key="wrong-{{ md5((string) $wrongText) }}">
+            @elseif ($status === 'success' && $route)
+                <div class="ds-sa__sheet is-ok" wire:key="placed-{{ $sessionScans }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-sx__tile" style="--sx: {{ $route['color'] ?? '#1d6fb8' }}"><small>Saved in</small><strong>{{ $route['code'] }}</strong><span>{{ $route['name'] }}</span></div>
+                    <p class="ds-sa__msg">{{ $message }}</p>
+                    <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
+                </div>
+            @elseif ($status === 'warning' && $wrongHub)
+                <div class="ds-sa__sheet is-bad" wire:key="wronghub-{{ $sessionScans }}-{{ $wrongHub['code'] }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-sa__hit is-shake">
+                        <span class="ds-sa__mark is-bad">⛔</span>
+                        <span><small class="ds-ld__kicker">Wrong hub</small><strong>{{ $wrongHub['code'] }} is for {{ $wrongHub['for'] }}</strong></span>
+                    </div>
+                    <p class="ds-sa__msg">This trip goes to {{ $wrongHub['trip'] }}. Not loaded. Put it back in section {{ $wrongHub['section'] }} and tell the office.</p>
+                    <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
+                    <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">The office says load it</button>
+                </div>
+            @elseif ($status === 'warning' && $early)
+                <div class="ds-sa__sheet is-warn" wire:key="early-{{ $sessionScans }}-{{ $early['code'] }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-sa__hit">
+                        <span class="ds-sa__mark is-warn">!</span>
+                        <span><small class="ds-ld__kicker">Too early</small><strong>{{ $early['code'] }} is for stop {{ $early['stop'] }}{{ $early['place'] ? ' ('.$early['place'].')' : '' }}</strong></span>
+                    </div>
+                    <p class="ds-sa__msg">It's delivered earlier, so it goes in later, {{ $early['zone'] === 'back' ? 'at the door' : 'in the middle' }}. Put it aside and load stop {{ $early['nextStop'] }} now.</p>
+                    <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put aside</button>
+                    <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">Load it anyway</button>
+                </div>
+            @elseif ($status === 'warning')
+                <div class="ds-sa__sheet is-warn" wire:key="warn-{{ $sessionScans }}-{{ md5($message) }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-sa__hit">
+                        <span class="ds-sa__mark is-warn">!</span>
+                        <span><strong>{{ $box?->invoice ?? 'Check this box' }}</strong><small>{{ $message }}</small></span>
+                    </div>
+                    <button type="button" class="ds-sa__secondary" wire:click="dismiss">OK, scan next</button>
+                </div>
+            @elseif ($status === 'danger')
+                <div class="ds-sa__sheet is-bad" wire:key="bad-{{ $sessionScans }}-{{ md5($message) }}">
                     <span class="ds-sa__grab"></span>
                     <div class="ds-sa__hit is-shake">
                         <span class="ds-sa__mark is-bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
-                        <span><strong>Not this box</strong><small>Check the label</small></span>
+                        <span><strong>{{ $missing ?? $box?->invoice ?? 'Wrong box' }}</strong><small>Not on this {{ $def['kind'] }}</small></span>
                     </div>
-                    <p class="ds-sa__msg">{{ $wrongText }}</p>
-                    <button type="button" class="ds-sa__secondary" wire:click="closeSheet">Scan another box</button>
+                    <p class="ds-sa__msg">{{ $message }}</p>
+                    @if ($missing && $this->mode === 'unload')
+                        {{ $this->unmanifestedAction }}
+                    @endif
+                    <button type="button" class="ds-sa__secondary" wire:click="dismiss">Keep it aside, scan next</button>
                 </div>
             @endif
+        </section>
+    @endif
+
+    {{-- ============================== done ============================== --}}
+    @if ($screen === 'done' && $def)
+        <section class="ds-sa__screen ds-sa__done" wire:key="done">
+            <span class="ds-sa__ring is-big">
+                <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="48" class="is-track"/><circle cx="55" cy="55" r="48" class="is-fill is-ok" style="stroke-dasharray: 302; stroke-dashoffset: {{ $ring($progress['loaded'] ?? 0, $progress['total'] ?? 0, 302) }}"/></svg>
+                <span><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></i></span>
+            </span>
+            @php($complete = ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total'])
+            <h2>{{ $complete ? $def['done'] : ($progress['loaded'] ?? 0).' of '.($progress['total'] ?? 0).' scanned' }}</h2>
+            <p>{{ $target['name'] ?? '' }}{{ ! empty($target['sub']) ? ' · '.$target['sub'] : '' }}</p>
+            <div class="ds-sa__totals">
+                <span><strong>{{ $sessionScans }}</strong><small>scanned now</small></span>
+                <span><strong>{{ $today['photos'] }}</strong><small>photos today</small></span>
+                <span><strong class="is-bad">{{ $today['problems'] }}</strong><small>problems today</small></span>
+            </div>
+            <p class="ds-sa__note">{{ $complete ? 'Everything on this '.$def['kind'].' is scanned. The office sees it right away.' : 'You can come back and finish later; every scan is already saved.' }}</p>
+            @if (count($openSets))
+                <div class="ds-sx__open">
+                    <strong>{{ count($openSets) }} {{ count($openSets) === 1 ? 'customer is' : 'customers are' }} missing boxes</strong>
+                    @foreach ($openSets as $os)
+                        <div class="ds-sx__openrow" wire:key="os-{{ $os['key'] }}">
+                            <span><b>{{ $os['name'] }}</b> · {{ $os['have'] }} of {{ $os['of'] }} on the truck</span>
+                            @foreach ($os['missing'] as $mb)
+                                <span class="ds-sx__miss"><span>{{ $mb['invoice'] }} <small>{{ $mb['where'] }}</small></span>
+                                    <span class="ds-sx__why">@foreach ($splitReasons as $rk => $rl)<button type="button" wire:click="splitReason({{ $mb['id'] }}, '{{ $rk }}')" @class(['is-on' => $mb['reason'] === $rk])>{{ $rl }}</button>@endforeach</span>
+                                </span>
+                            @endforeach
+                        </div>
+                    @endforeach
+                    <small>Find the boxes, or pick why each one stays behind. The office sees it on the trip.</small>
+                </div>
+            @endif
+            <button type="button" class="ds-sa__primary" wire:click="pick({{ $choice }})">Keep scanning</button>
+            <button type="button" class="ds-sa__secondary" wire:click="home">Back to start</button>
         </section>
     @endif
 </div>
 <x-filament-actions::modals />
 </x-filament-panels::page>
-DISPATCH_FILE_END_26
-
-# ---------------------------------------------------------------- resources/views/filament/delivery/pages/fuel.blade.php
-mkdir -p 'resources/views/filament/delivery/pages'
-cat > 'resources/views/filament/delivery/pages/fuel.blade.php' <<'DISPATCH_FILE_END_27'
-@php
-    $peso = fn ($n, $d = 2) => '₱'.number_format((float) $n, $d);
-    $photoJs = "{ busy: false, failed: false, pct: 0,
-        take() { this.failed = false; this.\$refs.file.value = ''; this.\$refs.file.click() },
-        async send(e) {
-            const file = e.target.files[0]; if (! file) return;
-            this.busy = true; this.pct = 0;
-            const out = window.dsShrinkPhoto ? await window.dsShrinkPhoto(file) : file;
-            await new Promise(done => \$wire.upload('upload', out, () => \$wire.savePhoto().then(done), () => { this.failed = true; done() }, (ev) => { this.pct = ev.detail.progress }));
-            this.busy = false;
-        } }";
-    $placeJs = "{ init() { if (navigator.geolocation) navigator.geolocation.getCurrentPosition(p => \$wire.setPlace(p.coords.latitude, p.coords.longitude), () => {}, { enableHighAccuracy: true, timeout: 15000, maximumAge: 120000 }) } }";
-@endphp
-<x-filament-panels::page>
-<div class="ds-sa ds-dr ds-fd" x-data="{{ $placeJs }}">
-    <section class="ds-sa__screen" wire:key="fuel-{{ $step }}">
-        <header class="ds-fd__top">
-            <a href="{{ \App\Filament\Delivery\Pages\Dashboard::getUrl() }}" class="ds-fd__back" aria-label="Back to today">‹</a>
-            <span><small>{{ $truck ? 'Truck '.$truck->plate_no.($truck->fuel_type ? ' · '.ucfirst($truck->fuel_type) : '') : 'No truck yet' }}</small><strong>Add fuel</strong></span>
-            <span class="ds-fd__dots" aria-hidden="true">
-                @foreach (['receipt', 'check', 'odometer'] as $s)<i @class(['is-on' => $step === $s, 'is-done' => array_search($step, ['receipt', 'check', 'odometer', 'done']) > $loop->index])></i>@endforeach
-            </span>
-        </header>
-
-        @if ($cash && ! $cash->settled_at)
-            <div class="ds-fd__cash">💵 Fuel cash for this trip <b>{{ $peso($cash->given, 0) }}</b> · left <b>{{ $peso($cash->left(), 0) }}</b><small>Use the fuel card first. Cash only if the card can't be used.</small></div>
-        @endif
-
-        {{-- ============ 1. receipt ============ --}}
-        @if ($step === 'receipt')
-            <div class="ds-fd__intro">
-                <span class="ds-fd__big" aria-hidden="true">🧾</span>
-                <strong>Take a photo of the receipt</strong>
-                <p>Lay it flat, all of it in the photo: station, liters, price, total, VAT.{{ $aiOn ? ' The numbers are read for you.' : '' }}</p>
-                @if ($companyTin)<p class="ds-fd__tin">For ₱1,000 and up, show the cashier the company card so they write <b>{{ $companyName ?: 'the company name' }}</b> and <b>TIN {{ $companyTin }}</b> on the receipt.</p>@endif
-            </div>
-            <div x-data="{{ $photoJs }}" class="ds-fd__actions">
-                <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
-                <button type="button" class="ds-sa__primary" x-on:click="take()" x-bind:disabled="busy">
-                    <span x-show="! busy">📷 Take receipt photo</span>
-                    <span x-show="busy" x-cloak>{{ $aiOn ? 'Reading the receipt…' : 'Saving…' }} <span x-text="pct < 100 ? pct + '%' : ''"></span></span>
-                </button>
-                <p class="ds-sa__err" x-show="failed" x-cloak>The photo did not upload. Try again.</p>
-                @error('upload')<p class="ds-sa__err">{{ $message }}</p>@enderror
-                <button type="button" class="ds-dr__link" wire:click="noReceiptPhoto">No receipt · type it in</button>
-            </div>
-        @endif
-
-        {{-- ============ 2. check ============ --}}
-        @if ($step === 'check')
-            @if ($receiptUrl)
-                <a href="{{ $receiptUrl }}" target="_blank" rel="noopener" class="ds-fd__thumb"><img src="{{ $receiptUrl }}" alt="Receipt"><span>{{ $aiRead ? '✨ Read from the photo · check it' : 'Type what the receipt says' }}</span></a>
-            @endif
-            @if ($wrongFuel)
-                <div class="ds-fd__warn is-bad">⛽ This truck uses <b>{{ $truck->fuel_type }}</b>, the receipt says <b>{{ $f['fuel_type'] }}</b>. Check the receipt, or tell the office right away.</div>
-            @endif
-            @foreach ($problems as $p)<div class="ds-fd__warn">⚠ {{ $p }} Check the numbers.</div>@endforeach
-
-            <div class="ds-fd__seg" role="radiogroup" aria-label="Fuel">
-                @foreach (\App\Support\Fuel\Fuel::TYPES as $k => $label)
-                    <button type="button" role="radio" aria-checked="{{ $f['fuel_type'] === $k ? 'true' : 'false' }}" wire:click="$set('f.fuel_type', '{{ $k }}')" @class(['is-on' => $f['fuel_type'] === $k])>{{ $label }}</button>
-                @endforeach
-            </div>
-            @error('f.fuel_type')<p class="ds-sa__err">{{ $message }}</p>@enderror
-
-            <div class="ds-fd__form">
-                <label class="is-wide"><small>Station</small><input type="text" wire:model.blur="f.station" placeholder="Petron Imus"></label>
-                <label class="is-wide"><small>Product</small><input type="text" wire:model.blur="f.product" placeholder="Diesel Max"></label>
-                <label><small>Liters</small><input type="text" inputmode="decimal" wire:model.live.debounce.600ms="f.liters" placeholder="0.00"></label>
-                <label><small>Price per liter</small><input type="text" inputmode="decimal" wire:model.live.debounce.600ms="f.price_per_liter" placeholder="₱"></label>
-                <label class="is-wide is-total"><small>Total</small><input type="text" inputmode="decimal" wire:model.live.debounce.600ms="f.total" placeholder="₱"></label>
-                @error('f.liters')<p class="ds-sa__err">{{ $message }}</p>@enderror
-                @error('f.total')<p class="ds-sa__err">{{ $message }}</p>@enderror
-                <label><small>VATable sales</small><input type="text" inputmode="decimal" wire:model.blur="f.vatable" placeholder="₱"></label>
-                <label><small>VAT 12%</small><input type="text" inputmode="decimal" wire:model.blur="f.vat" placeholder="₱"></label>
-                <label><small>Invoice no.</small><input type="text" wire:model.blur="f.invoice_no"></label>
-                <label><small>Date and time</small><input type="datetime-local" wire:model.blur="f.filled_at"></label>
-            </div>
-
-            @if ($needTin)
-                <div class="ds-fd__ask">
-                    <span>Is <b>TIN {{ $companyTin }}</b> written on the receipt?</span>
-                    <span class="ds-fd__seg is-small">
-                        <button type="button" wire:click="$set('f.buyer_tin_ok', '1')" @class(['is-on' => $f['buyer_tin_ok'] === '1'])>Yes</button>
-                        <button type="button" wire:click="$set('f.buyer_tin_ok', '0')" @class(['is-on' => $f['buyer_tin_ok'] === '0'])>No</button>
-                    </span>
-                </div>
-            @endif
-
-            <div class="ds-fd__ask">
-                <span>Paid with</span>
-                <span class="ds-fd__seg is-small">
-                    <button type="button" wire:click="$set('f.paid_with', 'card')" @class(['is-on' => $f['paid_with'] === 'card'])>💳 Fuel card</button>
-                    <button type="button" wire:click="$set('f.paid_with', 'cash')" @class(['is-on' => $f['paid_with'] === 'cash'])>💵 Cash</button>
-                </span>
-            </div>
-            @if ($f['paid_with'] === 'cash' && $cash && (float) $f['total'] > $cash->left() + 0.5)
-                <div class="ds-fd__warn">This is more than the fuel cash left ({{ $peso($cash->left(), 0) }}).</div>
-            @endif
-
-            <button type="button" class="ds-sa__primary" wire:click="toOdometer">Next · odometer</button>
-            <button type="button" class="ds-dr__link" wire:click="back">Take the receipt photo again</button>
-        @endif
-
-        {{-- ============ 3. odometer ============ --}}
-        @if ($step === 'odometer')
-            <div class="ds-fd__intro">
-                <span class="ds-fd__big" aria-hidden="true">🚚</span>
-                <strong>Photo of the odometer</strong>
-                <p>The total km on the dashboard (not the trip meter). It shows how far the truck goes on a liter.</p>
-            </div>
-            <div x-data="{{ $photoJs }}" class="ds-fd__actions">
-                <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
-                @if ($odometerUrl)<img src="{{ $odometerUrl }}" alt="Odometer" class="ds-fd__odo">@endif
-                <button type="button" class="{{ $odometerUrl ? 'ds-sa__secondary' : 'ds-sa__primary' }}" x-on:click="take()" x-bind:disabled="busy">
-                    <span x-show="! busy">📷 {{ $odometerUrl ? 'Take again' : 'Take odometer photo' }}</span>
-                    <span x-show="busy" x-cloak>Saving… <span x-text="pct < 100 ? pct + '%' : ''"></span></span>
-                </button>
-                <p class="ds-sa__err" x-show="failed" x-cloak>The photo did not upload. Try again.</p>
-            </div>
-            <div class="ds-fd__form">
-                <label class="is-wide is-total"><small>Odometer (km)</small><input type="text" inputmode="numeric" wire:model.live.debounce.600ms="f.odometer" placeholder="{{ $prevOdo ? 'last fill '.number_format($prevOdo) : '123456' }}"></label>
-                @error('f.odometer')<p class="ds-sa__err">Type the km as a number.</p>@enderror
-            </div>
-            @if ($kmSince)
-                <div class="ds-fd__kml"><span><small>Since the last fill</small><b>{{ number_format($kmSince) }} km</b></span><span><small>km per liter</small><b>{{ $kml }}</b></span></div>
-            @elseif ($prevOdo && (int) $f['odometer'] > 0)
-                <div class="ds-fd__warn">The last fill was at {{ number_format($prevOdo) }} km. Check the number.</div>
-            @endif
-            <button type="button" class="ds-sa__primary is-green" wire:click="save" wire:loading.attr="disabled">Save fill</button>
-            <button type="button" class="ds-dr__link" wire:click="back">Back</button>
-        @endif
-
-        {{-- ============ done ============ --}}
-        @if ($step === 'done' && $saved)
-            <div class="ds-fd__intro">
-                <span class="ds-fd__big is-ok" aria-hidden="true">✓</span>
-                <strong>Fill saved</strong>
-                <p>{{ rtrim(rtrim(number_format($saved->liters, 2), '0'), '.') }} L {{ $saved->fuel_type }} · {{ $peso($saved->total) }} · {{ $saved->paid_with === 'cash' ? 'cash' : 'fuel card' }}{{ $saved->km_per_liter ? ' · '.$saved->km_per_liter.' km/L' : '' }}</p>
-                <p>Keep the paper receipt and give it to the office.</p>
-            </div>
-            <a href="{{ \App\Filament\Delivery\Pages\Dashboard::getUrl() }}" class="ds-sa__primary ds-fd__btn">Back to today</a>
-            <button type="button" class="ds-dr__link" wire:click="another">Add another fill</button>
-        @endif
-    </section>
-</div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_27
-
-# ---------------------------------------------------------------- resources/views/filament/fuel/page.blade.php
-mkdir -p 'resources/views/filament/fuel'
-cat > 'resources/views/filament/fuel/page.blade.php' <<'DISPATCH_FILE_END_28'
-@php
-    $peso = fn ($n, $d = 0) => '₱'.number_format((float) $n, $d);
-    $lit = fn ($n) => rtrim(rtrim(number_format((float) $n, 2), '0'), '.').' L';
-    $t = $totals;
-@endphp
-<x-filament-panels::page>
-<div class="ds-fu">
-    <div class="ds-fu__top">
-        <span class="ds-tm__tabs" role="tablist">
-            @foreach (['trucks' => 'Trucks', 'fills' => 'Fills', 'alerts' => 'Alerts'.(count($alerts) ? ' · '.count($alerts) : ''), 'cards' => 'Fuel cards', 'prices' => 'Prices', 'vat' => 'VAT'] as $k => $label)
-                <button type="button" wire:click="setTab('{{ $k }}')" @class(['is-on' => $tab === $k]) role="tab" aria-selected="{{ $tab === $k ? 'true' : 'false' }}">{{ $label }}</button>
-            @endforeach
-        </span>
-        <select wire:model.live="month" class="ds-fu__month" aria-label="Month">
-            @foreach ($months as $k => $label)<option value="{{ $k }}">{{ $label }}</option>@endforeach
-        </select>
-    </div>
-
-    <div class="ds-tm__stats is-five">
-        <span class="ds-board__panel"><small>Spent</small><b>{{ $peso($t['spent']) }}</b><em>{{ $t['fills'] }} {{ str('fill')->plural($t['fills']) }}</em></span>
-        <span class="ds-board__panel"><small>Liters</small><b>{{ $lit($t['liters']) }}</b><em>Diesel {{ $lit($t['diesel']) }} · Gasoline {{ $lit($t['gasoline']) }}</em></span>
-        <span class="ds-board__panel"><small>VAT 12% on fuel</small><b>{{ $peso($t['vat']) }}</b><em @class(['is-bad' => $t['vatNoTin'] > 0])>{{ $t['vatNoTin'] > 0 ? '⚠ '.$peso($t['vatNoTin'], 2).' without your TIN' : 'from the receipts' }}</em></span>
-        <span class="ds-board__panel"><small>Paid with</small><b>{{ 100 - $t['cashPct'] }}% card</b><em>{{ $t['cashPct'] }}% cash{{ $t['unsettled'] ? ' · '.$t['unsettled'].' cash not settled' : '' }}</em></span>
-        <span class="ds-board__panel"><small>Fuel per box delivered</small><b>{{ $t['perBox'] ? $peso($t['perBox'], 2) : '—' }}</b><em>{{ number_format($t['boxes']) }} boxes · {{ $t['kml'] ? $t['kml'].' km/L' : 'km/L after 2 fills with odometer' }}</em></span>
-    </div>
-
-    {{-- ============================== trucks ============================== --}}
-    @if ($tab === 'trucks')
-        @if (count($alerts))
-            <button type="button" class="ds-fu__alertbar" wire:click="setTab('alerts')">⚠ {{ count($alerts) }} {{ str('thing')->plural(count($alerts)) }} to check · {{ $alerts[0]['title'] }} <span aria-hidden="true">›</span></button>
-        @endif
-        <section class="ds-board__panel ds-fu__table">
-            <div class="ds-fu__tr is-head is-trucks"><span>Truck</span><span>Liters</span><span>Spent</span><span>km per liter</span><span>₱ per km</span><span>Last fill</span></div>
-            @forelse ($rows as $r)
-                <button type="button" class="ds-fu__tr is-trucks" wire:click="showTruck({{ $r['truck']->id }})" wire:key="tr-{{ $r['truck']->id }}">
-                    <span><b>{{ $r['truck']->plate_no }}</b> <small>{{ $r['truck']->description ?: $r['truck']->category }}{{ $r['truck']->fuel_type ? ' · '.$r['truck']->fuel_type : '' }}</small></span>
-                    <span>{{ $r['fills'] ? $lit($r['liters']) : '—' }}</span>
-                    <span>{{ $r['fills'] ? $peso($r['spent']) : '—' }}</span>
-                    <span><b>{{ $r['kml'] ?? '—' }}</b>@if ($r['change'] !== null && abs($r['change']) >= 3) <em @class(['ds-fu__chg', 'is-bad' => $r['change'] <= -10])>{{ $r['change'] > 0 ? '▲' : '▼' }} {{ abs($r['change']) }}%</em>@endif</span>
-                    <span>{{ $r['perKm'] ? $peso($r['perKm'], 2) : '—' }}</span>
-                    <span><small>{{ $r['last'] ?? 'no fills this month' }}</small></span>
-                </button>
-            @empty
-                <p class="ds-board__muted">No fills this month yet. Drivers add each fill in the Driver app: ⛽ Add fuel.</p>
-            @endforelse
-        </section>
-    @endif
-
-    {{-- ============================== fills ============================== --}}
-    @if ($tab === 'fills')
-        @if ($truckName)
-            <p class="ds-fu__filter">Showing <b>{{ $truckName }}</b> · <button type="button" wire:click="$set('truck', null)">show all trucks</button></p>
-        @endif
-        <section class="ds-fu__fills">
-            @forelse ($fills as $f)
-                <article class="ds-board__panel ds-fu__fill" wire:key="fill-{{ $f->id }}">
-                    @if ($f->receiptUrl())<a href="{{ $f->receiptUrl() }}" target="_blank" rel="noopener" class="ds-fu__photo"><img src="{{ $f->receiptUrl() }}" alt="Receipt" loading="lazy"></a>@else<span class="ds-fu__photo is-none">no photo</span>@endif
-                    <span class="ds-fu__fillmain">
-                        <b>{{ $f->truck?->plate_no }} · {{ $f->station ?: 'Station not read' }}</b>
-                        <small>{{ $f->filled_at->format('M j, g:i A') }} · {{ $f->driver?->full_name ?? '—' }}{{ $f->trip ? ' · trip '.$f->trip->trip_number : '' }}</small>
-                        <span class="ds-fu__chips">
-                            <em @class(['is-bad' => $f->truck?->fuel_type && $f->fuel_type && $f->truck->fuel_type !== $f->fuel_type])>⛽ {{ $f->fuel_type ? ucfirst($f->fuel_type) : 'fuel ?' }}{{ $f->product ? ' · '.$f->product : '' }}</em>
-                            <em>{{ $f->paid_with === 'cash' ? '💵 cash' : '💳 card'.($f->card_last4 ? ' ****'.$f->card_last4 : '') }}</em>
-                            @if ($f->gps_ok === true)<em class="is-ok">📍 with the truck</em>@elseif ($f->gps_ok === false)<em class="is-bad">📍 {{ number_format($f->gps_distance_m / 1000, 1) }} km from the truck</em>@endif
-                            @if ($f->km_per_liter)<em>{{ $f->km_since }} km · {{ $f->km_per_liter }} km/L</em>@endif
-                            @if ($f->buyer_tin_ok === false)<em class="is-bad">⚠ your TIN missing</em>@elseif ($f->buyer_tin_ok === true)<em class="is-ok">✓ your TIN</em>@endif
-                            @if ($f->ai_read)<em>✨ read by AI</em>@endif
-                        </span>
-                    </span>
-                    <span class="ds-fu__fillnums">
-                        <b>{{ $peso($f->total, 2) }}</b>
-                        <small>{{ $lit($f->liters) }} × {{ $f->price_per_liter ? $peso($f->price_per_liter, 2) : '—' }}</small>
-                        @if ($f->vat !== null)<small>VAT {{ $peso($f->vat, 2) }}</small>@endif
-                        @if ($f->odometer)<small>Odo {{ number_format($f->odometer) }}</small>@endif
-                    </span>
-                </article>
-            @empty
-                <p class="ds-board__muted">No fills this month.</p>
-            @endforelse
-        </section>
-    @endif
-
-    {{-- ============================== alerts ============================== --}}
-    @if ($tab === 'alerts')
-        <section class="ds-fu__alerts">
-            @forelse ($alerts as $a)
-                <div @class(['ds-fu__alert', 'is-red' => $a['kind'] === 'red']) wire:key="al-{{ $loop->index }}">
-                    <span class="ds-fu__alerticon" aria-hidden="true">{{ $a['icon'] }}</span>
-                    <span><b>{{ $a['title'] }}</b><small>{{ $a['text'] }}</small></span>
-                    <small class="ds-fu__when">{{ $a['when'] }}</small>
-                </div>
-            @empty
-                <p class="ds-board__muted">Nothing to check this month. 👍</p>
-            @endforelse
-        </section>
-    @endif
-
-    {{-- ============================== fuel cards ============================== --}}
-    @if ($tab === 'cards')
-        <div class="ds-fu__two">
-            <section class="ds-board__panel ds-fu__import">
-                <h3>Import the fuel card statement</h3>
-                <p class="ds-board__muted">Download the transactions from your fuel card website as <b>CSV</b> (Excel: File → Save As → CSV) and add the file here. Each charge is matched to a fill in the Driver app: same truck (by the card's last 4 digits or the plate), within 3 hours, same liters.</p>
-                <ul class="ds-fu__where">
-                    <li><b>Petron Fleet Card</b> · fleet.petron.com → statements</li>
-                    <li><b>Shell Fleet Card</b> · Shell Fleet Hub → transactions</li>
-                    <li><b>Caltex StarCard</b> · StarCard Online → reports</li>
-                    <li><b>SEAOIL</b> · PriceLOCQ for Business → export</li>
-                </ul>
-                <form wire:submit="importStatement" class="ds-fu__form">
-                    <select wire:model="provider" aria-label="Fuel card">
-                        @foreach (\App\Support\Fuel\Fuel::PROVIDERS as $k => $label)<option value="{{ $k }}">{{ $label }}</option>@endforeach
-                    </select>
-                    <input type="file" wire:model="statementFile" accept=".csv,text/csv,text/plain">
-                    <x-filament::button type="submit" wire:loading.attr="disabled" wire:target="statementFile,importStatement">Import</x-filament::button>
-                </form>
-                @error('statementFile')<p class="ds-fu__err">{{ $message }}</p>@enderror
-                <p class="ds-board__muted">Set each truck's card (last 4 digits) in {{ $isAdmin ? 'Settings → Fuel' : 'Admin → Settings → Fuel' }}, so charges find their truck.</p>
-            </section>
-            <section class="ds-board__panel">
-                @if ($statement)
-                    <h3>{{ \App\Support\Fuel\Fuel::PROVIDERS[$statement->provider] ?? 'Statement' }} · {{ $statement->from?->format('M j') }}–{{ $statement->to?->format('M j') }} · {{ $statement->lines }} charges</h3>
-                    <span class="ds-fu__counts">
-                        <button type="button" wire:click="$set('lineStatus', '')" @class(['is-on' => $lineStatus === ''])>All</button>
-                        @foreach (\App\Support\Fuel\FuelStatements::STATUS as $k => $label)
-                            @if (($lineCounts[$k] ?? 0) > 0)
-                                <button type="button" wire:click="$set('lineStatus', '{{ $k }}')" @class(['is-on' => $lineStatus === $k, 'is-bad' => $k !== 'matched'])>{{ $label }} · {{ $lineCounts[$k] }}</button>
-                            @endif
-                        @endforeach
-                    </span>
-                    <div class="ds-fu__lines">
-                        @foreach ($lines as $l)
-                            <div class="ds-fu__line" wire:key="ln-{{ $l->id }}">
-                                <span><b>{{ $l->truck?->plate_no ?? ($l->plate ?: $l->card ?: '—') }}</b> <small>{{ $l->charged_at?->format('M j g:i A') }} · {{ $l->station }} · {{ $l->product }}</small></span>
-                                <span>{{ $l->liters ? $lit($l->liters) : '' }} · {{ $peso($l->amount, 2) }}</span>
-                                <em @class(['is-ok' => $l->status === 'matched', 'is-bad' => $l->status !== 'matched'])>{{ \App\Support\Fuel\FuelStatements::STATUS[$l->status] ?? $l->status }}{{ $l->status === 'liters_differ' && $l->fuelFill ? ' (app '.$lit($l->fuelFill->liters).')' : '' }}</em>
-                            </div>
-                        @endforeach
-                    </div>
-                    @if ($statements->count() > 1)
-                        <p class="ds-board__muted">Earlier: @foreach ($statements as $s)@if ($s->id !== $statement->id)<button type="button" class="ds-fu__link" wire:click="$set('statementId', {{ $s->id }})">{{ $s->created_at->format('M j') }} ({{ $s->lines }})</button> @endif @endforeach</p>
-                    @endif
-                @else
-                    <h3>No statement imported yet</h3>
-                    <p class="ds-board__muted">After the first import, the charges and how they matched show here.</p>
-                @endif
-            </section>
-        </div>
-    @endif
-
-    {{-- ============================== prices ============================== --}}
-    @if ($tab === 'prices')
-        <div class="ds-fu__two">
-            <section class="ds-board__panel">
-                <h3>This week's price · from {{ \App\Support\Fuel\Fuel::weekStart()->format('M j') }}</h3>
-                <p class="ds-board__muted">The middle price of the receipts your drivers sent this week. Prices change every Tuesday. Used for the fuel cash estimate of a trip.</p>
-                <div class="ds-fu__prices">
-                    @foreach (['diesel' => 'Diesel', 'gasoline' => 'Gasoline'] as $k => $label)
-                        <span><small>{{ $label }}</small><b>{{ $prices[$k]['price'] ? $peso($prices[$k]['price'], 2) : '—' }}</b><em>{{ $prices[$k]['from'] }}</em></span>
-                    @endforeach
-                </div>
-                @if ($isAdmin)
-                    <form wire:submit="savePrices" class="ds-fu__form">
-                        <input type="text" inputmode="decimal" wire:model="priceDiesel" placeholder="Diesel ₱/L" aria-label="Diesel price">
-                        <input type="text" inputmode="decimal" wire:model="priceGasoline" placeholder="Gasoline ₱/L" aria-label="Gasoline price">
-                        <x-filament::button type="submit" color="gray">Set this week's price</x-filament::button>
-                    </form>
-                    <p class="ds-board__muted">Only needed when there are no receipts yet this week. Leave a box empty to use the receipts again.</p>
-                @endif
-            </section>
-            <section class="ds-board__panel ds-fu__table">
-                <div class="ds-fu__tr is-head is-weeks"><span>Week of</span><span>Diesel</span><span>Gasoline</span></div>
-                @foreach ($weeks as $i => $w)
-                    @php($prev = $weeks[$i + 1] ?? null)
-                    <div class="ds-fu__tr is-weeks">
-                        <span><b>{{ $w['week']->format('M j') }}</b></span>
-                        @foreach (['diesel', 'gasoline'] as $k)
-                            <span>{{ $w[$k] ? $peso($w[$k], 2) : '—' }}@if ($w[$k] && $prev && $prev[$k] && abs($w[$k] - $prev[$k]) >= 0.01) <em @class(['ds-fu__chg', 'is-bad' => $w[$k] > $prev[$k], 'is-ok' => $w[$k] < $prev[$k]])>{{ $w[$k] > $prev[$k] ? '▲' : '▼' }} {{ number_format(abs($w[$k] - $prev[$k]), 2) }}</em>@endif</span>
-                        @endforeach
-                    </div>
-                @endforeach
-            </section>
-        </div>
-    @endif
-
-    {{-- ============================== VAT ============================== --}}
-    @if ($tab === 'vat')
-        @php($noTin = $fills->filter(fn ($f) => $f->buyer_tin_ok === false))
-        <div class="ds-fu__vat">
-            <span class="ds-board__panel"><small>VAT on fuel</small><b>{{ $peso($fills->sum('vat'), 2) }}</b><em>{{ $fills->whereNotNull('vat')->count() }} receipts · VATable {{ $peso($fills->sum('vatable'), 2) }}</em></span>
-            <span class="ds-board__panel is-ok"><small>Can be claimed</small><b>{{ $peso($fills->sum('vat') - $noTin->sum('vat'), 2) }}</b><em>{{ $companyTin ? 'your company TIN on the receipt (or under ₱1,000)' : 'set your company TIN in Settings → Fuel' }}</em></span>
-            <span @class(['ds-board__panel', 'is-bad' => $noTin->isNotEmpty()])><small>Company TIN missing</small><b>{{ $peso($noTin->sum('vat'), 2) }}</b><em>{{ $noTin->count() }} receipts of ₱1,000+ without your TIN</em></span>
-            <a href="{{ $vatUrl }}" class="ds-fu__export">⬇ Excel for the accountant</a>
-        </div>
-        <section class="ds-board__panel ds-fu__table">
-            <div class="ds-fu__tr is-head is-vat"><span>Date</span><span>Station · TIN</span><span>Invoice no.</span><span>VATable</span><span>VAT 12%</span><span>Total</span><span>Your TIN</span></div>
-            @forelse ($fills as $f)
-                <div class="ds-fu__tr is-vat" wire:key="vat-{{ $f->id }}">
-                    <span>{{ $f->filled_at->format('M j') }}</span>
-                    <span><b>{{ $f->station ?: '—' }}</b><small>{{ $f->station_tin ? 'TIN '.$f->station_tin : '' }}</small></span>
-                    <span>{{ $f->invoice_no ?: '—' }}</span>
-                    <span>{{ $f->vatable !== null ? $peso($f->vatable, 2) : '—' }}</span>
-                    <span><b>{{ $f->vat !== null ? $peso($f->vat, 2) : '—' }}</b></span>
-                    <span>{{ $peso($f->total, 2) }}</span>
-                    <span>@if ($f->buyer_tin_ok === true)<em class="is-ok">✓ on receipt</em>@elseif ($f->buyer_tin_ok === false)<em class="is-bad">⚠ missing</em>@else<small>{{ $f->total < 1000 ? 'not needed' : '—' }}</small>@endif</span>
-                </div>
-            @empty
-                <p class="ds-board__muted">No receipts this month.</p>
-            @endforelse
-        </section>
-        <p class="ds-board__muted">Keep the paper receipts: card statements alone are not enough to claim VAT. Check the rules with your accountant.</p>
-    @endif
-</div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_28
-
-# ---------------------------------------------------------------- resources/views/filament/fuel/settings.blade.php
-mkdir -p 'resources/views/filament/fuel'
-cat > 'resources/views/filament/fuel/settings.blade.php' <<'DISPATCH_FILE_END_29'
-<x-filament-panels::page>
-<form wire:submit="save" class="ds-mp">
-    <div class="ds-mp__two">
-        <section class="ds-board__panel ds-tm__form">
-            <div class="ds-board__panel-head"><h2>Your company on the receipt</h2></div>
-            <label><span>Company name (as registered)</span><input type="text" wire:model="values.company_name" maxlength="120"></label>
-            <label><span>Company TIN</span><input type="text" wire:model="values.company_tin" placeholder="123-456-789-000" inputmode="numeric"></label>
-            @error('values.company_tin')<p class="ds-fu__err">{{ $message }}</p>@enderror
-            <p class="ds-board__muted">To claim the 12% VAT on fuel, receipts of ₱1,000 and up need your company name and TIN. Give each driver a small card with both to show the cashier. The Fuel page flags receipts without it.</p>
-        </section>
-        <section class="ds-board__panel ds-tm__form">
-            <div class="ds-board__panel-head"><h2>Fuel card and cash</h2></div>
-            <label><span>Fuel card you use</span><select wire:model="values.card_brand">@foreach (\App\Support\Fuel\Fuel::PROVIDERS as $k => $n)<option value="{{ $k }}">{{ $n }}</option>@endforeach</select></label>
-            <label><span>Give fuel cash for trips from (km)</span><input type="number" wire:model="values.cash_min_km" min="0"></label>
-            <label><span>Buffer on the cash estimate (%)</span><input type="number" wire:model="values.buffer_pct" min="0" max="50"></label>
-            <label><span>km per liter for a truck with no fills yet</span><input type="number" step="0.1" wire:model="values.default_kml" min="1"></label>
-            <p class="ds-board__muted">The fleet card is used first. Cash is a backup for long trips or stations that don't take the card.
-                Reading receipts with AI: {!! $aiOn ? '<b class="is-ok">on</b>' : '<b>off</b> · switch on "Read fuel receipts" in Settings → AI' !!}.</p>
-        </section>
-    </div>
-    <section class="ds-board__panel">
-        <div class="ds-board__panel-head"><h2>Trucks</h2></div>
-        <div class="ds-fu__tr is-head is-set"><span>Truck</span><span>Fuel</span><span>Tank (L)</span><span>Fuel card · last 4</span></div>
-        @foreach ($list as $t)
-            <div class="ds-fu__tr is-set" wire:key="ft-{{ $t->id }}">
-                <span><b>{{ $t->plate_no }}</b> <small>{{ $t->description ?: $t->category }}</small></span>
-                <span><select wire:model="trucks.{{ $t->id }}.fuel_type" aria-label="Fuel for {{ $t->plate_no }}"><option value="">—</option><option value="diesel">Diesel</option><option value="gasoline">Gasoline</option></select></span>
-                <span><input type="number" wire:model="trucks.{{ $t->id }}.tank_liters" min="10" aria-label="Tank liters"></span>
-                <span><input type="text" wire:model="trucks.{{ $t->id }}.fuel_card_last4" maxlength="4" inputmode="numeric" placeholder="1234" aria-label="Card last 4"></span>
-            </div>
-            @error('trucks.'.$t->id.'.fuel_card_last4')<p class="ds-fu__err">{{ $t->plate_no }}: {{ $message }}</p>@enderror
-        @endforeach
-        <p class="ds-board__muted">Fuel: the Driver app and Fuel page warn when a receipt says the other fuel. Tank: a fill bigger than the tank is flagged. Card: matches the fuel card statement to the truck.</p>
-    </section>
-    <div><x-filament::button type="submit">Save</x-filament::button></div>
-</form>
-</x-filament-panels::page>
-DISPATCH_FILE_END_29
-
-# ---------------------------------------------------------------- resources/views/filament/fuel/trip.blade.php
-mkdir -p 'resources/views/filament/fuel'
-cat > 'resources/views/filament/fuel/trip.blade.php' <<'DISPATCH_FILE_END_30'
-@php
-    $peso = fn ($n, $d = 2) => '₱'.number_format((float) $n, $d);
-    $lit = fn ($n) => rtrim(rtrim(number_format((float) $n, 1), '0'), '.').' L';
-    $cardFills = $fills->where('paid_with', 'card');
-    $cashFills = $fills->where('paid_with', 'cash');
-@endphp
-<x-filament-panels::page>
-<div class="ds-fu">
-    <div class="ds-fu__steps">
-        {{-- 1. the estimate --}}
-        <section class="ds-board__panel ds-fu__step">
-            <h3><span class="ds-fu__num">1</span> Estimate</h3>
-            <dl class="ds-fu__calc">
-                <dt>Trip</dt><dd>{{ $est['km'] ? rtrim(rtrim(number_format($est['km'], 1), '0'), '.').' km' : 'not known yet' }}</dd>
-                <dt>Truck</dt><dd>{{ $est['kml'] }} km/L <small>{{ $est['kmlFrom'] }}</small></dd>
-                <dt>Liters</dt><dd>{{ $est['liters'] ? $lit($est['liters']) : '—' }}</dd>
-                <dt>{{ ucfirst($est['type']) }} this week</dt><dd>{{ $est['price'] ? $peso($est['price']).'/L' : '—' }} <small>{{ $est['priceFrom'] }}</small></dd>
-                <dt>Buffer</dt><dd>+{{ $est['buffer'] }}%</dd>
-            </dl>
-            <p class="ds-fu__big">{{ $est['amount'] ? $peso($est['amount'], 0) : '—' }}</p>
-            @if (! $est['km'])
-                <p class="ds-board__muted">Open <b>Stops &amp; loading</b> first so the route (km) is worked out.</p>
-            @elseif (! $est['price'])
-                <p class="ds-board__muted">No {{ $est['type'] }} price yet this week. Set it in Fuel → Prices, or wait for the first receipt.</p>
-            @endif
-            @if ($est['short'])
-                <p class="ds-fu__hint">Short trip (under {{ $minKm }} km): the fuel card should be enough. Cash is a backup.</p>
-            @endif
-        </section>
-
-        {{-- 2. give the cash --}}
-        <section class="ds-board__panel ds-fu__step">
-            <h3><span class="ds-fu__num">2</span> Cash given</h3>
-            @if ($cash)
-                <p class="ds-fu__big">{{ $peso($cash->given, 0) }}</p>
-                <p class="ds-board__muted">{{ $cash->given_at->format('M j, g:i A') }} · by {{ $cash->givenBy?->full_name ?? '—' }}{{ $cash->estimate && abs($cash->estimate - $cash->given) >= 1 ? ' · estimate was '.$peso($cash->estimate, 0) : '' }}</p>
-                @if ($cash->note)<p class="ds-board__muted">“{{ $cash->note }}”</p>@endif
-                @if (! $cash->settled_at && $cash->given_at->gt(now()->subHour()))
-                    <x-filament::button color="gray" size="sm" wire:click="undoCash" wire:confirm="Remove this fuel cash?">Undo</x-filament::button>
-                @endif
-            @else
-                <form wire:submit="giveCash" class="ds-fu__form is-stack">
-                    <label><small>Amount</small><input type="text" inputmode="decimal" wire:model="give" placeholder="₱" aria-label="Cash amount"></label>
-                    <label><small>Note (optional)</small><input type="text" wire:model="note" maxlength="200" placeholder="e.g. toll and fuel"></label>
-                    <x-filament::button type="submit">Give cash</x-filament::button>
-                </form>
-                <p class="ds-board__muted">The driver sees the cash in the Driver app and pays with it only when the card can't be used.</p>
-            @endif
-        </section>
-
-        {{-- 3. fills on the trip --}}
-        <section class="ds-board__panel ds-fu__step">
-            <h3><span class="ds-fu__num">3</span> Fills on this trip</h3>
-            @forelse ($fills as $f)
-                <div class="ds-fu__line">
-                    <span><b>{{ $f->filled_at->format('g:i A') }} · {{ $f->station ?: 'Station' }}</b> <small>{{ $lit($f->liters) }} {{ $f->product }}</small></span>
-                    <span>{{ $peso($f->total) }}</span>
-                    <em>{{ $f->paid_with === 'cash' ? '💵 cash' : '💳 card' }}</em>
-                </div>
-            @empty
-                <p class="ds-board__muted">No fills yet. The driver adds each fill in the Driver app: ⛽ Add fuel.</p>
-            @endforelse
-            @if ($fills->isNotEmpty())
-                <p class="ds-board__muted">Card {{ $peso($cardFills->sum('total')) }} · Cash {{ $peso($cashFills->sum('total')) }}</p>
-            @endif
-        </section>
-
-        {{-- 4. settle --}}
-        <section class="ds-board__panel ds-fu__step">
-            <h3><span class="ds-fu__num">4</span> Settle</h3>
-            @if (! $cash)
-                <p class="ds-board__muted">No cash given for this trip.</p>
-            @else
-                <dl class="ds-fu__calc">
-                    <dt>Given</dt><dd>{{ $peso($cash->given) }}</dd>
-                    <dt>Cash receipts</dt><dd>− {{ $peso($cash->spent()) }}</dd>
-                    <dt><b>Change to return</b></dt><dd><b>{{ $peso($cash->left()) }}</b></dd>
-                </dl>
-                @if ($cash->settled_at)
-                    @php($short = round($cash->given - $cash->spent() - $cash->returned, 2))
-                    <p @class(['ds-fu__hint', 'is-ok' => abs($short) < 1, 'is-bad' => abs($short) >= 1])>
-                        ✓ Settled {{ $cash->settled_at->format('M j, g:i A') }} · {{ $peso($cash->returned) }} returned
-                        @if (abs($short) >= 1)· {{ $short > 0 ? $peso($short).' missing' : $peso(-$short).' over' }}@endif
-                    </p>
-                @else
-                    <form wire:submit="settle" class="ds-fu__form is-stack">
-                        <label><small>Change returned by the driver</small><input type="text" inputmode="decimal" wire:model="returned" placeholder="{{ number_format($cash->left(), 2) }}"></label>
-                        <x-filament::button type="submit" color="success">Settle</x-filament::button>
-                    </form>
-                @endif
-            @endif
-        </section>
-    </div>
-</div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_30
+DISPATCH_FILE_END_19
 
 # ---------------------------------------------------------------- routes/web.php
 mkdir -p 'routes'
-cat > 'routes/web.php' <<'DISPATCH_FILE_END_31'
+cat > 'routes/web.php' <<'DISPATCH_FILE_END_20'
 <?php
 
 use App\Http\Controllers\AiChatController;
@@ -7886,204 +7420,186 @@ Route::middleware(['throttle:600,1'])->match(['get', 'post'], '/track/in/{token}
 
 // Fuel › VAT: the month's fuel receipts for the accountant (signed-in staff, their own hub).
 Route::get('/fuel/vat-export', [FuelController::class, 'vatExport'])->middleware(['web', 'auth'])->name('fuel.vat-export');
-DISPATCH_FILE_END_31
 
-# ---------------------------------------------------------------- tests/Feature/FuelTest.php
+// Printable QR labels for the warehouse sections.
+Route::get('/sections/labels', App\Http\Controllers\SectionLabelsController::class)->middleware(['web', 'auth'])->name('sections.labels');
+DISPATCH_FILE_END_20
+
+# ---------------------------------------------------------------- tests/Feature/WarehouseSectionsTest.php
 mkdir -p 'tests/Feature'
-cat > 'tests/Feature/FuelTest.php' <<'DISPATCH_FILE_END_32'
+cat > 'tests/Feature/WarehouseSectionsTest.php' <<'DISPATCH_FILE_END_21'
 <?php
 
-use App\Filament\Delivery\Pages\Dashboard as DriverDashboard;
-use App\Filament\Delivery\Pages\Fuel as DriverFuel;
-use App\Filament\Pages\Fuel as AdminFuel;
-use App\Filament\Pages\FuelSettings;
-use App\Filament\Pages\TripFuel as AdminTripFuel;
-use App\Filament\Warehouse\Pages\Fuel as WarehouseFuel;
+use App\Filament\Pages\WarehouseSections;
+use App\Filament\Scan\Pages\ScanApp;
+use App\Models\AppSetting;
+use App\Models\Boxes\SetSplit;
+use App\Models\Boxes\WhSection;
+use App\Models\Container;
 use App\Models\Deliverylog;
-use App\Models\Fuel\FuelCash;
-use App\Models\Fuel\FuelFill;
-use App\Models\Fuel\FuelStatementLine;
+use App\Models\Invoice;
 use App\Models\Logistichub;
-use App\Models\Maps\TripRoute;
-use App\Models\Tracking\TruckPosition;
 use App\Models\Truck;
-use App\Models\Truckcrew;
 use App\Models\User;
-use App\Support\Fuel\Fuel;
-use App\Support\Fuel\FuelReader;
-use App\Support\Fuel\FuelReport;
-use App\Support\Fuel\FuelStatements;
+use App\Models\Warehouse;
+use App\Models\Whdeliverylog;
+use App\Models\Whtripinvoice;
+use App\Services\TripAssignment;
+use App\Support\Boxes\Sections;
 use Database\Seeders\DemoSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->seed(DemoSeeder::class);
-    $this->admin = User::where('email', 'admin@example.com')->firstOrFail();
-    $this->driver = User::where('email', 'driver@example.com')->firstOrFail();
-    $this->hub = $this->driver->logistichub_id;
-    Deliverylog::query()->update(['is_active' => false]);
-    $this->truck = Truck::create(['plate_no' => 'FUE 123', 'logistichub_id' => $this->hub, 'is_active' => true, 'is_assigned' => true, 'capacity' => 40, 'category' => 'Truck', 'description' => '6-wheeler', 'registration_no' => 'RF', 'user_id' => $this->admin->id, 'date_registered' => now(), 'date_expired' => now()->addYear(), 'fuel_type' => 'diesel', 'tank_liters' => 100, 'fuel_card_last4' => '4321']);
-    Truckcrew::create(['truck_id' => $this->truck->id, 'crew' => $this->driver->id, 'user_id' => $this->admin->id]);
-    $this->trip = Deliverylog::create(['truck_id' => $this->truck->id, 'logistichub_id' => $this->hub, 'assigned_to' => $this->hub, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    Sections::forget();
+    Filament::setCurrentPanel(Filament::getPanel('scan'));
+    $base = User::where('email', 'warehouse@example.com')->firstOrFail();
+    $this->user = $base->replicate()->fill(['email' => 'sec-wh@example.com']);
+    $this->user->save();
+    $this->wade = $base->replicate()->fill(['email' => 'wade2@example.com', 'first_name' => 'Wade']);
+    $this->wade->save();
+    $this->wh = $this->user->warehouse_id;
+    $this->tarlac = Warehouse::create(['name' => 'Tarlac Warehouse', 'address' => 'MacArthur Hwy', 'city' => 'Tarlac City', 'province' => 'Tarlac', 'zip_code' => '2300', 'mobile_number' => '0917', 'email' => 't@example.com', 'user_id' => $this->user->id]);
+    $this->main = Logistichub::where('is_company', false)->firstOrFail();
+    $this->cebu = Logistichub::where('is_company', true)->firstOrFail();
+
+    $mk = fn ($code, $name, $kind, $prov, $extra = []) => WhSection::create(['warehouse_id' => $this->wh, 'code' => $code, 'name' => $name, 'kind' => $kind, 'provinces' => $prov, 'color' => '#1d6fb8'] + $extra);
+    $this->A = $mk('A', 'Manila trucks', 'area', ['Metro Manila', 'Cavite'], ['logistichub_id' => $this->main->id]);
+    $this->C = $mk('C', 'Cebu hub', 'area', ['Cebu', 'Bohol'], ['logistichub_id' => $this->cebu->id]);
+    $this->T = $mk('T', 'Tarlac', 'area', ['Tarlac', 'Nueva Ecija'], ['to_warehouse_id' => $this->tarlac->id]);
+    $this->X = $mk('X', 'Check address', 'check', null);
+
+    $demo = Container::where('warehouse_id', $this->wh)->firstOrFail();
+    $this->container = $demo->replicate()->fill(['container_no' => 'MSKU7712040', 'is_unloaded' => false, 'is_active' => true]);
+    $this->container->save();
+    $other = $demo->replicate()->fill(['container_no' => 'OTHR0000001', 'is_unloaded' => false, 'is_active' => true]);
+    $other->save();
+    $tpl = Invoice::where('container_id', $demo->id)->firstOrFail();
+    $box = function (string $no, string $name, string $province, ?int $container = null) use ($tpl) {
+        $b = $tpl->replicate()->fill(['invoice' => $no, 'container_id' => $container ?? $this->container->id, 'receiver_name' => $name, 'receiver_mobile_no' => '0917'.crc32($name),
+            'receiver_province' => $province, 'receiver_city' => 'Mandaue City', 'is_verified' => false, 'is_assigned' => false, 'wh_is_assigned' => false, 'is_delivered' => false, 'warehouse_id' => $this->wh, 'verified_by' => null, 'wh_section_id' => null, 'set_key' => null]);
+        $b->save();
+
+        return $b;
+    };
+    $this->maria1 = $box('S-101', 'Maria Santos', 'Province of Cebu');
+    $this->maria2 = $box('S-102', 'Maria Santos', 'Cebu');
+    $this->liza1 = $box('S-201', 'Liza Gomez', 'Cebu');
+    $this->liza2 = $box('S-202', 'Liza Gomez', 'Cebu', $other->id);
+    $this->rosa = $box('S-301', 'Rosa Lim', 'Tarlac');
+    $this->ben = $box('S-302', 'Ben Uy', 'Nueva Ecija');
+    $this->nop = $box('S-401', 'Joy Tan', '');
 });
 
-function fill(array $over = []): FuelFill
+function unload($test)
 {
-    $t = test();
-
-    return Fuel::save(array_merge(['filled_at' => now()->subHour(), 'station' => 'Petron Imus', 'product' => 'Diesel Max', 'liters' => 40, 'total' => 2400, 'vat' => 257.14, 'paid_with' => 'card'], $over), $t->truck, $t->driver, $t->trip);
+    return Livewire::test(ScanApp::class)->call('open', 'unload')->call('pick', $test->container->id);
 }
 
-it('knows diesel from gasoline by the product name', function () {
-    expect(Fuel::typeOf('Diesel Max'))->toBe('diesel')
-        ->and(Fuel::typeOf('V-Power Diesel'))->toBe('diesel')
-        ->and(Fuel::typeOf('Shell V-Power'))->toBe('gasoline')
-        ->and(Fuel::typeOf('XCS'))->toBe('gasoline')
-        ->and(Fuel::typeOf('Petron Turbo Diesel'))->toBe('diesel')
-        ->and(Fuel::typeOf('Milk tea'))->toBeNull();
+it('finds the section from the province, and sends unclear addresses to Check address', function () {
+    expect(Sections::forInvoice($this->maria1)->code)->toBe('C')
+        ->and(Sections::forInvoice($this->rosa)->code)->toBe('T')
+        ->and(Sections::forInvoice($this->nop)->code)->toBe('X')
+        ->and(Sections::forInvoice($this->nop->replicate()->fill(['receiver_province' => 'Leyte']))->code)->toBe('X')
+        ->and(Sections::clean('NCR'))->toBe('metro manila');
 });
 
-it('works out price per liter, km per liter and VAT when a fill is saved', function () {
-    $a = fill(['odometer' => 10000, 'filled_at' => now()->subDays(2)]);
-    expect($a->price_per_liter)->toBe(60.0)->and($a->vatable)->toBe(2142.86)->and($a->km_since)->toBeNull();
-    $b = fill(['odometer' => 10300, 'liters' => 50, 'total' => 3000]);
-    expect($b->km_since)->toBe(300)->and($b->km_per_liter)->toBe(6.0);
+it('shows the section and the set at unload, and does not count a box twice', function () {
+    $this->actingAs($this->user);
+    unload($this)->call('scan', 'S-101')
+        ->assertSet('status', 'success')->assertSet('route.code', 'C')->assertSee('Cebu hub')
+        ->assertSee('box 1 of 2')->assertSee('1 more still in this container')
+        ->call('dismiss')->call('scan', 'S-201')->assertSee('in another container')
+        ->call('dismiss')->call('scan', 'S-401')->assertSet('route.code', 'X')->assertSee('No province in the address.');
+
+    expect($this->maria1->fresh())->wh_section_id->toBe($this->C->id)->sectioned_at->not->toBeNull()->verified_by->toBe($this->user->id);
+
+    $this->flushSession();
+    $this->actingAs($this->wade);
+    unload($this)->call('scan', 'S-101')->assertSet('status', 'warning')->assertSee('already verified by '.$this->user->first_name);
+    unload($this)->call('scan', 'S-102')->assertSee('All 2 boxes are off the container')->assertSee($this->user->first_name)->assertSee('You');
 });
 
-it('checks the company TIN only for ₱1,000 and up', function () {
-    Fuel::put('company_tin', '123-456-789-000');
-    expect(Fuel::buyerTinOk('123456789000', 2400))->toBeTrue()
-        ->and(Fuel::buyerTinOk(null, 2400))->toBeFalse()
-        ->and(Fuel::buyerTinOk(null, 800))->toBeNull();
+it('loads boxes straight onto a waiting truck, and the crew can keep one in its section', function () {
+    $this->actingAs($this->user);
+    $trip = Whdeliverylog::create(['truck_id' => Truck::value('id'), 'warehouse_id' => $this->tarlac->id, 'user_whid' => $this->wh, 'departure_date' => today(), 'delivery_date' => today(), 'is_active' => true, 'user_id' => $this->user->id]);
+
+    unload($this)->call('openTruckPicker')->assertSee('Which truck is waiting?')->assertSee('Tarlac Warehouse')
+        ->call('truckStart', $trip->id)->assertSee('Truck '.$trip->trip_number)
+        ->call('scan', 'S-301')->assertSet('route.kind', 'truck')->assertSee('Put in section instead')
+        ->call('dismiss')->call('scan', 'S-302')->assertSet('route.kind', 'truck')
+        ->call('putInSection')->assertSet('route.code', 'T')
+        ->call('dismiss')->call('scan', 'S-101')->assertSet('route.code', 'C')
+        ->call('dismiss')->assertSee('on truck');
+
+    expect(Whtripinvoice::where('whdeliverylog_id', $trip->id)->pluck('invoice_id')->all())->toBe([$this->rosa->id])
+        ->and(Whtripinvoice::where('invoice_id', $this->rosa->id)->value('is_loaded'))->toBeTruthy()
+        ->and($this->ben->fresh()->sectioned_at)->not->toBeNull()
+        ->and($this->ben->fresh()->wh_is_assigned)->toBeFalse();
+
+    $status = \App\Support\Boxes\Crossdock::counts(\App\Support\Boxes\Crossdock::active($this->container->id));
+    expect($status)->toMatchArray(['onTruck' => 1, 'inSection' => 1, 'inContainer' => 0, 'section' => 'T']);
+
+    unload($this)->call('truckPause', true)->call('truckStop');
+    expect(\App\Support\Boxes\Crossdock::active($this->container->id))->toBeNull();
 });
 
-it('checks the phone against the truck GPS', function () {
-    TruckPosition::insert(['truck_id' => $this->truck->id, 'deliverylog_id' => $this->trip->id, 'lat' => 14.40, 'lng' => 120.94, 'speed' => 0, 'source' => 'app', 'recorded_at' => now()->subMinutes(62)]);
-    $near = fill(['lat' => 14.401, 'lng' => 120.941]);
-    $far = fill(['lat' => 14.60, 'lng' => 121.00, 'filled_at' => now()->subMinutes(58)]);
-    expect($near->gps_ok)->toBeTrue()->and($far->gps_ok)->toBeFalse()->and($far->gps_distance_m)->toBeGreaterThan(5000);
+it('with the label scan on, saves boxes in a section only when its QR is scanned', function () {
+    Sections::setLabelScan($this->wh, true);
+    $this->actingAs($this->user);
+    unload($this)->call('scan', 'S-101')->assertSee('Then scan the QR on section C')
+        ->call('dismiss')->call('scan', 'S-102')
+        ->call('dismiss')->call('scan', $this->T->qrText())->assertSet('status', 'warning')->assertSee('are for C, not T')
+        ->call('dismiss')->call('scan', $this->C->qrText())->assertSet('status', 'success')->assertSee('2 boxes saved in section C');
+    expect($this->maria1->fresh()->sectioned_at)->not->toBeNull();
+
+    Sections::setLabelScan($this->wh, false);
+    unload($this)->call('scan', $this->C->qrText())->assertSee('label scan is off');
 });
 
-it('takes this week\'s price from the receipts, or the office price', function () {
-    fill(['liters' => 40, 'total' => 2400]);
-    fill(['liters' => 10, 'total' => 620]);
-    fill(['liters' => 10, 'total' => 610]);
-    expect(Fuel::price('diesel')['price'])->toBe(61.0)->and(Fuel::price('gasoline')['price'])->toBeNull();
-    Fuel::put('price.gasoline', ['week' => Fuel::weekStart()->toDateString(), 'price' => 66.5]);
-    expect(Fuel::price('gasoline'))->toMatchArray(['price' => 66.5, 'from' => 'set by the office']);
-    expect(Fuel::weekStart(\Illuminate\Support\Carbon::parse('2026-11-16'))->toDateString())->toBe('2026-11-10'); // Monday → last Tuesday
+it('stops a box for another hub when loading, and lists customers missing boxes at the end', function () {
+    $this->actingAs($this->user);
+    unload($this)->call('scan', 'S-101')->call('dismiss')->call('scan', 'S-102')->call('dismiss')->call('scan', 'S-301');
+
+    $truck = Truck::firstOrFail();
+    $trip = Deliverylog::create(['truck_id' => $truck->id, 'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $this->main->id, 'user_id' => $this->user->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
+    app(TripAssignment::class)->addToDeliveryTrip($trip, Invoice::whereIn('id', [$this->maria1->id, $this->rosa->id])->get());
+
+    $page = Livewire::test(ScanApp::class)->call('open', 'load')->call('pick', $trip->id)
+        ->call('scan', 'S-101')->assertSet('status', 'warning')->assertSee('Wrong hub')->assertSee('is for Cebu hub')
+        ->call('loadAnyway')->assertSet('status', 'success')->assertSee('box 1 of 2')->assertSee('not on this trip');
+    expect(\App\Models\Tripinvoice::where('invoice_id', $this->maria1->id)->value('loaded_by'))->toBe($this->user->id);
+
+    $page->call('finish')->assertSee('missing boxes')->assertSee('Maria Santos')->assertSee('S-102')
+        ->call('splitReason', $this->maria2->id, 'not_found');
+    expect(SetSplit::sole())->reason->toBe('not_found')->deliverylog_id->toBe($trip->id);
 });
 
-it('estimates the fuel cash of a trip and settles it', function () {
-    TripRoute::updateOrCreate(['deliverylog_id' => $this->trip->id], ['km' => 210]);
-    Fuel::put('price.diesel', ['week' => Fuel::weekStart()->toDateString(), 'price' => 60]);
-    $e = Fuel::estimate($this->trip);
-    expect($e['liters'])->toBe(30.0)->and($e['amount'])->toBe(1980.0)->and($e['short'])->toBeFalse(); // 210 ÷ 7 × 60 + 10%
+it('lets the admin set up the sections and print the labels', function () {
+    $admin = User::where('email', 'admin@example.com')->firstOrFail();
+    $this->actingAs($admin);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $this->get(WarehouseSections::getUrl())->assertOk()->assertSee('Cebu hub')->assertSee('Print QR labels');
 
-    Livewire::test(AdminTripFuel::class, ['tripId' => $this->trip->id])->assertSee('₱1,980')->set('give', '2000')->call('giveCash');
-    $cash = FuelCash::firstOrFail();
-    expect($cash->given)->toBe(2000.0)->and($cash->driver_id)->toBe($this->driver->id);
+    Livewire::test(WarehouseSections::class)->set('warehouseId', $this->wh)
+        ->call('addRow')->set('rows.4.name', 'Davao hub')->set('rows.4.provinces', 'Davao del Sur, cebu')
+        ->call('save')->assertHasErrors('rows')
+        ->set('rows.4.provinces', 'Davao del Sur, Cotabato')->set('labelScan', true)->call('save')->assertHasNoErrors();
+    expect(WhSection::where('warehouse_id', $this->wh)->count())->toBe(5)
+        ->and(WhSection::where('name', 'Davao hub')->value('provinces'))->toBe(['Davao del Sur', 'Cotabato'])
+        ->and(Sections::labelScan($this->wh))->toBeTrue();
 
-    fill(['paid_with' => 'cash', 'liters' => 25, 'total' => 1500]);
-    expect($cash->fresh()->left())->toBe(500.0);
-    Livewire::test(AdminTripFuel::class, ['tripId' => $this->trip->id])->set('returned', '500')->call('settle');
-    expect($cash->fresh()->settled_at)->not->toBeNull()->and($cash->fresh()->returned)->toBe(500.0);
+    $this->get(route('sections.labels', ['warehouse' => $this->wh]))->assertOk()->assertSee('Davao hub')->assertSee('<svg', false);
+    $this->flushSession();
+    $driver = User::where('email', 'driver@example.com')->firstOrFail()->replicate()->fill(['email' => 'nobody@example.com', 'warehouse_id' => null]);
+    $driver->save();
+    $this->actingAs($driver)->get(route('sections.labels', ['warehouse' => $this->wh]))->assertForbidden();
 });
-
-it('lets the driver add a fill from the Driver app', function () {
-    Storage::fake('public');
-    $this->actingAs($this->driver);
-    Filament::setCurrentPanel(Filament::getPanel('delivery'));
-    Livewire::test(DriverDashboard::class)->assertSee('Add fuel');
-
-    Livewire::test(DriverFuel::class)
-        ->set('upload', UploadedFile::fake()->image('receipt.jpg', 800, 1200))->call('savePhoto')
-        ->assertSet('step', 'check')
-        ->set('f.fuel_type', 'gasoline')->assertSee('This truck uses')
-        ->set('f.fuel_type', 'diesel')->set('f.liters', '45.5')->set('f.total', '2,730.00')->set('f.vat', '292.50')
-        ->call('toOdometer')->assertHasNoErrors()->assertSet('step', 'odometer')
-        ->set('f.odometer', '55210')->call('save')->assertSet('step', 'done')->assertSee('Fill saved');
-
-    $f = FuelFill::firstOrFail();
-    expect($f->truck_id)->toBe($this->truck->id)->and($f->deliverylog_id)->toBe($this->trip->id)->and($f->price_per_liter)->toBe(60.0)
-        ->and($f->receipt_path)->toStartWith('fuel/')->and($f->odometer)->toBe(55210);
-    Storage::disk('public')->assertExists($f->receipt_path);
-});
-
-it('does not let the driver point the photo at another file', function () {
-    $this->actingAs($this->driver);
-    Filament::setCurrentPanel(Filament::getPanel('delivery'));
-    Livewire::test(DriverFuel::class)->set('receiptPath', 'other/secret.jpg');
-})->throws(\Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException::class);
-
-it('flags wrong fuel, over the tank, two fills close together and the TIN missing', function () {
-    Fuel::put('company_tin', '123-456-789-000');
-    fill(['product' => 'XCS', 'liters' => 20, 'total' => 1300, 'filled_at' => now()->subMinutes(100)]);
-    fill(['liters' => 120, 'total' => 7200, 'filled_at' => now()->subMinutes(30)]);
-    $alerts = collect((new FuelReport(null))->alerts())->pluck('title')->join(' | ');
-    expect($alerts)->toContain('(diesel) · gasoline on the receipt')->toContain('120 L in one fill')->toContain('two fills in 70 minutes')->toContain('without your company TIN');
-});
-
-it('imports a fuel card statement and matches it to the fills', function () {
-    $a = fill(['filled_at' => now()->subHours(5), 'liters' => 40]);
-    fill(['filled_at' => now()->subHours(2), 'liters' => 30, 'total' => 1800]);
-    $at = fn ($h) => now()->subHours($h)->format('m/d/Y H:i');
-    $csv = tempnam(sys_get_temp_dir(), 'st');
-    file_put_contents($csv, "Petron Fleet Card Statement\nAccount: 0001\n"
-        ."Transaction Date,Card Number,Plate No,Station Name,Product,Liters,Amount\n"
-        .$at(5).",7000 1234 5678 4321,,Petron Imus,Diesel Max,40.00,\"2,400.00\"\n"
-        .$at(2).",7000 1234 5678 4321,,Petron Imus,Diesel Max,36.00,\"2,160.00\"\n"
-        .$at(30).",7000 1234 5678 4321,,Petron Bacoor,Diesel Max,50.00,\"3,000.00\"\n"
-        .$at(3).",7000 1234 5678 9999,ZZZ 999,Petron Kawit,XCS,10.00,650.00\n");
-    $s = FuelStatements::import($csv, 'petron', $this->admin->id, null, 'statement.csv');
-    $by = FuelStatementLine::where('fuel_statement_id', $s->id)->orderBy('charged_at')->pluck('status')->all();
-    expect($s->lines)->toBe(4)->and($by)->toBe(['no_fill', 'matched', 'no_truck', 'liters_differ'])
-        ->and(FuelStatementLine::where('status', 'matched')->value('fuel_fill_id'))->toBe($a->id);
-});
-
-it('shows the Fuel page in Admin with every tab, and in Warehouse only its own trucks', function () {
-    fill(['station' => 'Petron Imus']);
-    $other = Truck::create(['plate_no' => 'OTH 1', 'logistichub_id' => Logistichub::where('id', '!=', $this->hub)->value('id'), 'is_active' => true, 'is_assigned' => false, 'capacity' => 40, 'category' => 'Truck', 'description' => 'x', 'registration_no' => 'RO', 'user_id' => $this->admin->id, 'date_registered' => now(), 'date_expired' => now()->addYear()]);
-    Fuel::save(['liters' => 10, 'total' => 600, 'station' => 'Shell Far Away'], $other, null, null);
-
-    $this->get(AdminFuel::getUrl())->assertOk()->assertSee('FUE 123')->assertSee('OTH 1');
-    foreach (['fills', 'alerts', 'cards', 'prices', 'vat'] as $tab) {
-        Livewire::test(AdminFuel::class)->call('setTab', $tab)->assertOk();
-    }
-    Livewire::test(AdminFuel::class)->call('setTab', 'fills')->assertSee('Shell Far Away');
-    $this->get(route('fuel.vat-export', ['month' => now()->format('Y-m'), 'panel' => 'admin']))->assertOk()->assertHeader('content-type', 'text/csv; charset=UTF-8');
-
-    $wh = User::where('email', 'warehouse@example.com')->firstOrFail();
-    $this->actingAs($wh);
-    Filament::setCurrentPanel(Filament::getPanel('warehouse'));
-    $this->get(WarehouseFuel::getUrl())->assertOk()->assertSee('FUE 123')->assertDontSee('OTH 1');
-    Livewire::test(WarehouseFuel::class)->call('setTab', 'fills')->assertSee('Petron Imus')->assertDontSee('Shell Far Away')->call('savePrices')->assertForbidden();
-    $csv = $this->get(route('fuel.vat-export', ['panel' => 'warehouse']))->streamedContent();
-    expect($csv)->toContain('Petron Imus')->not->toContain('Shell Far Away');
-});
-
-it('saves the fuel settings for each truck', function () {
-    $this->get(FuelSettings::getUrl())->assertOk()->assertSee('FUE 123');
-    Livewire::test(FuelSettings::class)->set('values.company_tin', '123-456-789-000')->set("trucks.{$this->truck->id}.fuel_type", 'gasoline')
-        ->set("trucks.{$this->truck->id}.fuel_card_last4", '12')->call('save')->assertHasErrors(["trucks.{$this->truck->id}.fuel_card_last4"])
-        ->set("trucks.{$this->truck->id}.fuel_card_last4", '1111')->call('save')->assertHasNoErrors();
-    expect($this->truck->fresh()->fuel_type)->toBe('gasoline')->and(Fuel::companyTin())->toBe('123-456-789-000');
-});
-
-it('checks the receipt numbers add up', function () {
-    expect(FuelReader::problems(['liters' => 40, 'price_per_liter' => 60, 'total' => 2400]))->toBe([])
-        ->and(FuelReader::problems(['liters' => 40, 'price_per_liter' => 60, 'total' => 2600]))->toHaveCount(1)
-        ->and(FuelReader::problems(['total' => 2400, 'vatable' => 2000, 'vat' => 257.14]))->toHaveCount(1);
-});
-DISPATCH_FILE_END_32
+DISPATCH_FILE_END_21
 
 echo "▶ Updating the database (keeps your data)"
 php artisan migrate --force

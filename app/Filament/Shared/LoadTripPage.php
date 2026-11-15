@@ -6,7 +6,10 @@ use App\Filament\Concerns\ScansInvoices;
 use App\Models\Deliverylog;
 use App\Models\Invoice;
 use App\Models\Tripinvoice;
+use App\Models\Boxes\SetSplit;
+use App\Models\User;
 use App\Services\TripAssignment;
+use App\Support\Boxes\BoxSets;
 use App\Support\Maps\LoadOrder;
 use App\Support\Maps\TripSorter;
 use Filament\Forms\Components\Select;
@@ -42,6 +45,12 @@ abstract class LoadTripPage extends Page
 
     /** Where the box just loaded goes: ['zone' => 'front', 'stop' => 7]. */
     public ?array $spot = null;
+
+    /** The box is for another hub than the trip goes to. */
+    public ?array $wrongHub = null;
+
+    /** The box's set on this truck: "Maria Santos · 2 of 3 · still to load X-103 (C)". */
+    public ?array $setInfo = null;
 
     public function mount(): void
     {
@@ -138,13 +147,23 @@ abstract class LoadTripPage extends Page
         }
 
         if ($tripinvoice->{$this->loadedColumn()}) {
-            $this->scanResult('warning', "{$code} was already loaded.", $tripinvoice->invdata);
+            $who = $tripinvoice->loaded_by && $tripinvoice->loaded_by !== Auth::id() ? User::find($tripinvoice->loaded_by)?->first_name : null;
+            $when = $tripinvoice->loaded_at ? \Illuminate\Support\Carbon::parse($tripinvoice->loaded_at)->format('g:i A') : null;
+            $this->scanResult('warning', "{$code} was already loaded".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $tripinvoice->invdata);
 
             return;
         }
 
         $this->early = null;
         $this->spot = null;
+        $this->wrongHub = null;
+        $this->setInfo = null;
+        if (! $this->forceLoad && ($wrong = $this->wrongHubFor($trip, $tripinvoice))) {
+            $this->wrongHub = $wrong;
+            $this->scanResult('warning', "Wrong hub: {$code} is for {$wrong['for']} (section {$wrong['section']}). This trip goes to {$wrong['trip']}.", $tripinvoice->invdata);
+
+            return;
+        }
         if (! $this->forceLoad && ($early = LoadOrder::tooEarly($trip, $tripinvoice, static::$atHub))) {
             $this->early = $early;
             $this->scanResult('warning', "Too early: {$code} is for stop {$early['stop']}".($early['place'] ? " ({$early['place']})" : '').'. It goes in later, nearer the door. Load stop '.$early['nextStop'].' first.', $tripinvoice->invdata);
@@ -154,15 +173,71 @@ abstract class LoadTripPage extends Page
         $this->forceLoad = false;
 
         app(TripAssignment::class)->markLoaded($tripinvoice, atHub: static::$atHub);
+        $tripinvoice->forceFill(['loaded_by' => Auth::id(), 'loaded_at' => now()])->saveQuietly();
         $this->spot = TripSorter::zoneMap($trip)[$tripinvoice->id] ?? null;
+        if ($tripinvoice->invdata) {
+            $this->setInfo = BoxSets::onTrip($tripinvoice->invdata, $trip, $this->tripColumn(), $this->loadedColumn());
+        }
 
         $this->scanResult('success', "{$code} loaded.", $tripinvoice->invdata);
     }
 
-    /** After "too early": load that box anyway. */
+    /** The box's section is for another partner hub than the one this trip goes to. */
+    protected function wrongHubFor(Deliverylog $trip, Tripinvoice $tripinvoice): ?array
+    {
+        $section = $tripinvoice->invdata?->whSection;
+        $to = static::$atHub ? null : $trip->assigned_to;
+        if (! $section || ! $section->logistichub_id || ! $to || (int) $section->logistichub_id === (int) $to) {
+            return null;
+        }
+
+        return ['code' => $tripinvoice->invoice, 'for' => $section->name ?: $section->goesTo(), 'section' => $section->code, 'color' => $section->color,
+            'trip' => $trip->destination?->hub_name ?? 'another hub'];
+    }
+
+    /** Customers whose boxes are not all on the truck, for the Done screen. */
+    public function openSets(): array
+    {
+        $trip = $this->selectedTrip();
+
+        return $trip ? BoxSets::openOnTrip($trip, $this->tripColumn(), $this->loadedColumn()) : [];
+    }
+
+    /** Why a box of a set stays behind. */
+    public function recordSplit(int $invoiceId, string $reason): bool
+    {
+        $trip = $this->selectedTrip();
+        if (! $trip || ! array_key_exists($reason, SetSplit::REASONS)) {
+            return false;
+        }
+        $ok = collect($this->openSets())->pluck('missing')->flatten(1)->contains('id', $invoiceId);
+        if (! $ok) {
+            return false;
+        }
+        SetSplit::updateOrCreate(['invoice_id' => $invoiceId, 'deliverylog_id' => $trip->id],
+            ['reason' => $reason, 'user_id' => Auth::id(), 'set_key' => Invoice::whereKey($invoiceId)->value('set_key')]);
+
+        return true;
+    }
+
+    /** Who loaded how many boxes on this trip. */
+    public function team(): array
+    {
+        $id = $this->data['deliverylog_id'] ?? null;
+        if (! $id) {
+            return [];
+        }
+        $counts = Tripinvoice::where($this->tripColumn(), $id)->where($this->loadedColumn(), true)->whereNotNull('loaded_by')
+            ->selectRaw('loaded_by, count(*) n')->groupBy('loaded_by')->pluck('n', 'loaded_by');
+        $names = User::whereIn('id', $counts->keys())->pluck('first_name', 'id');
+
+        return $counts->sortDesc()->map(fn ($n, $uid) => ['name' => (int) $uid === Auth::id() ? 'You' : ($names[$uid] ?? '?'), 'n' => (int) $n, 'me' => (int) $uid === Auth::id()])->values()->all();
+    }
+
+    /** After "too early" or "wrong hub": load that box anyway. */
     public function loadAnyway(): void
     {
-        if ($code = $this->early['code'] ?? null) {
+        if ($code = $this->early['code'] ?? $this->wrongHub['code'] ?? null) {
             $this->forceLoad = true;
             $this->scan($code);
             $this->forceLoad = false;

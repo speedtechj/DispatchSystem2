@@ -8,6 +8,10 @@ use App\Models\Container;
 use App\Models\Invoice;
 use App\Models\Invoiceissue;
 use App\Models\Unmanifested;
+use App\Models\User;
+use App\Support\Boxes\BoxSets;
+use App\Support\Boxes\Crossdock;
+use App\Support\Boxes\Sections;
 use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\MarkdownEditor;
@@ -36,6 +40,12 @@ abstract class UnloadContainerPage extends Page
     /** The last code that was not found in the container (for the unmanifested form). */
     #[Locked]
     public ?string $missingCode = null;
+
+    /** Where the box just scanned goes: a section tile, or the waiting truck. */
+    public ?array $route = null;
+
+    /** The box's set: "Maria Santos · 2 of 3 · 1 more still in this container". */
+    public ?array $setInfo = null;
 
     abstract protected function containerQuery(): Builder;
 
@@ -117,6 +127,14 @@ abstract class UnloadContainerPage extends Page
         }
 
         $this->missingCode = null;
+        $this->route = null;
+        $this->setInfo = null;
+
+        if ($section = Sections::fromCode($code)) {
+            $this->placeInSection($container, $section);
+
+            return;
+        }
 
         $invoice = Invoice::where('container_id', $container->id)->where('invoice', $code)->first();
 
@@ -136,14 +154,145 @@ abstract class UnloadContainerPage extends Page
         }
 
         if ($invoice->is_verified) {
-            $this->scanResult('warning', "{$code} was already verified.", $invoice);
+            $who = $invoice->verified_by && $invoice->verified_by !== Auth::id() ? User::find($invoice->verified_by)?->first_name : null;
+            $when = $invoice->verified_at ? \Illuminate\Support\Carbon::parse($invoice->verified_at)->format('g:i A') : null;
+            $this->route = Sections::tile($invoice->whSection);
+            $this->scanResult('warning', "{$code} was already verified".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $invoice);
 
             return;
         }
 
-        $invoice->forceFill(['is_verified' => true, 'verified_at' => now()])->save();
+        $invoice->forceFill(['is_verified' => true, 'verified_at' => now(), 'verified_by' => Auth::id()])->save();
 
-        $this->scanResult('success', "{$code} verified.", $invoice);
+        $this->scanResult('success', $this->sendToSection($container, $invoice), $invoice);
+    }
+
+    /** After the box is verified: pick its section, or load it straight onto the waiting truck. */
+    protected function sendToSection(Container $container, Invoice $invoice): string
+    {
+        $code = $invoice->invoice;
+        $warehouseId = $this->warehouseId($container);
+        $section = Sections::forInvoice($invoice, $warehouseId);
+        $this->setInfo = BoxSets::atUnload($invoice);
+
+        if (! $section) {
+            return "{$code} verified.";
+        }
+
+        if ($trip = Crossdock::load($invoice, Crossdock::active($container->id), $section)) {
+            $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => null])->save();
+            $this->route = ['kind' => 'truck', 'code' => 'TRUCK', 'name' => $trip->warehouse?->name ?? $section->goesTo(), 'trip' => $trip->trip_number, 'color' => '#e8590c'];
+
+            return "{$code} verified · onto truck {$trip->trip_number}.";
+        }
+
+        $label = Sections::labelScan($warehouseId);
+        $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => $label ? null : now()])->save();
+        $this->route = Sections::tile($section) + ['pending' => $label, 'why' => $section->kind === 'check' ? Sections::whyCheck($invoice) : null];
+
+        return "{$code} verified · section {$section->code}.";
+    }
+
+    /** Section-label scan (when switched on): the boxes this person scanned for that section are now there. */
+    protected function placeInSection(Container $container, \App\Models\Boxes\WhSection $section): void
+    {
+        $warehouseId = $this->warehouseId($container);
+        if (! Sections::labelScan($warehouseId)) {
+            $this->scanResult('warning', 'The section label scan is off: boxes are saved in their section when you scan them.');
+
+            return;
+        }
+        $pending = Invoice::where('container_id', $container->id)->where('verified_by', Auth::id())
+            ->whereNotNull('wh_section_id')->whereNull('sectioned_at')->get();
+        $dock = Crossdock::active($container->id);
+        if ($dock) {
+            $onTruck = \App\Models\Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->whereIn('invoice_id', $pending->pluck('id'))->pluck('invoice_id')->all();
+            $pending = $pending->reject(fn ($b) => in_array($b->id, $onTruck, true));
+        }
+        $mine = $pending->where('wh_section_id', $section->id);
+        $other = $pending->where('wh_section_id', '!=', $section->id);
+        $this->route = Sections::tile($section);
+
+        if ($mine->isEmpty()) {
+            $this->scanResult('warning', $other->isNotEmpty()
+                ? 'Wrong section: your '.$other->count().' '.str('box')->plural($other->count()).' '.($other->count() === 1 ? 'is' : 'are').' for '.$other->map(fn ($b) => $b->whSection?->code)->unique()->join(', ').', not '.$section->code.'.'
+                : "Section {$section->code}: none of your boxes are waiting for it.");
+
+            return;
+        }
+        Invoice::whereIn('id', $mine->pluck('id'))->update(['sectioned_at' => now()]);
+        $this->scanResult('success', $mine->count().' '.str('box')->plural($mine->count())." saved in section {$section->code}"
+            .($other->isNotEmpty() ? ' · '.$other->count().' still for '.$other->map(fn ($b) => $b->whSection?->code)->unique()->join(', ') : '').'.');
+    }
+
+    protected function warehouseId(?Container $container): ?int
+    {
+        return $container?->warehouse_id ?? Auth::user()?->warehouse_id;
+    }
+
+    // ------------------------------------------------------------------ truck waiting (cross-dock)
+
+    /** "Put in section instead": take the box off the waiting truck and keep it in its section. */
+    public function putInSection(int $invoiceId): bool
+    {
+        $container = $this->selectedContainer();
+        $dock = Crossdock::active($container?->id);
+        $invoice = $container ? Invoice::where('container_id', $container->id)->find($invoiceId) : null;
+        if (! $dock || ! $invoice || ! Crossdock::unload($invoice, $dock)) {
+            return false;
+        }
+        $section = $invoice->whSection ?? Sections::forInvoice($invoice, $this->warehouseId($container));
+        $invoice->forceFill(['wh_section_id' => $section?->id, 'sectioned_at' => now()])->save();
+        $this->route = Sections::tile($section);
+        $this->lastInvoiceId = $invoice->id;
+        $this->lastStatus = 'success';
+        $this->lastMessage = "{$invoice->invoice} stays in section ".($section?->code ?? '').'. It goes on the next truck.';
+
+        return true;
+    }
+
+    /** Trucks that can wait at this unload. */
+    public function truckChoices(): Collection
+    {
+        return Crossdock::trips($this->warehouseId($this->selectedContainer()))
+            ->map(fn ($t) => ['id' => $t->id, 'name' => 'WH trip '.$t->trip_number, 'to' => $t->warehouse?->name, 'truck' => $t->truck?->plate_no]);
+    }
+
+    public function startTruck(int $tripId): bool
+    {
+        $container = $this->selectedContainer();
+
+        return $container && Crossdock::start($container, $tripId) !== null;
+    }
+
+    public function pauseTruck(bool $paused): void
+    {
+        Crossdock::active($this->selectedContainer()?->id)?->update(['paused' => $paused]);
+    }
+
+    public function stopTruck(): void
+    {
+        Crossdock::active($this->selectedContainer()?->id)?->update(['ended_at' => now()]);
+    }
+
+    public function truckStatus(): ?array
+    {
+        $dock = Crossdock::active($this->selectedContainer()?->id);
+
+        return $dock ? Crossdock::counts($dock) : null;
+    }
+
+    /** Who scanned how many boxes off this container. */
+    public function team(): array
+    {
+        $id = $this->data['container_id'] ?? null;
+        if (! $id) {
+            return [];
+        }
+        $counts = Invoice::where('container_id', $id)->whereNotNull('verified_by')->selectRaw('verified_by, count(*) n')->groupBy('verified_by')->pluck('n', 'verified_by');
+        $names = User::whereIn('id', $counts->keys())->pluck('first_name', 'id');
+
+        return $counts->sortDesc()->map(fn ($n, $uid) => ['name' => (int) $uid === Auth::id() ? 'You' : ($names[$uid] ?? '?'), 'n' => (int) $n, 'me' => (int) $uid === Auth::id()])->values()->all();
     }
 
     /** @return array{loaded: int, total: int, last?: ?string, issues?: int, unmanifested?: int} */
