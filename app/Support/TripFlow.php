@@ -197,6 +197,8 @@ class TripFlow
         // The next trip waiting for this truck starts now: the crew sees it right away.
         if ($next = static::nextAfter($trip)) {
             $next->forceFill(['waits_for' => null])->saveQuietly();
+            // More trips planned for this truck: they now wait for the one that just started, in order.
+            Deliverylog::where('waits_for', $trip->id)->where('is_active', true)->whereKeyNot($next->id)->update(['waits_for' => $next->id]);
             $trip->truck?->update(['is_assigned' => true]);
         }
     }

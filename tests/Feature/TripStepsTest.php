@@ -113,3 +113,19 @@ it('shows today\'s crew board with the warnings, and puts people on trucks', fun
     expect(Truckcrew::where('truck_id', $this->trip->truck_id)->pluck('crew')->sort()->values()->all())->toBe(collect([$this->driver->id, $this->sub->id])->sort()->values()->all())
         ->and(TripFlow::crew($this->trip)->pluck('user_id')->all())->toContain($this->sub->id); // the trip did not leave yet: it follows
 });
+
+it('plans more trips for one truck: they start one after the other', function () {
+    $mk = fn () => Deliverylog::create(['truck_id' => $this->trip->truck_id, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
+    $second = $mk();
+    $third = $mk();
+    expect(TripFlow::stage($second))->toBe('waiting')->and(TripFlow::stage($third))->toBe('waiting')
+        ->and(TripFlow::tripFor($this->driver)?->id)->toBe($this->trip->id);
+
+    TripFlow::release($this->trip, 'done');
+    expect(TripFlow::tripFor($this->driver)?->id)->toBe($second->id)
+        ->and(TripFlow::stage($third->fresh()))->toBe('waiting')
+        ->and(TripFlow::nextAfter($second->fresh())?->id)->toBe($third->id);
+
+    TripFlow::release($second->fresh(), 'done');
+    expect(TripFlow::tripFor($this->driver)?->id)->toBe($third->id)->and(TripFlow::stage($third->fresh()))->not->toBe('waiting');
+});
