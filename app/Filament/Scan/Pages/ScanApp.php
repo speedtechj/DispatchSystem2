@@ -4,11 +4,13 @@ namespace App\Filament\Scan\Pages;
 
 use App\Models\Ai\AiPhotoCheck;
 use App\Models\BoxPhoto;
+use App\Models\Deliverylog;
 use App\Models\Invoice;
 use App\Models\PhotoSetting;
 use App\Models\Unmanifested;
 use App\Support\Ai\Ai;
 use App\Support\Ai\PhotoCheck;
+use App\Support\BoxSizes;
 use App\Support\Photos\BoxPhotos;
 use App\Support\ScanModes;
 use Filament\Actions\Action;
@@ -290,6 +292,40 @@ class ScanApp extends Page
         }
     }
 
+    /** Load truck, Done screen: room left on the truck, add a waiting box to this trip. */
+    public function topUpAdd(int $invoiceId): void
+    {
+        $station = $this->station();
+        if ($this->mode !== 'load' || ! $station || ! $station->appChoices()->contains('id', $this->choice)) {
+            return;
+        }
+        $trip = Deliverylog::with('truck')->find($this->choice);
+        if (! $trip || ! \App\Support\TruckSpace::topUp($trip)['boxes']->contains('id', $invoiceId)) {
+            Notification::make()->title('That box does not fit or is not free any more.')->warning()->send();
+
+            return;
+        }
+        try {
+            app(\App\Services\TripAssignment::class)->addToDeliveryTrip($trip, Invoice::whereKey($invoiceId)->get());
+        } catch (\DomainException $e) {
+            Notification::make()->title($e->getMessage())->warning()->send();
+
+            return;
+        }
+        Notification::make()->title(Invoice::whereKey($invoiceId)->value('invoice').' added to trip '.$trip->trip_number.': scan it onto the truck')->success()->send();
+        $this->pick($this->choice);
+    }
+
+    /** Count a section, Done screen: close the count. */
+    public function closeCount(): void
+    {
+        $station = $this->station();
+        if ($this->mode === 'count' && $station && method_exists($station, 'closeCount') && ($r = $station->closeCount())) {
+            Notification::make()->title('Count closed: '.$r['found'].' found, '.count($r['missing']).' missing'.($r['moved'] ? ', '.$r['moved'].' moved in' : ''))->success()->send();
+            $this->home();
+        }
+    }
+
     /** Load truck, Done screen: why a box of a customer's set stays behind. */
     public function splitReason(int $invoiceId, string $reason): void
     {
@@ -428,6 +464,8 @@ class ScanApp extends Page
         $truck = null;
         $trucks = collect();
         $openSets = [];
+        $countResult = null;
+        $topUp = null;
         if (in_array($this->screen, ['scan', 'done'], true) && $mode && $this->choice) {
             $station = $this->station();
             $progress = $station->progress();
@@ -437,6 +475,14 @@ class ScanApp extends Page
             $truck = method_exists($station, 'truckStatus') ? $station->truckStatus() : null;
             $trucks = $this->truckPicker && method_exists($station, 'truckChoices') ? $station->truckChoices() : collect();
             $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
+            $countResult = $this->screen === 'done' && method_exists($station, 'countResult') ? $station->countResult() : null;
+            // Box sizes: space on the truck while loading (a big box takes more).
+            if (in_array($this->mode, ['load', 'hub_load'], true) && BoxSizes::on() && ($trip = Deliverylog::with('truck')->find($this->choice))) {
+                $space = BoxSizes::tripSpace($trip, $this->mode === 'hub_load');
+                if ($this->screen === 'done' && $this->mode === 'load' && ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total']) {
+                    $topUp = \App\Support\TruckSpace::topUp($trip);
+                }
+            }
         }
 
         $todayPhotos = BoxPhoto::where('user_id', $user?->id)->whereDate('taken_at', today());
@@ -463,8 +509,13 @@ class ScanApp extends Page
             'truck' => $truck,
             'trucks' => $trucks,
             'openSets' => $openSets,
+            'countResult' => $countResult,
+            'topUp' => $topUp,
+            'noReason' => collect($openSets)->filter(fn ($o) => collect($o['missing'])->contains(fn ($m) => ! $m['reason']))->count(),
             'splitReasons' => \App\Models\Boxes\SetSplit::REASONS,
-            'box' => $this->invoiceId ? Invoice::find($this->invoiceId) : null,
+            'box' => $box = ($this->invoiceId ? Invoice::find($this->invoiceId) : null),
+            'space' => $space ?? null,
+            'boxSize' => $box && BoxSizes::on() ? ['name' => BoxSizes::nameOfType($box->boxtype), 'space' => BoxSizes::spaceOf($box->boxtype)] : null,
             'conditions' => BoxPhoto::CONDITIONS,
             'shots' => $this->status === 'success' ? $this->shots() : collect(),
             ...$this->aiPhotoFlag(),

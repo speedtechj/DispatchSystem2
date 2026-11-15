@@ -30,6 +30,11 @@ Route::controller(PwaController::class)->group(function () {
     Route::get('/pwa/offline', 'offline')->name('pwa.offline');
     Route::get('/pwa/{panel}/manifest.webmanifest', 'manifest')->whereIn('panel', ['delivery', 'scan'])->name('pwa.manifest');
     Route::get('/pwa/{panel}/icon-{size}.png', 'icon')->whereIn('panel', ['delivery', 'scan'])->whereNumber('size')->name('pwa.icon');
+    // Same files without a file ending: Plesk's nginx serves .js / .png / .webmanifest from disk
+    // and never asks Laravel, so phones get a 404 and Android does not offer to install.
+    Route::get('/pwa/sw', 'serviceWorker')->name('pwa.sw.plain');
+    Route::get('/pwa/{panel}/manifest', 'manifest')->whereIn('panel', ['delivery', 'scan'])->name('pwa.manifest.plain');
+    Route::get('/pwa/{panel}/icon/{size}', 'icon')->whereIn('panel', ['delivery', 'scan'])->whereNumber('size')->name('pwa.icon.plain');
 });
 
 Route::middleware('web')->group(function () {

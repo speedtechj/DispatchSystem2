@@ -22,6 +22,7 @@ class AiFeatures
         'day_summary' => ['End-of-day truck summary', 'After work: the day in short, and for each truck what went well and what to look at. Optional daily email.', 'Admin · Warehouse · Partner hub', true],
         'addresses' => ['AI address cleaning', 'Before a trip is put on the map, messy addresses are fixed ("purok 3 near chapel, Lapu2" → "Purok 3, Pusok, Lapu-Lapu City, Cebu") so more stops are found. Settings → Maps & routes.', 'Admin · Warehouse · Partner hub', true],
         'fuel_receipts' => ['Read fuel receipts', 'In the Driver app, reads the fuel receipt photo (station, diesel or gasoline, liters, price, total, VAT, TIN) and the odometer photo, so the driver does not type them.', 'Driver app · Fuel', true],
+        'box_sizes' => ['Box sizes: same box, different spelling', 'In Settings → Box sizes, finds box types on the manifests that are the same box written differently ("Bulilit" and "Small", "X-LARGE" and "XL") so you can join them.', 'Admin', true],
         'help_ask' => ['Help answers', 'In the Help guide, staff and drivers ask in their own words (English, Tagalog or Taglish) and get a short answer taken only from the guides, with the right guide to open.', 'Admin · Warehouse · Partner hub · Scan app · Driver app', true],
         'customer_chat' => ['Customer chat', 'A public page where receivers type their box number and ask questions. Answers come from tracking; anything else goes to staff.', 'Receivers · Admin · Partner hub', true],
     ];

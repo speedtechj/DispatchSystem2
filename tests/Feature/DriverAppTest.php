@@ -40,7 +40,7 @@ it('makes only the Delivery panel installable', function () {
     $this->actingAs(User::where('email', 'driver@example.com')->firstOrFail())
         ->get('/delivery')
         ->assertOk()
-        ->assertSee('/pwa/delivery/manifest.webmanifest', false)
+        ->assertSee('/pwa/delivery/manifest"', false)
         ->assertSee('Install app')
         ->assertSee('Driver on your Home Screen', false);
 });

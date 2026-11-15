@@ -51,6 +51,8 @@ class PwaController extends Controller
         ])->render(), 200, [
             'Content-Type' => 'text/javascript; charset=utf-8',
             'Cache-Control' => 'no-cache',
+            // served at /pwa/sw too: allow it to look after /delivery and /scan
+            'Service-Worker-Allowed' => '/',
         ]);
     }
 

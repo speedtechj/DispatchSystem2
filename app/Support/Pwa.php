@@ -125,7 +125,7 @@ class Pwa
         $app = static::app($panel);
         $v = static::version();
         $icon = fn (int $size, string $purpose) => [
-            'src' => url("/pwa/{$panel}/icon-{$size}.png?v={$v}".($purpose === 'maskable' ? '&maskable=1' : '')),
+            'src' => url("/pwa/{$panel}/icon/{$size}?v={$v}".($purpose === 'maskable' ? '&maskable=1' : '')),
             'sizes' => "{$size}x{$size}",
             'type' => 'image/png',
             'purpose' => $purpose,
@@ -146,7 +146,7 @@ class Pwa
             'shortcuts' => collect($app['shortcuts'] ?? [])->map(fn (array $s) => [
                 'name' => $s['name'],
                 'url' => $s['url'],
-                'icons' => [['src' => url("/pwa/{$panel}/icon-192.png?v={$v}"), 'sizes' => '192x192', 'type' => 'image/png']],
+                'icons' => [['src' => url("/pwa/{$panel}/icon/192?v={$v}"), 'sizes' => '192x192', 'type' => 'image/png']],
             ])->all(),
         ]);
     }

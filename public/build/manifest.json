@@ -48,12 +48,12 @@
     "src": "node_modules/@fontsource/archivo/files/archivo-latin-900-normal.woff2"
   },
   "resources/css/app.css": {
-    "file": "assets/app-CkqDt_f9.css",
+    "file": "assets/app-BXZPEufO.css",
     "src": "resources/css/app.css",
     "isEntry": true
   },
   "resources/css/filament/admin/theme.css": {
-    "file": "assets/theme-DqoCx8DK.css",
+    "file": "assets/theme-wjXMAELb.css",
     "src": "resources/css/filament/admin/theme.css",
     "isEntry": true
   },

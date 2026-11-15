@@ -129,12 +129,39 @@ it('lets the partner hub receive the container, flags wrong-hub and missing boxe
     expect(Tripinvoice::where('invoice_id', $this->b4->id)->value('logistichub_id'))->toBe($this->davao->id)
         ->and($w->fresh()->status)->toBe('sent_hub');
 
-    // a refused box goes back to the warehouse
+    // a refused box goes back to the warehouse on a return shipment
     Livewire::test(HubWrongHub::class)->set('code', 'SEA-5')->set('reason', 'refused')->call('addBox')->assertHasNoErrors()
         ->call('sendBack', WrongHubBox::where('reason', 'refused')->value('id'))
+        ->set('tab', 'return')->assertSee('RET-0001')->assertSee('SEA-5')
+        ->set('rf.vessel', 'MV Back')->call('saveReturn')->call('sendReturn')
         ->set('tab', 'report')->assertSee('Refused by receiver');
+    $rs = \App\Models\Shipping\ReturnShipment::sole();
+    expect($rs->status)->toBe('sent')->and($rs->vessel)->toBe('MV Back')
+        ->and(Tripinvoice::where('invoice_id', $this->b5->id)->exists())->toBeTrue(); // still on its trip until it is back
+
+    // the warehouse scans it in: back in the pool, in section C
+    $wh = User::where('email', 'warehouse@example.com')->firstOrFail()->replicate()->fill(['email' => 'ret-wh@example.com', 'warehouse_id' => $this->admin->warehouse_id ?? Container::value('warehouse_id')]);
+    $wh->save();
+    $this->flushSession();
+    $this->actingAs($wh);
+    Filament::setCurrentPanel(Filament::getPanel('scan'));
+    Livewire::test(ScanApp::class)->call('open', 'ret_receive')->assertSee('RET-0001')->call('pick', $rs->id)
+        ->call('scan', 'SEA-5')->assertSet('status', 'success')->assertSet('route.code', 'C')
+        ->call('dismiss')->call('scan', 'SEA-1')->assertSet('status', 'danger');
     expect(Tripinvoice::where('invoice_id', $this->b5->id)->exists())->toBeFalse()
-        ->and($this->b5->fresh()->is_returned)->toBeTruthy();
+        ->and($this->b5->fresh())->is_returned->toBeTruthy()->is_assigned->toBeFalsy()
+        ->and(WrongHubBox::where('invoice_id', $this->b5->id)->value('status'))->toBe('back');
+
+    Filament::setCurrentPanel(Filament::getPanel('warehouse'));
+    Livewire::test(\App\Filament\Warehouse\Pages\ComingBack::class)->set('tab', 'return')->assertSee('RET-0001')->assertSee('1 / 1 back')
+        ->call('finishReturn', $rs->id);
+    expect($rs->fresh()->status)->toBe('received');
+});
+
+it('serves the app files at addresses Plesk does not serve from disk', function () {
+    $this->get('/pwa/sw')->assertOk()->assertHeader('Service-Worker-Allowed', '/');
+    $this->get('/pwa/delivery/manifest')->assertOk()->assertJsonPath('icons.0.src', fn ($src) => str_contains($src, '/pwa/delivery/icon/192'));
+    $this->get('/pwa/delivery/icon/192')->assertOk();
 });
 
 it('scans boxes at the port for a full-scan shipment', function () {

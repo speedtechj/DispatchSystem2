@@ -4,7 +4,7 @@
     <div class="ds-pwa-sheet__panel">
         <span class="ds-pwa-sheet__grip" aria-hidden="true"></span>
         <div class="ds-pwa-sheet__head">
-            <img src="{{ url("/pwa/{$panel}/icon-180.png?v={$version}") }}" alt="" width="56" height="56">
+            <img src="{{ url("/pwa/{$panel}/icon/180?v={$version}") }}" alt="" width="56" height="56">
             <span>
                 <strong id="ds-pwa-ios-title">Put {{ $name }} on your Home Screen</strong>
                 <span>Opens full screen, straight to your trip.</span>
@@ -48,7 +48,7 @@
     const installable = (on) => html.toggleAttribute('data-pwa-installable', on);
 
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js', { scope: @js('/'.$panel) }).catch(() => {});
+        navigator.serviceWorker.register('/pwa/sw', { scope: @js('/'.$panel) }).catch(() => {});
     }
 
     addEventListener('beforeinstallprompt', (event) => {

@@ -3,6 +3,7 @@
 namespace App\Filament\Shared\Ai;
 
 use App\Support\Ai\TripPlanner;
+use App\Support\BoxSizes;
 use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Support\Icons\Heroicon;
@@ -176,7 +177,9 @@ abstract class TripsPage extends AiPage
             return;
         }
         if ($over = $view->first(fn ($t) => $t['over'])) {
-            $this->error = "{$over['title']} has more boxes than truck {$over['truck']} can carry. Move a barangay to another trip first.";
+            $this->error = BoxSizes::on()
+                ? "{$over['title']} needs more space than truck {$over['truck']} has (".BoxSizes::fmt($over['space'])." of {$over['capacity']}). Move a barangay to another trip first."
+                : "{$over['title']} has more boxes than truck {$over['truck']} can carry. Move a barangay to another trip first.";
 
             return;
         }
@@ -214,17 +217,26 @@ abstract class TripsPage extends AiPage
                 return [
                     'place' => $p['place'], 'barangay' => Str::afterLast($p['place'], ' › '),
                     'city' => Str::of($p['place'])->beforeLast(' › ')->afterLast(' › ')->toString(),
-                    'n' => $us->sum('n'), 'receivers' => $us->count(), 'big' => $us->sortByDesc('n')->first(),
+                    'n' => $us->sum('n'), 'space' => $us->sum('space'), 'receivers' => $us->count(), 'big' => $us->sortByDesc('n')->first(),
                 ];
             })->filter(fn ($p) => $p['n'] > 0)->values();
             $all = collect($t['places'])->flatMap(fn ($p) => $p['units'])->map(fn ($k) => $units[$k] ?? null)->filter();
             $truck = $trucks[$t['truck_id']] ?? null;
             $n = $all->sum('n');
+            $space = BoxSizes::half($all->sum('space'));
             $cap = $truck['capacity'] ?? 0;
+            $mix = [];
+            foreach ($all as $u) {
+                foreach ($u['mix'] ?? [] as $name => $c) {
+                    $mix[$name] = ($mix[$name] ?? 0) + $c;
+                }
+            }
+            arsort($mix);
 
             return [
                 'i' => $i, 'title' => $word.' '.($i + 1), 'truck_id' => $t['truck_id'], 'truck' => $truck['plate'] ?? '—', 'capacitySet' => $truck['set'] ?? false,
-                'capacity' => $cap, 'boxes' => $n, 'pct' => $cap ? min(100, (int) round($n / $cap * 100)) : 0, 'over' => $cap && $n > $cap,
+                'capacity' => $cap, 'boxes' => $n, 'space' => $space, 'mix' => BoxSizes::mixText($mix),
+                'pct' => $cap ? min(100, (int) round($space / $cap * 100)) : 0, 'over' => $cap && $space > $cap,
                 'prio' => $all->sum('prio'), 'retry' => $all->sum('retry'), 'dest' => $t['dest'], 'why' => $t['why'], 'places' => $places,
             ];
         })->filter(fn ($t) => $t['boxes'] > 0)->values();
@@ -258,6 +270,8 @@ abstract class TripsPage extends AiPage
             'dests' => $planner->destinations(),
             'waitingPlaces' => $waiting->groupBy(fn ($u) => TripPlanner::placeKey($u))->map(fn ($g, $k) => ['place' => $k, 'n' => $g->sum('n'), 'prio' => $g->sum('prio') + $g->sum('retry')])->sortByDesc('prio')->values(),
             'word' => $this->mode === 'transfer' ? 'transfer' : 'trip',
+            'bySpace' => BoxSizes::on(),
+            'readySpace' => BoxSizes::half($units->sum('space')),
         ];
     }
 }

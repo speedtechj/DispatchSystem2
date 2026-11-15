@@ -34,7 +34,7 @@ self.addEventListener('activate', (event) => {
 function isAppFile(url) {
     if (url.origin === self.location.origin) {
         return /^\/(build|css|js|fonts|vendor)\//.test(url.pathname)
-            || /^\/pwa\/[a-z]+\/icon-\d+\.png$/.test(url.pathname)
+            || /^\/pwa\/[a-z]+\/icon(-\d+\.png|\/\d+)$/.test(url.pathname)
             || BRAND_FILES.includes(url.pathname)
             || url.pathname === '/favicon.svg';
     }

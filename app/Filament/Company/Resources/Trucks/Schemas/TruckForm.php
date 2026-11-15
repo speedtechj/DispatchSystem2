@@ -42,11 +42,13 @@ class TruckForm
                                     ->required()
                                     ->maxLength(255),
                                 TextInput::make('capacity')
-                                    ->label('Capacity (boxes)')
+                                    ->label(fn () => \App\Support\BoxSizes::on() ? 'Capacity (space, in normal boxes)' : 'Capacity (boxes)')
                                     ->numeric()
                                     ->minValue(1)
                                     ->placeholder('60')
-                                    ->helperText('About how many boxes fit. Used to plan trips; empty means 60.'),
+                                    ->helperText(fn () => \App\Support\BoxSizes::on()
+                                        ? 'How many of your normal box fit. Bigger boxes take more space: Settings → Box sizes. Empty means 50.'
+                                        : 'About how many boxes fit. Used to plan trips; empty means 50.'),
                                 MarkdownEditor::make('Note')
                                     ->columnSpanFull(),
                             ]),

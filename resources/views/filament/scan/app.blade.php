@@ -128,7 +128,7 @@
                 <span class="ds-sa__ring is-tiny">
                     <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring($progress['loaded'] ?? 0, $progress['total'] ?? 0) }}"/></svg>
                 </span>
-                <span class="ds-sa__count"><strong>{{ $progress['loaded'] ?? 0 }}</strong><small>of {{ $progress['total'] ?? 0 }}</small></span>
+                <span class="ds-sa__count"><strong>{{ $progress['loaded'] ?? 0 }}</strong><small>of {{ $progress['total'] ?? 0 }}</small>@if ($space)<small class="ds-sa__space">{{ \App\Support\BoxSizes::fmt($space['loaded']) }}{{ $space['cap'] ? ' / '.$space['cap'] : '' }} space</small>@endif</span>
                 <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button>
             </header>
 
@@ -174,8 +174,9 @@
                     <div class="ds-sa__hit">
                         <span class="ds-sa__mark is-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
                         <span><strong>{{ $box->invoice }}</strong><small>{{ $def['ok'] }}</small></span>
-                        @if ($box->boxtype)<em>{{ $box->boxtype }}</em>@endif
+                        @if ($boxSize && $boxSize['space'] != 1)<em class="ds-sa__size">{{ $boxSize['name'] }} · takes {{ \App\Support\BoxSizes::fmt($boxSize['space']) }} space</em>@elseif ($box->boxtype)<em>{{ $box->boxtype }}</em>@endif
                     </div>
+                    @if ($this->mode === 'count')<p class="ds-sa__msg">{{ $message }}</p>@endif
                     @if ($route)
                         <div @class(['ds-sx__tile', 'is-truck' => ($route['kind'] ?? '') === 'truck']) style="--sx: {{ $route['color'] ?? '#1d6fb8' }}">
                             <small>{{ ($route['kind'] ?? '') === 'truck' ? 'Put it on the truck' : 'Put this box in' }}</small>
@@ -309,7 +310,33 @@
                 <span><strong class="is-bad">{{ $today['problems'] }}</strong><small>problems today</small></span>
             </div>
             <p class="ds-sa__note">{{ $complete ? 'Everything on this '.$def['kind'].' is scanned. The office sees it right away.' : 'You can come back and finish later; every scan is already saved.' }}</p>
+            @if ($topUp && $topUp['room'] >= 1)
+                <div class="ds-sx__topup">
+                    <strong>Room for about {{ \App\Support\BoxSizes::fmt($topUp['room']) }} more on the truck</strong>
+                    @forelse ($topUp['boxes'] as $tb)
+                        <div class="ds-sx__toprow" wire:key="tu-{{ $tb['id'] }}">
+                            <span><b>{{ $tb['invoice'] }} · {{ $tb['name'] }}</b><small>{{ $tb['place'] }}{{ $tb['section'] ? ' · section '.$tb['section'] : '' }}{{ $tb['space'] != 1 ? ' · takes '.\App\Support\BoxSizes::fmt($tb['space']) : '' }}</small></span>
+                            <button type="button" wire:click="topUpAdd({{ $tb['id'] }})">Add</button>
+                        </div>
+                    @empty
+                        <small>No waiting boxes for these provinces.</small>
+                    @endforelse
+                    <small>Waiting boxes for the same provinces, oldest and priority first. Add one, then scan it onto the truck.</small>
+                </div>
+            @endif
+            @if ($countResult)
+                <div class="ds-sx__open">
+                    <strong>Section {{ $countResult['code'] }}: {{ $countResult['found'] }} found{{ $countResult['moved'] ? ' · '.$countResult['moved'].' moved in' : '' }}</strong>
+                    @if (count($countResult['missing']))
+                        <span>{{ count($countResult['missing']) }} missing: {{ implode(', ', array_slice($countResult['missing'], 0, 12)) }}{{ count($countResult['missing']) > 12 ? '…' : '' }}</span>
+                    @else
+                        <span>✓ Nothing missing.</span>
+                    @endif
+                    <button type="button" class="ds-sa__secondary" wire:click="closeCount" wire:confirm="Close the count of section {{ $countResult['code'] }}?">Close the count</button>
+                </div>
+            @endif
             @if (count($openSets))
+                @if ($noReason)<p class="ds-sx__stop">⛔ Not ready to leave: {{ $noReason }} {{ $noReason === 1 ? 'customer has' : 'customers have' }} boxes left behind with no reason.</p>@endif
                 <div class="ds-sx__open">
                     <strong>{{ count($openSets) }} {{ count($openSets) === 1 ? 'customer is' : 'customers are' }} missing boxes</strong>
                     @foreach ($openSets as $os)

@@ -15,11 +15,11 @@ class WrongHubBox extends Model
 
     public const REASONS = ['wrong_hub' => 'Wrong hub', 'refused' => 'Refused by receiver', 'moved' => 'Receiver moved', 'wrong_address' => 'Wrong address', 'other' => 'Other'];
 
-    public const STATUS = ['waiting' => 'Waiting', 'sent_hub' => 'Sent to the right hub', 'back' => 'Back to the warehouse', 'done' => 'Done'];
+    public const STATUS = ['waiting' => 'Waiting', 'sent_hub' => 'Sent to the right hub', 'returning' => 'On a return shipment', 'back' => 'Back at the warehouse', 'done' => 'Done'];
 
     protected function casts(): array
     {
-        return ['done_at' => 'datetime'];
+        return ['done_at' => 'datetime', 'received_at' => 'datetime'];
     }
 
     public function invoice(): BelongsTo
@@ -40,6 +40,11 @@ class WrongHubBox extends Model
     public function correctHub(): BelongsTo
     {
         return $this->belongsTo(Logistichub::class, 'correct_hub_id');
+    }
+
+    public function returnShipment(): BelongsTo
+    {
+        return $this->belongsTo(ReturnShipment::class);
     }
 
     public function shipment(): BelongsTo

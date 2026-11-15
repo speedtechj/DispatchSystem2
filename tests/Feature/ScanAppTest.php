@@ -48,7 +48,7 @@ it('lets warehouse, partner hub and office accounts in, but not drivers', functi
 });
 
 it('gives each account type its own scans', function () {
-    expect(array_keys(ScanModes::for(scanUser('warehouse@example.com'))))->toBe(['unload', 'load', 'wh_load', 'wh_unload', 'return', 'port'])
+    expect(array_keys(ScanModes::for(scanUser('warehouse@example.com'))))->toBe(['unload', 'load', 'wh_load', 'wh_unload', 'return', 'port', 'ret_receive'])
         ->and(array_keys(ScanModes::for(scanUser('company@example.com'))))->toBe(['hub_load', 'return', 'ship_receive'])
         ->and(array_keys(ScanModes::for(scanUser('admin@example.com'))))->toBe(['unload', 'load', 'return', 'port'])
         ->and(ScanModes::for(scanUser('driver@example.com')))->toBe([]);
@@ -116,7 +116,7 @@ it('does not open a container or trip that is not yours, or a scan your account 
 
 it('installs as its own app', function () {
     $this->get('/pwa/scan/manifest.webmanifest')->assertOk()->assertJsonPath('short_name', 'Scan')->assertJsonPath('scope', '/scan');
-    $this->get('/scan/login')->assertOk()->assertSee('Load and unload, box by box.')->assertSee('/pwa/scan/manifest.webmanifest', false);
+    $this->get('/scan/login')->assertOk()->assertSee('Load and unload, box by box.')->assertSee('/pwa/scan/manifest"', false);
 });
 
 it('receives a warehouse transfer and adds the box to this warehouse', function () {

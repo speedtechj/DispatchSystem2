@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Models\Warehouse;
 use App\Models\Whdeliverylog;
 use App\Services\TripAssignment;
+use App\Support\BoxSizes;
 use Filament\Facades\Filament;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -23,7 +24,7 @@ use Illuminate\Support\Str;
  * the rules are kept here in code:
  *  - boxes for the same receiver are never split,
  *  - priority and tried-before boxes go first,
- *  - a truck is never filled over its capacity,
+ *  - a truck is never filled over its capacity (in space: Settings → Box sizes; a big box takes more),
  *  - only free trucks of your own hub, only boxes that are not on a trip yet.
  * Trip numbers are given by the system when the trips are created, as always.
  */
@@ -102,6 +103,8 @@ class TripPlanner
                 'barangay' => $clean($first->receiver_barangay) ?: 'No barangay',
                 'ids' => $g->pluck('id')->values()->all(),
                 'n' => $g->count(),
+                'space' => BoxSizes::half($g->sum(fn ($b) => BoxSizes::spaceOf($b['inv']->boxtype))),
+                'mix' => $g->countBy(fn ($b) => BoxSizes::nameOfType($b['inv']->boxtype))->all(),
                 'prio' => $g->filter(fn ($b) => $b['inv']->is_priority)->count(),
                 'retry' => $g->filter(fn ($b) => isset($tried[$b['inv']->id]))->count(),
             ];
@@ -129,7 +132,7 @@ class TripPlanner
     {
         return Truck::where('is_active', true)->where('is_assigned', false)
             ->where('logistichub_id', $this->user->logistichub_id)->orderBy('plate_no')->get()
-            ->map(fn (Truck $t) => ['id' => $t->id, 'plate' => $t->plate_no, 'capacity' => (int) ($t->capacity ?: self::DEFAULT_CAPACITY), 'set' => (bool) $t->capacity, 'kind' => $t->description ?: $t->category]);
+            ->map(fn (Truck $t) => ['id' => $t->id, 'plate' => $t->plate_no, 'capacity' => \App\Support\TruckSpace::usable($t, self::DEFAULT_CAPACITY), 'set' => (bool) ($t->capacity ?: \App\Support\TruckSpace::fit($t)), 'kind' => $t->description ?: $t->category]);
     }
 
     /** Where a trip can go: hubs for delivery trips, other warehouses for transfers. */
@@ -161,7 +164,7 @@ class TripPlanner
         }
 
         $places = $units->groupBy(fn ($u) => static::placeKey($u))->map(fn ($g, $k) => [
-            'place' => $k, 'boxes' => $g->sum('n'), 'receivers' => $g->count(), 'biggest_receiver' => $g->max('n'),
+            'place' => $k, 'boxes' => $g->sum('n'), 'space' => $g->sum('space'), 'receivers' => $g->count(), 'biggest_receiver' => $g->max('space'),
             'priority' => $g->sum('prio'), 'tried_before' => $g->sum('retry'),
         ])->sortBy('place')->values();
 
@@ -173,7 +176,10 @@ class TripPlanner
                 $out = Ai::json('trips',
                     'You plan delivery trips for a Philippine balikbayan box cargo company. Group places that are close together '
                     .'(same province first, then same or neighbouring city/municipality, then barangays) onto the free trucks. '
-                    .'Each truck has a capacity in boxes: do not plan more boxes than the capacity. Places with priority or tried-before boxes must be planned first. '
+                    .(BoxSizes::on()
+                        ? 'Each truck has a capacity in space (a normal box is 1, bigger boxes take more): the total "space" of the places on a truck must not go over its capacity. '
+                        : 'Each truck has a capacity in boxes: do not plan more boxes than the capacity. ')
+                    .'Places with priority or tried-before boxes must be planned first. '
                     .'You may leave places out when there is no room (they wait for the next day). Use each truck at most once. '
                     .($this->mode === 'transfer' ? 'These are transfers to other warehouses: also pick the destination warehouse id closest to the places. ' : '')
                     .'Return {"trips": [{"truck_id": id, '.($this->mode === 'transfer' ? '"warehouse_id": id, ' : '').'"places": ["exact place text", ...], "why": "one short reason"}], "note": "one or two short sentences: what was planned and what was left for later"}.',
@@ -223,7 +229,7 @@ class TripPlanner
             }
             $plan[$ti] ??= ['truck_id' => $trucks[$ti]['id'], 'dest' => null, 'places' => [], 'why' => 'Places in '.$current.', next to each other in the list.'];
             $plan[$ti]['places'][] = $p['place'];
-            $load += min($p['boxes'], $trucks[$ti]['capacity'] - $load);
+            $load += min($p['space'], $trucks[$ti]['capacity'] - $load);
         }
 
         return array_values($plan);
@@ -256,15 +262,15 @@ class TripPlanner
                     continue;
                 }
                 $group = ($byPlace[$placeName] ?? collect())->reject(fn ($u) => isset($usedUnits[$u['key']]))
-                    ->sortBy(fn ($u) => [-($u['prio'] + $u['retry']), -$u['n']]);
+                    ->sortBy(fn ($u) => [-($u['prio'] + $u['retry']), -$u['space']]);
                 $keys = [];
                 foreach ($group as $u) {
-                    if ($load + $u['n'] > $truck['capacity']) {
+                    if ($load + $u['space'] > $truck['capacity']) {
                         continue; // the whole receiver waits; never split
                     }
                     $keys[] = $u['key'];
                     $usedUnits[$u['key']] = true;
-                    $load += $u['n'];
+                    $load += $u['space'];
                 }
                 if ($keys) {
                     $trip['places'][] = ['place' => $placeName, 'units' => $keys];
@@ -278,21 +284,21 @@ class TripPlanner
         }
 
         // boxes that were not planned: put them on a trip with room in the same province (priority and tried-before first)
-        $waiting = $units->reject(fn ($u) => isset($usedUnits[$u['key']]))->sortBy(fn ($u) => [-($u['prio'] + $u['retry']), -$u['n']]);
+        $waiting = $units->reject(fn ($u) => isset($usedUnits[$u['key']]))->sortBy(fn ($u) => [-($u['prio'] + $u['retry']), -$u['space']]);
         foreach ($waiting as $u) {
             $place = static::placeKey($u);
             $sameProvince = collect($trips)->keys()->filter(fn ($i) => collect($trips[$i]['places'])->contains(fn ($pl) => str_starts_with($pl['place'], $u['province'].' ›')));
             // a place already on a trip goes there first
             $order = $sameProvince->sortBy(fn ($i) => collect($trips[$i]['places'])->contains('place', $place) ? 0 : 1);
             foreach ($order as $i) {
-                if ($trips[$i]['load'] + $u['n'] <= $trips[$i]['capacity']) {
+                if ($trips[$i]['load'] + $u['space'] <= $trips[$i]['capacity']) {
                     $slot = collect($trips[$i]['places'])->search(fn ($pl) => $pl['place'] === $place);
                     if ($slot === false) {
                         $trips[$i]['places'][] = ['place' => $place, 'units' => [$u['key']]];
                     } else {
                         $trips[$i]['places'][$slot]['units'][] = $u['key'];
                     }
-                    $trips[$i]['load'] += $u['n'];
+                    $trips[$i]['load'] += $u['space'];
                     $usedUnits[$u['key']] = true;
                     break;
                 }
@@ -303,7 +309,7 @@ class TripPlanner
 
         return [
             'trips' => $trips,
-            'left' => $left->groupBy(fn ($u) => static::placeKey($u))->map(fn ($g, $k) => $k.' ('.$g->sum('n').')')->values()->all(),
+            'left' => $left->groupBy(fn ($u) => static::placeKey($u))->map(fn ($g, $k) => $k.' ('.$g->sum('n').(BoxSizes::on() && $g->sum('space') != $g->sum('n') ? ' · '.BoxSizes::fmt($g->sum('space')).' space' : '').')')->values()->all(),
             'leftPrio' => $left->sum('prio'),
             'note' => $note,
             'ai' => $ai,
