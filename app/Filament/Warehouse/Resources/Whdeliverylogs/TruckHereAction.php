@@ -4,6 +4,7 @@ namespace App\Filament\Warehouse\Resources\Whdeliverylogs;
 
 use App\Models\Whdeliverylog;
 use App\Support\Boxes\Crossdock;
+use App\Support\Boxes\TruckSets;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 
@@ -25,8 +26,11 @@ class TruckHereAction
             ->modalDescription(fn (Whdeliverylog $record) => $record->truck_here
                 ? 'Boxes for '.($record->warehouse?->name ?? 'this warehouse').' go to their section again. The boxes already on the truck stay on this trip.'
                 : 'While unloading any container here, boxes for '.($record->warehouse?->name ?? 'this warehouse').' go straight onto this truck. Scanners scan as always. It turns off by itself when you lock the trip.')
-            ->action(function (Whdeliverylog $record): void {
+            ->schema(fn (Whdeliverylog $record) => $record->truck_here ? TruckSets::reasonFields($record) : [])
+            ->modalWidth(fn (Whdeliverylog $record) => $record->truck_here && TruckSets::open($record) ? '3xl' : 'md')
+            ->action(function (Whdeliverylog $record, array $data): void {
                 if ($record->truck_here) {
+                    TruckSets::saveReasons($record, $data['why'] ?? []);
                     Crossdock::switchOff($record);
                     Notification::make()->title('Switched off. Boxes for '.($record->warehouse?->name ?? 'that warehouse').' go to their section.')->success()->send();
 

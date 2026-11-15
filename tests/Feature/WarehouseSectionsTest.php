@@ -63,6 +63,8 @@ beforeEach(function () {
     $this->rosa = $box('S-301', 'Rosa Lim', 'Tarlac');
     $this->ben = $box('S-302', 'Ben Uy', 'Nueva Ecija');
     $this->nop = $box('S-401', 'Joy Tan', '');
+    $this->otherContainer = $other;
+    $this->box = $box;
 });
 
 function unload($test)
@@ -138,6 +140,46 @@ it('lets the office switch the truck on in the transfer trip, only when a sectio
     Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
         ->callTableAction('truckHere', $trip)->assertNotified('No section goes to Tarlac Warehouse yet');
     expect($trip->fresh()->truck_here)->toBeFalse();
+});
+
+it('on the TRUCK screen shows where the customer\'s other boxes are, and brings one from the section', function () {
+    $this->actingAs($this->user);
+    $trip = Whdeliverylog::create(['truck_id' => Truck::value('id'), 'warehouse_id' => $this->tarlac->id, 'user_whid' => $this->wh, 'departure_date' => today(), 'delivery_date' => today(), 'is_active' => true, 'user_id' => $this->user->id]);
+    $ana1 = ($this->box)('S-501', 'Ana Cruz', 'Tarlac');
+    $ana1->forceFill(['is_verified' => true, 'wh_section_id' => $this->T->id, 'sectioned_at' => now()])->save();
+    $ana2 = ($this->box)('S-502', 'Ana Cruz', 'Tarlac');
+    $ana3 = ($this->box)('S-503', 'Ana Cruz', 'Tarlac', $this->otherContainer->id);
+    \App\Support\Boxes\Crossdock::switchOn($trip);
+
+    unload($this)->call('scan', 'S-502')->assertSet('route.kind', 'truck')
+        ->assertSee('Box 1 · S-501: in section T. Bring it to the truck too.')
+        ->assertSee('in another container')
+        ->assertSee('Bring S-501 from section T')
+        ->call('addSetBox', $ana1->id)->assertNotified()
+        ->assertSee('added, scan it at the truck door')->assertDontSee('Bring S-501 from section T');
+
+    $row = Whtripinvoice::where('whdeliverylog_id', $trip->id)->where('invoice_id', $ana1->id)->first();
+    expect($row)->not->toBeNull()->and((bool) $row->is_loaded)->toBeFalse();
+
+    $open = \App\Support\Boxes\TruckSets::open($trip);
+    expect($open)->toHaveCount(1)
+        ->and($open[0]['have'])->toBe(1)->and($open[0]['of'])->toBe(3)
+        ->and(collect($open[0]['missing'])->pluck('invoice')->all())->toBe(['S-501', 'S-503'])
+        ->and($open[0]['missing'][1]['where'])->toContain('not unloaded yet');
+
+    // Truck left: a reason is needed for each box left behind.
+    $this->actingAs(User::where('email', 'warehouse@example.com')->firstOrFail());
+    Filament::setCurrentPanel(Filament::getPanel('warehouse'));
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->callTableAction('truckHere', $trip, data: ['why' => [$ana1->id => 'not_found']])
+        ->assertHasTableActionErrors();
+    expect($trip->fresh()->truck_here)->toBeTrue();
+
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->callTableAction('truckHere', $trip, data: ['why' => [$ana1->id => 'not_found', $ana3->id => 'not_arrived']])
+        ->assertHasNoTableActionErrors();
+    expect($trip->fresh()->truck_here)->toBeFalse()
+        ->and(SetSplit::where('whdeliverylog_id', $trip->id)->pluck('reason', 'invoice_id')->all())->toBe([$ana1->id => 'not_found', $ana3->id => 'not_arrived']);
 });
 
 it('with the label scan on, saves boxes in a section only when its QR is scanned', function () {

@@ -156,7 +156,13 @@ class WhdeliverylogsTable
                             //  dd(Auth::user()->hasRole('super_admin'));
                             return Auth::user()->is_admin ? false : true;
                         })
-                        ->action(function ($record) {
+                        // Before the truck leaves: customers not complete on it, with a reason for each box left behind.
+                        ->schema(fn ($record) => $record->is_lock ? [] : \App\Support\Boxes\TruckSets::reasonFields($record))
+                        ->modalWidth(fn ($record) => ! $record->is_lock && \App\Support\Boxes\TruckSets::open($record) ? '3xl' : 'md')
+                        ->action(function ($record, array $data) {
+                            if (! $record->is_lock) {
+                                \App\Support\Boxes\TruckSets::saveReasons($record, $data['why'] ?? []);
+                            }
                             $record->update([
                                 'is_lock' => ! $record->is_lock,
                             ]);

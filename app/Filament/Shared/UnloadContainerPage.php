@@ -182,6 +182,7 @@ abstract class UnloadContainerPage extends Page
         if ($trip = Crossdock::load($invoice, $warehouseId, $section)) {
             $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => null])->save();
             $this->route = ['kind' => 'truck', 'code' => 'TRUCK', 'name' => $trip->warehouse?->name ?? $section->goesTo(), 'trip' => $trip->trip_number, 'plate' => $trip->truck?->plate_no, 'color' => '#e2700c'];
+            $this->setInfo = \App\Support\Boxes\TruckSets::card($invoice, $trip, $warehouseId) ?? $this->setInfo;
 
             return "{$code} verified · onto truck {$trip->trip_number}.";
         }
@@ -249,6 +250,22 @@ abstract class UnloadContainerPage extends Page
         $this->lastMessage = "{$invoice->invoice} stays in section ".($section?->code ?? '').'. It goes on the next truck.';
 
         return true;
+    }
+
+    /** TRUCK screen: "Bring it to the truck too" for another box of the customer that is in its section. */
+    public function addSetBox(int $ofInvoiceId, int $boxId): ?string
+    {
+        $container = $this->selectedContainer();
+        $of = $container ? Invoice::where('container_id', $container->id)->find($ofInvoiceId) : null;
+        $warehouseId = $this->warehouseId($container);
+        $trip = $of ? Crossdock::tripOf($of, $warehouseId) : null;
+        $box = $trip ? \App\Support\Boxes\TruckSets::add($of, $boxId, $trip, $warehouseId) : null;
+        if (! $box) {
+            return null;
+        }
+        $this->setInfo = \App\Support\Boxes\TruckSets::card($of, $trip, $warehouseId);
+
+        return $box->invoice;
     }
 
     /** The trucks here now at this warehouse (switched on in their transfer trip). */

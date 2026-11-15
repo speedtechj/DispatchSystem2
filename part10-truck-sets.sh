@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Dispatch System — Warehouse sections
+# Dispatch System — Part 10 · truck here keeps a customer's boxes together
 # Only the files changed in this step; the rest of your project is left as it is.
 #
 #   cd ~/Desktop/Project/DispatchSystem
-#   bash ~/Desktop/Project/sections.sh
+#   bash ~/Desktop/Project/part10-truck-sets.sh
 
 set -euo pipefail
 [ -f artisan ] || { echo "Run this from inside your DispatchSystem project folder (the one with 'artisan')."; exit 1; }
@@ -14,194 +14,24 @@ BACKUP="../DispatchSystem-backup-$STAMP.tar.gz"
 echo "▶ Backing up the project to $BACKUP"
 tar -czf "$BACKUP" --exclude=vendor --exclude=node_modules --exclude=storage/logs .
 
-echo "▶ Writing 22 files"
-
-# ---------------------------------------------------------------- app/Filament/Pages/WarehouseSections.php
-mkdir -p 'app/Filament/Pages'
-cat > 'app/Filament/Pages/WarehouseSections.php' <<'DISPATCH_FILE_END_0'
-<?php
-
-namespace App\Filament\Pages;
-
-use App\Models\Boxes\WhSection;
-use App\Models\Logistichub;
-use App\Models\Warehouse;
-use App\Support\Boxes\Sections;
-use BackedEnum;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
-use UnitEnum;
-
-/**
- * Admin → Settings → Warehouse sections: each section of a warehouse is for one destination,
- * chosen by the receiver's province. The Scan app shows the section for each box at unload.
- */
-class WarehouseSections extends Page
-{
-    protected string $view = 'filament.boxes.sections';
-
-    protected static string|UnitEnum|null $navigationGroup = 'Settings';
-
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedSquares2x2;
-
-    protected static ?string $navigationLabel = 'Warehouse sections';
-
-    protected static ?string $title = 'Settings · Warehouse sections';
-
-    protected static ?string $slug = 'warehouse-sections';
-
-    protected static ?int $navigationSort = 93;
-
-    public ?int $warehouseId = null;
-
-    /** @var list<array{id: ?int, code: string, name: string, color: string, kind: string, to: string, provinces: string}> */
-    public array $rows = [];
-
-    public bool $labelScan = false;
-
-    public const COLORS = ['#1d6fb8', '#17895e', '#8a4bd1', '#e8590c', '#c8372d', '#0e2433', '#b07400', '#0f8b8d'];
-
-    public static function canAccess(): bool
-    {
-        return Sections::ready() && (bool) Auth::user()?->hasRole('super_admin');
-    }
-
-    public function mount(): void
-    {
-        $this->warehouseId = Auth::user()?->warehouse_id ?? Warehouse::orderBy('id')->value('id');
-        $this->loadRows();
-    }
-
-    public function updatedWarehouseId(): void
-    {
-        $this->loadRows();
-    }
-
-    protected function loadRows(): void
-    {
-        $this->rows = WhSection::where('warehouse_id', $this->warehouseId)->orderBy('sort')->orderBy('code')->get()
-            ->map(fn (WhSection $s) => ['id' => $s->id, 'code' => $s->code, 'name' => $s->name, 'color' => $s->color, 'kind' => $s->kind,
-                'to' => $s->logistichub_id ? 'hub:'.$s->logistichub_id : ($s->to_warehouse_id ? 'wh:'.$s->to_warehouse_id : ''),
-                'provinces' => implode(', ', (array) $s->provinces)])->all();
-        $this->labelScan = Sections::labelScan($this->warehouseId);
-    }
-
-    public function addRow(): void
-    {
-        $used = collect($this->rows)->pluck('code')->all();
-        $code = collect(range('A', 'Z'))->first(fn ($l) => ! in_array($l, $used, true)) ?? '';
-        $this->rows[] = ['id' => null, 'code' => $code, 'name' => '', 'color' => self::COLORS[count($this->rows) % count(self::COLORS)], 'kind' => 'area', 'to' => '', 'provinces' => ''];
-    }
-
-    public function removeRow(int $i): void
-    {
-        unset($this->rows[$i]);
-        $this->rows = array_values($this->rows);
-    }
-
-    /** A first set of sections: one per partner hub, plus Returns (R) and Check address (X). */
-    public function suggest(): void
-    {
-        if ($this->rows) {
-            return;
-        }
-        foreach (Logistichub::where('is_active', true)->orderBy('id')->get() as $i => $hub) {
-            $this->rows[] = ['id' => null, 'code' => chr(65 + $i), 'name' => $hub->hub_name, 'color' => self::COLORS[$i % count(self::COLORS)], 'kind' => 'area', 'to' => 'hub:'.$hub->id, 'provinces' => ''];
-        }
-        $this->rows[] = ['id' => null, 'code' => 'R', 'name' => 'Returns & wrong hub', 'color' => '#c8372d', 'kind' => 'returns', 'to' => '', 'provinces' => ''];
-        $this->rows[] = ['id' => null, 'code' => 'X', 'name' => 'Check address', 'color' => '#b07400', 'kind' => 'check', 'to' => '', 'provinces' => ''];
-    }
-
-    public function save(): void
-    {
-        $this->validate([
-            'warehouseId' => 'required|integer|exists:warehouses,id',
-            'rows' => 'array',
-            'rows.*.code' => 'required|string|max:8|distinct',
-            'rows.*.name' => 'required|string|max:80',
-            'rows.*.color' => ['required', 'regex:/^#[0-9a-fA-F]{6}$/'],
-            'rows.*.kind' => 'required|in:'.implode(',', array_keys(WhSection::KINDS)),
-            'rows.*.to' => ['nullable', 'regex:/^(hub|wh):\d+$/'],
-            'rows.*.provinces' => 'nullable|string|max:2000',
-        ], ['rows.*.code.distinct' => 'Two sections have the same code.', 'rows.*.name.required' => 'Give each section a name.']);
-
-        // a province can only be in one section
-        $seen = [];
-        foreach ($this->rows as $r) {
-            foreach ($this->provinceList($r['provinces']) as $p) {
-                $k = Sections::clean($p);
-                if (isset($seen[$k]) && $seen[$k] !== $r['code']) {
-                    $this->addError('rows', "\"{$p}\" is in section {$seen[$k]} and {$r['code']}. A province can be in one section only.");
-
-                    return;
-                }
-                $seen[$k] = $r['code'];
-            }
-        }
-
-        DB::transaction(function () {
-            $keep = [];
-            foreach (array_values($this->rows) as $i => $r) {
-                [$type, $id] = array_pad(explode(':', (string) $r['to']), 2, null);
-                $s = ($r['id'] ? WhSection::where('warehouse_id', $this->warehouseId)->find($r['id']) : null) ?? new WhSection(['warehouse_id' => $this->warehouseId]);
-                $s->fill([
-                    'code' => mb_strtoupper(trim($r['code'])), 'name' => trim($r['name']), 'color' => $r['color'], 'kind' => $r['kind'],
-                    'logistichub_id' => $type === 'hub' ? (int) $id : null, 'to_warehouse_id' => $type === 'wh' ? (int) $id : null,
-                    'provinces' => $this->provinceList($r['provinces']) ?: null, 'sort' => $i, 'is_active' => true,
-                ])->save();
-                $keep[] = $s->id;
-            }
-            WhSection::where('warehouse_id', $this->warehouseId)->whereNotIn('id', $keep ?: [0])->delete();
-        });
-        Sections::setLabelScan($this->warehouseId, $this->labelScan);
-        Sections::forget();
-        $this->loadRows();
-        Notification::make()->title('Warehouse sections saved')->success()->send();
-    }
-
-    /** @return list<string> */
-    protected function provinceList(?string $text): array
-    {
-        return collect(preg_split('/[,;\n]+/', (string) $text))->map(fn ($p) => trim($p))->filter()->unique(fn ($p) => Sections::clean($p))->values()->all();
-    }
-
-    protected function getViewData(): array
-    {
-        $counts = WhSection::where('warehouse_id', $this->warehouseId)->withCount(['invoices' => fn ($q) => $q->where('is_verified', true)
-            ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))->where('is_assigned', false)->where('wh_is_assigned', false)])
-            ->pluck('invoices_count', 'id');
-
-        return [
-            'warehouses' => Warehouse::orderBy('name')->pluck('name', 'id'),
-            'targets' => collect(['' => '— nobody (returns, check address)'])
-                ->merge(Logistichub::orderBy('hub_name')->get()->mapWithKeys(fn ($h) => ['hub:'.$h->id => 'Hub · '.$h->hub_name]))
-                ->merge(Warehouse::where('id', '!=', $this->warehouseId)->orderBy('name')->get()->mapWithKeys(fn ($w) => ['wh:'.$w->id => 'Warehouse · '.$w->name])),
-            'counts' => $counts,
-            'kinds' => WhSection::KINDS,
-            'colors' => self::COLORS,
-            'labelsUrl' => $this->warehouseId ? route('sections.labels', ['warehouse' => $this->warehouseId]) : null,
-        ];
-    }
-}
-DISPATCH_FILE_END_0
+echo "▶ Writing 9 files"
 
 # ---------------------------------------------------------------- app/Filament/Scan/Pages/ScanApp.php
 mkdir -p 'app/Filament/Scan/Pages'
-cat > 'app/Filament/Scan/Pages/ScanApp.php' <<'DISPATCH_FILE_END_1'
+cat > 'app/Filament/Scan/Pages/ScanApp.php' <<'DISPATCH_FILE_END_0'
 <?php
 
 namespace App\Filament\Scan\Pages;
 
 use App\Models\Ai\AiPhotoCheck;
 use App\Models\BoxPhoto;
+use App\Models\Deliverylog;
 use App\Models\Invoice;
 use App\Models\PhotoSetting;
 use App\Models\Unmanifested;
 use App\Support\Ai\Ai;
 use App\Support\Ai\PhotoCheck;
+use App\Support\BoxSizes;
 use App\Support\Photos\BoxPhotos;
 use App\Support\ScanModes;
 use Filament\Actions\Action;
@@ -277,8 +107,6 @@ class ScanApp extends Page
     #[Locked]
     public ?array $wrongHub = null;
 
-    /** Unload: the list of trucks to pick from is open. */
-    public bool $truckPicker = false;
 
     /** Show the finished and closed ones on the pick list too (greyed out). */
     public bool $showFinished = false;
@@ -455,31 +283,54 @@ class ScanApp extends Page
         $this->message = $station->lastMessage;
     }
 
-    public function openTruckPicker(bool $open = true): void
-    {
-        $this->truckPicker = $open && $this->mode === 'unload';
-    }
-
-    public function truckStart(int $tripId): void
+    /** Unload, TRUCK screen: bring another box of the customer from its section onto the truck too. */
+    public function addSetBox(int $boxId): void
     {
         $station = $this->station();
-        if ($this->mode === 'unload' && $station && method_exists($station, 'startTruck') && $station->startTruck($tripId)) {
-            $this->truckPicker = false;
-            Notification::make()->title('Truck waiting: its boxes now go straight onto it')->success()->send();
+        if ($this->mode !== 'unload' || ! $this->invoiceId || ! $station || ! method_exists($station, 'addSetBox')) {
+            return;
         }
+        $code = $station->addSetBox($this->invoiceId, $boxId);
+        if (! $code) {
+            Notification::make()->title('That box cannot go on the truck now (it is on another trip or not in this warehouse).')->warning()->send();
+
+            return;
+        }
+        $this->setInfo = $station->setInfo;
+        Notification::make()->title($code.' added to the truck: bring it and scan it at the truck door (Load transfer truck).')->success()->send();
     }
 
-    public function truckPause(bool $paused): void
+    /** Load truck, Done screen: room left on the truck, add a waiting box to this trip. */
+    public function topUpAdd(int $invoiceId): void
     {
-        if ($this->mode === 'unload' && ($station = $this->station()) && method_exists($station, 'pauseTruck')) {
-            $station->pauseTruck($paused);
+        $station = $this->station();
+        if ($this->mode !== 'load' || ! $station || ! $station->appChoices()->contains('id', $this->choice)) {
+            return;
         }
+        $trip = Deliverylog::with('truck')->find($this->choice);
+        if (! $trip || ! \App\Support\TruckSpace::topUp($trip)['boxes']->contains('id', $invoiceId)) {
+            Notification::make()->title('That box does not fit or is not free any more.')->warning()->send();
+
+            return;
+        }
+        try {
+            app(\App\Services\TripAssignment::class)->addToDeliveryTrip($trip, Invoice::whereKey($invoiceId)->get());
+        } catch (\DomainException $e) {
+            Notification::make()->title($e->getMessage())->warning()->send();
+
+            return;
+        }
+        Notification::make()->title(Invoice::whereKey($invoiceId)->value('invoice').' added to trip '.$trip->trip_number.': scan it onto the truck')->success()->send();
+        $this->pick($this->choice);
     }
 
-    public function truckStop(): void
+    /** Count a section, Done screen: close the count. */
+    public function closeCount(): void
     {
-        if ($this->mode === 'unload' && ($station = $this->station()) && method_exists($station, 'stopTruck')) {
-            $station->stopTruck();
+        $station = $this->station();
+        if ($this->mode === 'count' && $station && method_exists($station, 'closeCount') && ($r = $station->closeCount())) {
+            Notification::make()->title('Count closed: '.$r['found'].' found, '.count($r['missing']).' missing'.($r['moved'] ? ', '.$r['moved'].' moved in' : ''))->success()->send();
+            $this->home();
         }
     }
 
@@ -618,18 +469,26 @@ class ScanApp extends Page
         $target = null;
         $loadNext = null;
         $team = [];
-        $truck = null;
-        $trucks = collect();
+        $trucks = [];
         $openSets = [];
+        $countResult = null;
+        $topUp = null;
         if (in_array($this->screen, ['scan', 'done'], true) && $mode && $this->choice) {
             $station = $this->station();
             $progress = $station->progress();
             $target = $station->appChoices()->firstWhere('id', $this->choice);
             $loadNext = $this->screen === 'scan' && method_exists($station, 'loadNext') ? $station->loadNext() : null;
             $team = method_exists($station, 'team') ? $station->team() : [];
-            $truck = method_exists($station, 'truckStatus') ? $station->truckStatus() : null;
-            $trucks = $this->truckPicker && method_exists($station, 'truckChoices') ? $station->truckChoices() : collect();
+            $trucks = $this->mode === 'unload' && method_exists($station, 'truckStatus') ? $station->truckStatus() : [];
             $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
+            $countResult = $this->screen === 'done' && method_exists($station, 'countResult') ? $station->countResult() : null;
+            // Box sizes: space on the truck while loading (a big box takes more).
+            if (in_array($this->mode, ['load', 'hub_load'], true) && BoxSizes::on() && ($trip = Deliverylog::with('truck')->find($this->choice))) {
+                $space = BoxSizes::tripSpace($trip, $this->mode === 'hub_load');
+                if ($this->screen === 'done' && $this->mode === 'load' && ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total']) {
+                    $topUp = \App\Support\TruckSpace::topUp($trip);
+                }
+            }
         }
 
         $todayPhotos = BoxPhoto::where('user_id', $user?->id)->whereDate('taken_at', today());
@@ -653,11 +512,15 @@ class ScanApp extends Page
             'target' => $target,
             'loadNext' => $loadNext,
             'team' => $team,
-            'truck' => $truck,
             'trucks' => $trucks,
             'openSets' => $openSets,
+            'countResult' => $countResult,
+            'topUp' => $topUp,
+            'noReason' => collect($openSets)->filter(fn ($o) => collect($o['missing'])->contains(fn ($m) => ! $m['reason']))->count(),
             'splitReasons' => \App\Models\Boxes\SetSplit::REASONS,
-            'box' => $this->invoiceId ? Invoice::find($this->invoiceId) : null,
+            'box' => $box = ($this->invoiceId ? Invoice::find($this->invoiceId) : null),
+            'space' => $space ?? null,
+            'boxSize' => $box && BoxSizes::on() ? ['name' => BoxSizes::nameOfType($box->boxtype), 'space' => BoxSizes::spaceOf($box->boxtype)] : null,
             'conditions' => BoxPhoto::CONDITIONS,
             'shots' => $this->status === 'success' ? $this->shots() : collect(),
             ...$this->aiPhotoFlag(),
@@ -694,323 +557,11 @@ class ScanApp extends Page
         }
     }
 }
-DISPATCH_FILE_END_1
-
-# ---------------------------------------------------------------- app/Filament/Shared/LoadTripPage.php
-mkdir -p 'app/Filament/Shared'
-cat > 'app/Filament/Shared/LoadTripPage.php' <<'DISPATCH_FILE_END_2'
-<?php
-
-namespace App\Filament\Shared;
-
-use App\Filament\Concerns\ScansInvoices;
-use App\Models\Deliverylog;
-use App\Models\Invoice;
-use App\Models\Tripinvoice;
-use App\Models\Boxes\SetSplit;
-use App\Models\User;
-use App\Services\TripAssignment;
-use App\Support\Boxes\BoxSets;
-use App\Support\Maps\LoadOrder;
-use App\Support\Maps\TripSorter;
-use Filament\Forms\Components\Select;
-use Filament\Pages\Page;
-use Filament\Schemas\Schema;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Auth;
-
-/**
- * Scan station: crew scans each box as it goes onto the truck of a trip.
- *
- * Used by the admin hub (Scanload), the warehouse hub (Hubloaded) and partner
- * hubs (LoadTruck, which loads boxes handed over to the hub's own trips).
- */
-abstract class LoadTripPage extends Page
-{
-    use ScansInvoices;
-
-    protected string $view = 'filament.pages.scanload';
-
-    protected static string|\BackedEnum|null $navigationIcon = Heroicon::OutlinedArrowUpTray;
-
-    /** Partner-hub mode: invoices are linked via deliveryloghub_id / is_loaded_hub. */
-    protected static bool $atHub = false;
-
-    /** Set by "Load it anyway" after a "too early" warning. */
-    public bool $forceLoad = false;
-
-    /** The last box that was too early to load (see LoadOrder). */
-    public ?array $early = null;
-
-    /** Where the box just loaded goes: ['zone' => 'front', 'stop' => 7]. */
-    public ?array $spot = null;
-
-    /** The box is for another hub than the trip goes to. */
-    public ?array $wrongHub = null;
-
-    /** The box's set on this truck: "Maria Santos · 2 of 3 · still to load X-103 (C)". */
-    public ?array $setInfo = null;
-
-    public function mount(): void
-    {
-        $this->form->fill();
-    }
-
-    protected function tripColumn(): string
-    {
-        return static::$atHub ? 'deliveryloghub_id' : 'deliverylog_id';
-    }
-
-    protected function loadedColumn(): string
-    {
-        return static::$atHub ? 'is_loaded_hub' : 'is_loaded';
-    }
-
-    protected function tripOptionsQuery(): Builder
-    {
-        return Deliverylog::query()
-            ->with('destination:id,hub_name')
-            ->where('logistichub_id', Auth::user()->logistichub_id)
-            ->whereNotNull('truck_id')
-            ->where('is_active', true)
-            ->latest('id');
-    }
-
-    public function form(Schema $schema): Schema
-    {
-        return $schema
-            ->statePath('data')
-            ->components([
-                Select::make('deliverylog_id')
-                    ->label('Trip')
-                    ->placeholder('Choose the trip you are loading')
-                    ->searchable()
-                    ->live()
-                    ->required()
-                    ->afterStateUpdated(fn () => $this->reset('lastInvoiceId', 'lastStatus', 'lastMessage'))
-                    ->options(fn () => $this->tripOptionsQuery()
-                        ->get()
-                        ->mapWithKeys(fn (Deliverylog $trip) => [
-                            $trip->id => $trip->trip_number.($trip->destination ? ' → '.$trip->destination->hub_name : ''),
-                        ])),
-            ]);
-    }
-
-    protected function selectionField(): ?string
-    {
-        return 'deliverylog_id';
-    }
-
-    protected function selectionLabel(): string
-    {
-        return 'a trip';
-    }
-
-    /** The selected trip, re-checked against what this user may load. */
-    protected function selectedTrip(): ?Deliverylog
-    {
-        return $this->tripOptionsQuery()->find($this->data['deliverylog_id'] ?? null);
-    }
-
-    protected function handleScan(string $code): void
-    {
-        $trip = $this->selectedTrip();
-
-        if (! $trip) {
-            $this->scanResult('danger', 'That trip is no longer open for loading.');
-
-            return;
-        }
-
-        $tripinvoice = Tripinvoice::with('invdata')
-            ->where($this->tripColumn(), $trip->id)
-            ->where('invoice', $code)
-            ->latest('id')
-            ->first();
-
-        if (! $tripinvoice) {
-            $elsewhere = Tripinvoice::with(['deliverylog:id,trip_number', 'invdata'])
-                ->where('invoice', $code)
-                ->latest('id')
-                ->first();
-
-            $this->scanResult(
-                'danger',
-                $elsewhere
-                    ? "{$code} belongs to trip {$elsewhere->deliverylog?->trip_number}, not {$trip->trip_number}."
-                    : "{$code} is not on trip {$trip->trip_number}.",
-                $elsewhere?->invdata ?? $this->invoicesMatching($code)->first(),
-            );
-
-            return;
-        }
-
-        if ($tripinvoice->{$this->loadedColumn()}) {
-            $who = $tripinvoice->loaded_by && $tripinvoice->loaded_by !== Auth::id() ? User::find($tripinvoice->loaded_by)?->first_name : null;
-            $when = $tripinvoice->loaded_at ? \Illuminate\Support\Carbon::parse($tripinvoice->loaded_at)->format('g:i A') : null;
-            $this->scanResult('warning', "{$code} was already loaded".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $tripinvoice->invdata);
-
-            return;
-        }
-
-        $this->early = null;
-        $this->spot = null;
-        $this->wrongHub = null;
-        $this->setInfo = null;
-        if (! $this->forceLoad && ($wrong = $this->wrongHubFor($trip, $tripinvoice))) {
-            $this->wrongHub = $wrong;
-            $this->scanResult('warning', "Wrong hub: {$code} is for {$wrong['for']} (section {$wrong['section']}). This trip goes to {$wrong['trip']}.", $tripinvoice->invdata);
-
-            return;
-        }
-        if (! $this->forceLoad && ($early = LoadOrder::tooEarly($trip, $tripinvoice, static::$atHub))) {
-            $this->early = $early;
-            $this->scanResult('warning', "Too early: {$code} is for stop {$early['stop']}".($early['place'] ? " ({$early['place']})" : '').'. It goes in later, nearer the door. Load stop '.$early['nextStop'].' first.', $tripinvoice->invdata);
-
-            return;
-        }
-        $this->forceLoad = false;
-
-        app(TripAssignment::class)->markLoaded($tripinvoice, atHub: static::$atHub);
-        $tripinvoice->forceFill(['loaded_by' => Auth::id(), 'loaded_at' => now()])->saveQuietly();
-        $this->spot = TripSorter::zoneMap($trip)[$tripinvoice->id] ?? null;
-        if ($tripinvoice->invdata) {
-            $this->setInfo = BoxSets::onTrip($tripinvoice->invdata, $trip, $this->tripColumn(), $this->loadedColumn());
-        }
-
-        $this->scanResult('success', "{$code} loaded.", $tripinvoice->invdata);
-    }
-
-    /** The box's section is for another partner hub than the one this trip goes to. */
-    protected function wrongHubFor(Deliverylog $trip, Tripinvoice $tripinvoice): ?array
-    {
-        $section = $tripinvoice->invdata?->whSection;
-        $to = static::$atHub ? null : $trip->assigned_to;
-        if (! $section || ! $section->logistichub_id || ! $to || (int) $section->logistichub_id === (int) $to) {
-            return null;
-        }
-
-        return ['code' => $tripinvoice->invoice, 'for' => $section->name ?: $section->goesTo(), 'section' => $section->code, 'color' => $section->color,
-            'trip' => $trip->destination?->hub_name ?? 'another hub'];
-    }
-
-    /** Customers whose boxes are not all on the truck, for the Done screen. */
-    public function openSets(): array
-    {
-        $trip = $this->selectedTrip();
-
-        return $trip ? BoxSets::openOnTrip($trip, $this->tripColumn(), $this->loadedColumn()) : [];
-    }
-
-    /** Why a box of a set stays behind. */
-    public function recordSplit(int $invoiceId, string $reason): bool
-    {
-        $trip = $this->selectedTrip();
-        if (! $trip || ! array_key_exists($reason, SetSplit::REASONS)) {
-            return false;
-        }
-        $ok = collect($this->openSets())->pluck('missing')->flatten(1)->contains('id', $invoiceId);
-        if (! $ok) {
-            return false;
-        }
-        SetSplit::updateOrCreate(['invoice_id' => $invoiceId, 'deliverylog_id' => $trip->id],
-            ['reason' => $reason, 'user_id' => Auth::id(), 'set_key' => Invoice::whereKey($invoiceId)->value('set_key')]);
-
-        return true;
-    }
-
-    /** Who loaded how many boxes on this trip. */
-    public function team(): array
-    {
-        $id = $this->data['deliverylog_id'] ?? null;
-        if (! $id) {
-            return [];
-        }
-        $counts = Tripinvoice::where($this->tripColumn(), $id)->where($this->loadedColumn(), true)->whereNotNull('loaded_by')
-            ->selectRaw('loaded_by, count(*) n')->groupBy('loaded_by')->pluck('n', 'loaded_by');
-        $names = User::whereIn('id', $counts->keys())->pluck('first_name', 'id');
-
-        return $counts->sortDesc()->map(fn ($n, $uid) => ['name' => (int) $uid === Auth::id() ? 'You' : ($names[$uid] ?? '?'), 'n' => (int) $n, 'me' => (int) $uid === Auth::id()])->values()->all();
-    }
-
-    /** After "too early" or "wrong hub": load that box anyway. */
-    public function loadAnyway(): void
-    {
-        if ($code = $this->early['code'] ?? $this->wrongHub['code'] ?? null) {
-            $this->forceLoad = true;
-            $this->scan($code);
-            $this->forceLoad = false;
-        }
-    }
-
-    /** What to load next on the selected trip (null when the trip has no sorted stops). */
-    public function loadNext(): ?array
-    {
-        $trip = $this->selectedTrip();
-
-        return $trip ? LoadOrder::next($trip, static::$atHub) : null;
-    }
-
-    /** @return array{loaded: int, total: int} */
-    public function progress(): array
-    {
-        $tripId = $this->data['deliverylog_id'] ?? null;
-
-        if (! $tripId) {
-            return ['loaded' => 0, 'total' => 0];
-        }
-
-        $query = Tripinvoice::where($this->tripColumn(), $tripId);
-
-        return [
-            'loaded' => (clone $query)->where($this->loadedColumn(), true)->count(),
-            'total' => $query->count(),
-            'last' => (clone $query)->where($this->loadedColumn(), true)->max('updated_at'),
-        ];
-    }
-
-    public function household(): array
-    {
-        $tripId = (int) ($this->data['deliverylog_id'] ?? 0);
-
-        return $this->householdRows($this->lastInvoice(), function (Invoice $box) use ($tripId): array {
-            $onTrip = Tripinvoice::with('deliverylog:id,trip_number')->where('invoice_id', $box->id)->latest('id')->first();
-
-            return [
-                'trip' => $onTrip?->deliverylog?->trip_number,
-                'done' => (bool) ($onTrip?->{$this->loadedColumn()} && (int) $onTrip->{$this->tripColumn()} === $tripId),
-            ];
-        });
-    }
-
-    public function photoStep(): ?string
-    {
-        return static::$atHub ? 'hub_load' : 'load';
-    }
-
-    public function photoContext(): array
-    {
-        return [
-            'deliverylog_id' => $this->data['deliverylog_id'] ?? null,
-            'warehouse_id' => Auth::user()?->warehouse_id,
-            'logistichub_id' => Auth::user()?->logistichub_id,
-        ];
-    }
-
-    public function appChoices(): Collection
-    {
-        return $this->tripOptionsQuery()->latest('id')->limit(60)->get()
-            ->map(fn (Deliverylog $t) => ['id' => $t->id, 'name' => 'Trip '.$t->trip_number, 'active' => (bool) ($t->is_active ?? true),
-                'sub' => $t->destination?->hub_name ? 'To '.$t->destination->hub_name : ($t->departure_date ? 'Leaves '.$t->departure_date : null)]);
-    }
-}
-DISPATCH_FILE_END_2
+DISPATCH_FILE_END_0
 
 # ---------------------------------------------------------------- app/Filament/Shared/UnloadContainerPage.php
 mkdir -p 'app/Filament/Shared'
-cat > 'app/Filament/Shared/UnloadContainerPage.php' <<'DISPATCH_FILE_END_3'
+cat > 'app/Filament/Shared/UnloadContainerPage.php' <<'DISPATCH_FILE_END_1'
 <?php
 
 namespace App\Filament\Shared;
@@ -1192,9 +743,10 @@ abstract class UnloadContainerPage extends Page
             return "{$code} verified.";
         }
 
-        if ($trip = Crossdock::load($invoice, Crossdock::active($container->id), $section)) {
+        if ($trip = Crossdock::load($invoice, $warehouseId, $section)) {
             $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => null])->save();
-            $this->route = ['kind' => 'truck', 'code' => 'TRUCK', 'name' => $trip->warehouse?->name ?? $section->goesTo(), 'trip' => $trip->trip_number, 'color' => '#e8590c'];
+            $this->route = ['kind' => 'truck', 'code' => 'TRUCK', 'name' => $trip->warehouse?->name ?? $section->goesTo(), 'trip' => $trip->trip_number, 'plate' => $trip->truck?->plate_no, 'color' => '#e2700c'];
+            $this->setInfo = \App\Support\Boxes\TruckSets::card($invoice, $trip, $warehouseId) ?? $this->setInfo;
 
             return "{$code} verified · onto truck {$trip->trip_number}.";
         }
@@ -1217,9 +769,9 @@ abstract class UnloadContainerPage extends Page
         }
         $pending = Invoice::where('container_id', $container->id)->where('verified_by', Auth::id())
             ->whereNotNull('wh_section_id')->whereNull('sectioned_at')->get();
-        $dock = Crossdock::active($container->id);
-        if ($dock) {
-            $onTruck = \App\Models\Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->whereIn('invoice_id', $pending->pluck('id'))->pluck('invoice_id')->all();
+        $here = Crossdock::here($warehouseId)->pluck('id');
+        if ($here->isNotEmpty()) {
+            $onTruck = \App\Models\Whtripinvoice::whereIn('whdeliverylog_id', $here)->whereIn('invoice_id', $pending->pluck('id'))->pluck('invoice_id')->all();
             $pending = $pending->reject(fn ($b) => in_array($b->id, $onTruck, true));
         }
         $mine = $pending->where('wh_section_id', $section->id);
@@ -1243,15 +795,15 @@ abstract class UnloadContainerPage extends Page
         return $container?->warehouse_id ?? Auth::user()?->warehouse_id;
     }
 
-    // ------------------------------------------------------------------ truck waiting (cross-dock)
+    // ------------------------------------------------------------------ truck here (switched on in the transfer trip)
 
-    /** "Put in section instead": take the box off the waiting truck and keep it in its section. */
+    /** "Put in section instead": take the box off the truck and keep it in its section. */
     public function putInSection(int $invoiceId): bool
     {
         $container = $this->selectedContainer();
-        $dock = Crossdock::active($container?->id);
         $invoice = $container ? Invoice::where('container_id', $container->id)->find($invoiceId) : null;
-        if (! $dock || ! $invoice || ! Crossdock::unload($invoice, $dock)) {
+        $trip = $invoice ? Crossdock::tripOf($invoice, $this->warehouseId($container)) : null;
+        if (! $trip || ! Crossdock::unload($invoice, $trip)) {
             return false;
         }
         $section = $invoice->whSection ?? Sections::forInvoice($invoice, $this->warehouseId($container));
@@ -1264,35 +816,26 @@ abstract class UnloadContainerPage extends Page
         return true;
     }
 
-    /** Trucks that can wait at this unload. */
-    public function truckChoices(): Collection
-    {
-        return Crossdock::trips($this->warehouseId($this->selectedContainer()))
-            ->map(fn ($t) => ['id' => $t->id, 'name' => 'WH trip '.$t->trip_number, 'to' => $t->warehouse?->name, 'truck' => $t->truck?->plate_no]);
-    }
-
-    public function startTruck(int $tripId): bool
+    /** TRUCK screen: "Bring it to the truck too" for another box of the customer that is in its section. */
+    public function addSetBox(int $ofInvoiceId, int $boxId): ?string
     {
         $container = $this->selectedContainer();
+        $of = $container ? Invoice::where('container_id', $container->id)->find($ofInvoiceId) : null;
+        $warehouseId = $this->warehouseId($container);
+        $trip = $of ? Crossdock::tripOf($of, $warehouseId) : null;
+        $box = $trip ? \App\Support\Boxes\TruckSets::add($of, $boxId, $trip, $warehouseId) : null;
+        if (! $box) {
+            return null;
+        }
+        $this->setInfo = \App\Support\Boxes\TruckSets::card($of, $trip, $warehouseId);
 
-        return $container && Crossdock::start($container, $tripId) !== null;
+        return $box->invoice;
     }
 
-    public function pauseTruck(bool $paused): void
+    /** The trucks here now at this warehouse (switched on in their transfer trip). */
+    public function truckStatus(): array
     {
-        Crossdock::active($this->selectedContainer()?->id)?->update(['paused' => $paused]);
-    }
-
-    public function stopTruck(): void
-    {
-        Crossdock::active($this->selectedContainer()?->id)?->update(['ended_at' => now()]);
-    }
-
-    public function truckStatus(): ?array
-    {
-        $dock = Crossdock::active($this->selectedContainer()?->id);
-
-        return $dock ? Crossdock::counts($dock) : null;
+        return Crossdock::status($this->warehouseId($this->selectedContainer()));
     }
 
     /** Who scanned how many boxes off this container. */
@@ -1440,1654 +983,455 @@ abstract class UnloadContainerPage extends Page
                 'sub' => collect([$c->batch_no ? 'Batch '.$c->batch_no : null, $c->consolidator?->company_name])->filter()->join(' · ') ?: null]);
     }
 }
-DISPATCH_FILE_END_3
+DISPATCH_FILE_END_1
 
-# ---------------------------------------------------------------- app/Filament/Shared/WarehouseTripScanPage.php
-mkdir -p 'app/Filament/Shared'
-cat > 'app/Filament/Shared/WarehouseTripScanPage.php' <<'DISPATCH_FILE_END_4'
+# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Whdeliverylogs/Tables/WhdeliverylogsTable.php
+mkdir -p 'app/Filament/Warehouse/Resources/Whdeliverylogs/Tables'
+cat > 'app/Filament/Warehouse/Resources/Whdeliverylogs/Tables/WhdeliverylogsTable.php' <<'DISPATCH_FILE_END_2'
 <?php
 
-namespace App\Filament\Shared;
+namespace App\Filament\Warehouse\Resources\Whdeliverylogs\Tables;
 
-use App\Filament\Concerns\ScansInvoices;
-use App\Models\Invoice;
-use App\Models\Whtripinvoice;
-use Filament\Forms\Components\Select;
-use Filament\Pages\Page;
-use Filament\Schemas\Schema;
+use App\Filament\Tables\TripBoardColumns;
+use App\Filament\Warehouse\Resources\Whdeliverylogs\TruckHereAction;
+use App\Support\Boxes\Crossdock;
+use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteBulkAction;
+use Filament\Actions\EditAction;
+use Filament\Notifications\Notification;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\ToggleColumn;
+use Filament\Tables\Enums\RecordActionsPosition;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
-/**
- * Scan station for warehouse-to-warehouse trips.
- * Whloaded loads boxes at the origin, Whunloaded receives them at the destination.
- */
-abstract class WarehouseTripScanPage extends Page
+class WhdeliverylogsTable
 {
-    use ScansInvoices;
-
-    protected string $view = 'filament.pages.scanload';
-
-    /** true = receiving at the destination warehouse, false = loading at the origin. */
-    protected static bool $unloading = false;
-
-    abstract protected function tripOptionsQuery(): Builder;
-
-    public function mount(): void
+    public static function configure(Table $table): Table
     {
-        $this->form->fill();
-    }
+        return $table
+            ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'warehouse'))
+            ->columns([
+                TextColumn::make('trip_number')
+                    ->searchable(),
+                TripBoardColumns::status('warehouse'),
+                TripBoardColumns::progress('warehouse'),
+                TextColumn::make('truck.plate_no')
+                    ->numeric()
+                    ->sortable(),
+                TextColumn::make('warehouse.name')
+                    ->label('Warehouse')
+                    ->sortable(),
+                TextColumn::make('truck_here')
+                    ->label('Truck')
+                    ->badge()->color('warning')
+                    ->getStateUsing(fn ($record) => $record->truck_here ? '🚚 Here, loading' : null)
+                    ->visible(fn () => Crossdock::ready()),
+                TextColumn::make('Total Invoices')
+                    ->label('Total Invoices')
+                    ->badge()
+                    ->color('danger')
+                    ->getStateUsing(function ($record) {
+                        return $record->whtripinvoices()->count();
+                    }),
+                TextColumn::make('Total Load')
+                    ->label('Total Load')
+                    ->badge()
+                    ->color('danger')
+                    ->getStateUsing(function ($record) {
+                        return $record->whtripinvoices()
+                            ->where('is_loaded', true)
+                            ->count();
+                    }),
+                TextColumn::make('City')
+                    ->label('City')
+                    ->separator(',')
+                    ->color('primary')
+                    ->listWithLineBreaks()
+                    ->limitList(3)
+                    ->expandableLimitedList()
+                    ->getStateUsing(function ($record) {
+                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
+                        return DB::table('whtripinvoices')
+                            ->join('invoices', 'invoices.id', '=', 'whtripinvoices.invoice_id')
+                            ->where('whtripinvoices.whdeliverylog_id', $record->id)
+                            ->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
+                            ->distinct()->orderBy('invoices.receiver_city')->pluck('invoices.receiver_city');
+                        //   ->implode(" , ");
+                    }),
+                TextColumn::make('Province')
+                    ->label('Province')
+                    ->separator(',')
+                    ->color('primary')
+                    ->listWithLineBreaks()
+                    ->limitList(3)
+                    ->expandableLimitedList()
+                    ->getStateUsing(function ($record) {
+                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
+                        return DB::table('whtripinvoices')
+                            ->join('invoices', 'invoices.id', '=', 'whtripinvoices.invoice_id')
+                            ->where('whtripinvoices.whdeliverylog_id', $record->id)
+                            ->whereNotNull('invoices.receiver_province')->where('invoices.receiver_province', '!=', '')
+                            ->distinct()->orderBy('invoices.receiver_province')->pluck('invoices.receiver_province');
+                        //   ->implode(" , ");
+                    }),
+                TextColumn::make('departure_date')
+                    ->date()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('delivery_date')
+                    ->date()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('user.full_name')
+                    ->numeric()
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->sortable(),
+                TextColumn::make('created_at')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('updated_at')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                ToggleColumn::make('is_active')
+                    ->label('Active')
+                    ->onColor('success')
+                    ->offColor('danger')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                ToggleColumn::make('is_lock')
+                    ->label('Lock')
+                    ->onColor('success')
+                    ->offColor('danger')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
 
-    public function form(Schema $schema): Schema
-    {
-        return $schema
-            ->statePath('data')
-            ->components([
-                Select::make('deliverylog_id')
-                    ->label('Trip')
-                    ->placeholder(static::$unloading ? 'Choose the arriving trip' : 'Choose the trip you are loading')
-                    ->searchable()
-                    ->live()
-                    ->required()
-                    ->afterStateUpdated(fn () => $this->reset('lastInvoiceId', 'lastStatus', 'lastMessage'))
-                    ->options(fn () => $this->tripOptionsQuery()->latest('id')->pluck('trip_number', 'id')),
+            ])
+            ->filters([
+                TripBoardColumns::filter('warehouse'),
+                SelectFilter::make('is_lock')
+                    ->label('Is Locked')
+                    ->options([
+                        1 => 'Yes',
+                        0 => 'No',
+                    ]),
+                SelectFilter::make('is_active')
+                    ->label('Is Active')
+                    ->options([
+                        1 => 'Yes',
+                        0 => 'No',
+                    ])->default(1),
+            ])->deferFilters(false)
+            ->recordActions([
+                TruckHereAction::make(),
+                ActionGroup::make([
+                    Action::make('locktrip')
+                        ->requiresConfirmation()
+                        ->label(function ($record) {
+                            return $record->is_lock ? 'Unlock Trip' : 'Lock Trip';
+                        })
+                        ->color('info')
+                        ->icon(function ($record) {
+                            return $record->is_lock ? Heroicon::LockOpen : Heroicon::LockClosed;
+                        })
+                        ->hidden(function ($record) {
+                            //  dd(Auth::user()->hasRole('super_admin'));
+                            return Auth::user()->is_admin ? false : true;
+                        })
+                        // Before the truck leaves: customers not complete on it, with a reason for each box left behind.
+                        ->schema(fn ($record) => $record->is_lock ? [] : \App\Support\Boxes\TruckSets::reasonFields($record))
+                        ->modalWidth(fn ($record) => ! $record->is_lock && \App\Support\Boxes\TruckSets::open($record) ? '3xl' : 'md')
+                        ->action(function ($record, array $data) {
+                            if (! $record->is_lock) {
+                                \App\Support\Boxes\TruckSets::saveReasons($record, $data['why'] ?? []);
+                            }
+                            $record->update([
+                                'is_lock' => ! $record->is_lock,
+                            ]);
+
+                            Notification::make()
+                                ->title($record->is_lock ? 'Trip Locked Successfully' : 'Trip Unlocked Successfully')
+                                ->success()
+                                ->send();
+                        }),
+                    EditAction::make()
+                        ->label('Edit')
+                        ->icon(Heroicon::PencilSquare)
+                        ->hidden(function ($record) {
+                            return $record->is_lock;
+                        }),
+                ]),
+            ], position: RecordActionsPosition::BeforeColumns)
+            ->toolbarActions([
+                BulkActionGroup::make([
+                    DeleteBulkAction::make(),
+                ]),
             ]);
     }
-
-    protected function selectionField(): ?string
-    {
-        return 'deliverylog_id';
-    }
-
-    protected function selectionLabel(): string
-    {
-        return 'a trip';
-    }
-
-    protected function doneColumn(): string
-    {
-        return static::$unloading ? 'is_unloaded' : 'is_loaded';
-    }
-
-    protected function handleScan(string $code): void
-    {
-        $trip = $this->tripOptionsQuery()->find($this->data['deliverylog_id'] ?? null);
-
-        if (! $trip) {
-            $this->scanResult('danger', 'That trip is not available any more.');
-
-            return;
-        }
-
-        $invoice = $this->invoicesMatching($code)->first();
-        $row = $invoice
-            ? Whtripinvoice::with('whdeliverylog:id,trip_number')->where('invoice_id', $invoice->id)->latest('id')->first()
-            : null;
-
-        if (! $row) {
-            $this->scanResult('danger', "{$code} is not on any warehouse trip.", $invoice);
-
-            return;
-        }
-
-        if ((int) $row->whdeliverylog_id !== (int) $trip->id) {
-            $this->scanResult('danger', "{$code} belongs to trip {$row->whdeliverylog?->trip_number}, not {$trip->trip_number}.", $invoice);
-
-            return;
-        }
-
-        if (static::$unloading && ! $row->is_loaded) {
-            $this->scanResult('warning', "{$code} was never scanned onto the truck. Check with the loading warehouse.", $invoice);
-
-            return;
-        }
-
-        if ($row->{$this->doneColumn()}) {
-            $who = ! static::$unloading && $row->loaded_by && $row->loaded_by !== Auth::id() ? \App\Models\User::find($row->loaded_by)?->first_name : null;
-            $this->scanResult('warning', "{$code} was already ".(static::$unloading ? 'received' : 'loaded').($who ? " by {$who}" : '').'. Not counted again.', $invoice);
-
-            return;
-        }
-
-        DB::transaction(function () use ($row, $invoice, $trip): void {
-            $row->update([$this->doneColumn() => true] + (static::$unloading ? [] : ['loaded_by' => Auth::id(), 'loaded_at' => now()]));
-
-            // The box now physically sits in the destination warehouse.
-            if (static::$unloading) {
-                $invoice->update(['warehouse_id' => $trip->warehouse_id]);
-            }
-        });
-
-        $this->scanResult('success', "{$code} ".(static::$unloading ? 'received' : 'loaded').'.', $invoice);
-    }
-
-    /** @return array{loaded: int, total: int} */
-    public function progress(): array
-    {
-        $tripId = $this->data['deliverylog_id'] ?? null;
-
-        if (! $tripId) {
-            return ['loaded' => 0, 'total' => 0];
-        }
-
-        $query = Whtripinvoice::where('whdeliverylog_id', $tripId);
-
-        return [
-            'loaded' => (clone $query)->where($this->doneColumn(), true)->count(),
-            'total' => $query->count(),
-        ];
-    }
-
-    public function progressLabel(): string
-    {
-        return static::$unloading ? 'Boxes received from this trip' : 'Boxes loaded on this trip';
-    }
-
-    public function stationHeading(): string
-    {
-        return static::$unloading ? 'Receive boxes from the truck' : 'Scan boxes onto the truck';
-    }
-
-    public function stationDescription(): string
-    {
-        return static::$unloading
-            ? 'Pick the arriving trip, then scan every box as it comes off.'
-            : 'Pick the trip, then scan every box as it is loaded.';
-    }
-
-    public function stationIcon(): string
-    {
-        return static::$unloading ? 'heroicon-o-arrow-down-tray' : 'heroicon-o-arrow-up-tray';
-    }
-
-    public function household(): array
-    {
-        $tripId = (int) ($this->data['deliverylog_id'] ?? 0);
-
-        return $this->householdRows($this->lastInvoice(), function (Invoice $box) use ($tripId): array {
-            $row = Whtripinvoice::with('whdeliverylog:id,trip_number')->where('invoice_id', $box->id)->latest('id')->first();
-
-            return [
-                'trip' => $row?->whdeliverylog?->trip_number,
-                'done' => (bool) ($row?->{$this->doneColumn()} && (int) $row->whdeliverylog_id === $tripId),
-            ];
-        });
-    }
-
-    public function photoStep(): ?string
-    {
-        return static::$unloading ? 'wh_unload' : 'wh_load';
-    }
-
-    public function photoContext(): array
-    {
-        return [
-            'whdeliverylog_id' => $this->data['deliverylog_id'] ?? null,
-            'warehouse_id' => Auth::user()?->warehouse_id,
-            'logistichub_id' => Auth::user()?->logistichub_id,
-        ];
-    }
-
-    public function appChoices(): Collection
-    {
-        return $this->tripOptionsQuery()->latest('id')->limit(60)->get()
-            ->map(fn ($t) => ['id' => $t->id, 'name' => 'WH trip '.$t->trip_number, 'active' => (bool) ($t->is_active ?? true), 'sub' => $t->departure_date ? 'Leaves '.$t->departure_date : null]);
-    }
 }
-DISPATCH_FILE_END_4
+DISPATCH_FILE_END_2
 
-# ---------------------------------------------------------------- app/Http/Controllers/SectionLabelsController.php
-mkdir -p 'app/Http/Controllers'
-cat > 'app/Http/Controllers/SectionLabelsController.php' <<'DISPATCH_FILE_END_5'
+# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Whdeliverylogs/TruckHereAction.php
+mkdir -p 'app/Filament/Warehouse/Resources/Whdeliverylogs'
+cat > 'app/Filament/Warehouse/Resources/Whdeliverylogs/TruckHereAction.php' <<'DISPATCH_FILE_END_3'
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Filament\Warehouse\Resources\Whdeliverylogs;
 
-use App\Models\Boxes\WhSection;
-use App\Models\Warehouse;
-use App\Support\Boxes\Sections;
-use Illuminate\Http\Request;
-use Illuminate\Http\Response;
-use Milon\Barcode\DNS2D;
-
-/** Printable QR labels for the warehouse sections: one big label per page. */
-class SectionLabelsController extends Controller
-{
-    public function __invoke(Request $request): Response
-    {
-        abort_unless(Sections::ready(), 404);
-        $user = $request->user();
-        $warehouse = Warehouse::findOrFail((int) $request->query('warehouse'));
-        abort_unless($user?->hasRole('super_admin') || (int) $user?->warehouse_id === $warehouse->id, 403);
-
-        $sections = WhSection::with(['hub:id,hub_name', 'toWarehouse:id,name'])->where('warehouse_id', $warehouse->id)
-            ->where('is_active', true)->orderBy('sort')->orderBy('code')->get()
-            ->map(function (WhSection $s) {
-                $svg = (new DNS2D)->getBarcodeSVG($s->qrText(), 'QRCODE,M', 10, 10, '#0b1620');
-
-                return ['code' => $s->code, 'name' => $s->name ?: $s->goesTo(), 'color' => $s->color, 'provinces' => implode(', ', (array) $s->provinces),
-                    'qr' => preg_replace('/<desc>.*?<\/desc>/s', '', preg_replace('/^.*?(<svg)/s', '$1', $svg))];
-            });
-
-        return response()->view('boxes.section-labels', ['warehouse' => $warehouse, 'sections' => $sections]);
-    }
-}
-DISPATCH_FILE_END_5
-
-# ---------------------------------------------------------------- app/Models/Boxes/SetSplit.php
-mkdir -p 'app/Models/Boxes'
-cat > 'app/Models/Boxes/SetSplit.php' <<'DISPATCH_FILE_END_6'
-<?php
-
-namespace App\Models\Boxes;
-
-use App\Models\Invoice;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-
-/** A customer's boxes that leave on different trucks, and why. */
-class SetSplit extends Model
-{
-    protected $guarded = [];
-
-    public const REASONS = ['not_arrived' => 'Not arrived yet', 'held' => 'Damaged or held', 'not_found' => 'Cannot find', 'full' => 'Truck full'];
-
-    public function invoice(): BelongsTo
-    {
-        return $this->belongsTo(Invoice::class);
-    }
-}
-DISPATCH_FILE_END_6
-
-# ---------------------------------------------------------------- app/Models/Boxes/WhCrossdock.php
-mkdir -p 'app/Models/Boxes'
-cat > 'app/Models/Boxes/WhCrossdock.php' <<'DISPATCH_FILE_END_7'
-<?php
-
-namespace App\Models\Boxes;
-
-use App\Models\Container;
 use App\Models\Whdeliverylog;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Support\Boxes\Crossdock;
+use App\Support\Boxes\TruckSets;
+use Filament\Actions\Action;
+use Filament\Notifications\Notification;
 
-/** A truck waiting at a container unload: its boxes go straight from the container onto it. */
-class WhCrossdock extends Model
+/**
+ * "🚚 The truck is here now": while on, boxes for this trip's warehouse go straight onto the
+ * truck when containers are unloaded (Scan app or Unload container). Scanners pick nothing.
+ * Turns off by itself when the trip is locked or closed.
+ */
+class TruckHereAction
 {
-    protected $table = 'wh_crossdocks';
-
-    protected $guarded = [];
-
-    protected function casts(): array
+    public static function make(string $name = 'truckHere'): Action
     {
-        return ['paused' => 'boolean', 'ended_at' => 'datetime'];
-    }
+        return Action::make($name)
+            ->label(fn (Whdeliverylog $record) => $record->truck_here ? 'Truck left: switch off' : '🚚 The truck is here now')
+            ->color(fn (Whdeliverylog $record) => $record->truck_here ? 'gray' : 'warning')
+            ->visible(fn (Whdeliverylog $record) => Crossdock::ready() && $record->is_active && ! $record->is_lock)
+            ->requiresConfirmation()
+            ->modalHeading(fn (Whdeliverylog $record) => $record->truck_here ? 'Switch off: the truck left?' : 'The truck to '.($record->warehouse?->name ?? 'the other warehouse').' is here now?')
+            ->modalDescription(fn (Whdeliverylog $record) => $record->truck_here
+                ? 'Boxes for '.($record->warehouse?->name ?? 'this warehouse').' go to their section again. The boxes already on the truck stay on this trip.'
+                : 'While unloading any container here, boxes for '.($record->warehouse?->name ?? 'this warehouse').' go straight onto this truck. Scanners scan as always. It turns off by itself when you lock the trip.')
+            ->schema(fn (Whdeliverylog $record) => $record->truck_here ? TruckSets::reasonFields($record) : [])
+            ->modalWidth(fn (Whdeliverylog $record) => $record->truck_here && TruckSets::open($record) ? '3xl' : 'md')
+            ->action(function (Whdeliverylog $record, array $data): void {
+                if ($record->truck_here) {
+                    TruckSets::saveReasons($record, $data['why'] ?? []);
+                    Crossdock::switchOff($record);
+                    Notification::make()->title('Switched off. Boxes for '.($record->warehouse?->name ?? 'that warehouse').' go to their section.')->success()->send();
 
-    public function container(): BelongsTo
-    {
-        return $this->belongsTo(Container::class);
-    }
+                    return;
+                }
+                $section = Crossdock::sectionFor($record);
+                if (! $section) {
+                    Notification::make()->title('No section goes to '.($record->warehouse?->name ?? 'that warehouse').' yet')
+                        ->body('Ask the admin to add one: Settings · places & routes → Warehouse sections (Goes to: '.($record->warehouse?->name ?? 'that warehouse').'). Then switch this on.')
+                        ->warning()->persistent()->send();
 
-    public function trip(): BelongsTo
-    {
-        return $this->belongsTo(Whdeliverylog::class, 'whdeliverylog_id');
+                    return;
+                }
+                Crossdock::switchOn($record);
+                Notification::make()->title('🚚 Truck here: boxes of section '.$section->code.' now go straight onto trip '.$record->trip_number)->success()->send();
+            });
     }
 }
-DISPATCH_FILE_END_7
+DISPATCH_FILE_END_3
 
-# ---------------------------------------------------------------- app/Models/Boxes/WhSection.php
-mkdir -p 'app/Models/Boxes'
-cat > 'app/Models/Boxes/WhSection.php' <<'DISPATCH_FILE_END_8'
-<?php
-
-namespace App\Models\Boxes;
-
-use App\Models\Invoice;
-use App\Models\Logistichub;
-use App\Models\Warehouse;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-
-/** A section of the warehouse floor, for one destination (a partner hub, another warehouse, returns…). */
-class WhSection extends Model
-{
-    protected $table = 'wh_sections';
-
-    protected $guarded = [];
-
-    public const KINDS = ['area' => 'Destination', 'returns' => 'Returns & wrong hub', 'check' => 'Check address'];
-
-    protected function casts(): array
-    {
-        return ['provinces' => 'array', 'is_active' => 'boolean'];
-    }
-
-    public function warehouse(): BelongsTo
-    {
-        return $this->belongsTo(Warehouse::class);
-    }
-
-    public function hub(): BelongsTo
-    {
-        return $this->belongsTo(Logistichub::class, 'logistichub_id');
-    }
-
-    public function toWarehouse(): BelongsTo
-    {
-        return $this->belongsTo(Warehouse::class, 'to_warehouse_id');
-    }
-
-    public function invoices(): HasMany
-    {
-        return $this->hasMany(Invoice::class, 'wh_section_id');
-    }
-
-    /** What the QR label on this section says. */
-    public function qrText(): string
-    {
-        return 'SEC-'.$this->id;
-    }
-
-    /** "Cebu hub", "Tarlac warehouse", "Check address" */
-    public function goesTo(): string
-    {
-        return $this->hub?->hub_name ?? $this->toWarehouse?->name ?? (self::KINDS[$this->kind] ?? $this->name);
-    }
-}
-DISPATCH_FILE_END_8
-
-# ---------------------------------------------------------------- app/Models/Invoice.php
-mkdir -p 'app/Models'
-cat > 'app/Models/Invoice.php' <<'DISPATCH_FILE_END_9'
-<?php
-
-namespace App\Models;
-
-use Illuminate\Database\Eloquent\Casts\Attribute;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
-
-class Invoice extends Model
-{
-    protected function casts(): array
-    {
-        return [
-            'is_verified' => 'boolean',
-            'is_delivered' => 'boolean',
-            'is_assigned' => 'boolean',
-            'is_returned' => 'boolean',
-            'is_priority' => 'boolean',
-            'is_resolved' => 'boolean',
-            'wh_is_assigned' => 'boolean',
-            'sectioned_at' => 'datetime',
-        ];
-    }
-
-    protected static function booted(): void
-    {
-        // the customer's set: all boxes for the same receiver, phone and city
-        static::saving(function (Invoice $invoice): void {
-            if (! $invoice->set_key || $invoice->isDirty(['receiver_name', 'receiver_mobile_no', 'receiver_city'])) {
-                $invoice->set_key = \App\Support\Boxes\BoxSets::keyFor($invoice->receiver_name, $invoice->receiver_mobile_no, $invoice->receiver_city);
-            }
-        });
-    }
-
-    public function whSection()
-    {
-        return $this->belongsTo(\App\Models\Boxes\WhSection::class, 'wh_section_id');
-    }
-
-    public function verifiedBy()
-    {
-        return $this->belongsTo(User::class, 'verified_by');
-    }
-
-    public function container()
-    {
-        return $this->belongsTo(Container::class);
-    }
-
-    public function warehouse()
-    {
-        return $this->belongsTo(Warehouse::class);
-    }
-
-    public function user()
-    {
-        return $this->belongsTo(User::class);
-    }
-
-    public function routearea()
-    {
-        return $this->belongsTo(Routearea::class);
-    }
-
-    protected function FullAddress(): Attribute
-    {
-        return new Attribute(
-            get: fn () => $this->receiver_address.' '.$this->receiver_province.' '.$this->receiver_city.' '.$this->receiver_barangay
-        );
-    }
-
-    public function consolidator()
-    {
-        return $this->belongsTo(
-            Consolidator::class,
-            'location_code', // FK on invoices
-            'code'           // UNIQUE key on consolidators
-        );
-
-    }
-
-    public function tripInvoices()
-    {
-        return $this->hasMany(Tripinvoice::class);
-    }
-
-    public function deliverylogs()
-    {
-        return $this->hasManyThrough(Deliverylog::class, Tripinvoice::class);
-    }
-
-    public function invoiceissue()
-    {
-        return $this->hasMany(Invoiceissue::class);
-    }
-
-    public function whtripinvoice()
-    {
-        return $this->hasOne(Whtripinvoice::class, 'invoice_id', 'id');
-    }
-
-    public function deliveryAttempts(): HasMany
-    {
-        return $this->hasMany(DeliveryAttempt::class)->latest('id');
-    }
-
-    public function latestDeliveryAttempt(): HasOne
-    {
-        return $this->hasOne(DeliveryAttempt::class)->latestOfMany();
-    }
-}
-DISPATCH_FILE_END_9
-
-# ---------------------------------------------------------------- app/Support/Boxes/BoxSets.php
+# ---------------------------------------------------------------- app/Support/Boxes/TruckSets.php
 mkdir -p 'app/Support/Boxes'
-cat > 'app/Support/Boxes/BoxSets.php' <<'DISPATCH_FILE_END_10'
+cat > 'app/Support/Boxes/TruckSets.php' <<'DISPATCH_FILE_END_4'
 <?php
 
 namespace App\Support\Boxes;
 
 use App\Models\Boxes\SetSplit;
-use App\Models\Deliverylog;
-use App\Models\Invoice;
-use App\Models\Tripinvoice;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Str;
-
-/**
- * A set is all the boxes for one customer: the same receiver, phone and city,
- * not delivered yet. "Maria Santos · box 2 of 3".
- */
-class BoxSets
-{
-    public static function keyFor(?string $name, ?string $phone, ?string $city): ?string
-    {
-        $name = Str::lower(Str::squish(preg_replace('/[^\p{L}\p{N} ]+/u', ' ', (string) $name)));
-        if ($name === '') {
-            return null;
-        }
-        $digits = substr(preg_replace('/\D/', '', (string) $phone), -10);
-        $city = Str::lower(Str::squish((string) $city));
-
-        return sha1($name.'|'.$digits.'|'.$city);
-    }
-
-    /** Every box of this box's set (itself included), oldest first. */
-    public static function members(Invoice $invoice): Collection
-    {
-        if (! $invoice->set_key) {
-            return collect([$invoice]);
-        }
-
-        return Invoice::query()->with('container:id,container_no')
-            ->where('set_key', $invoice->set_key)
-            ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered')->orWhere('id', $invoice->id))
-            ->where('created_at', '>=', ($invoice->created_at ?? now())->copy()->subDays(120))
-            ->orderBy('id')->get();
-    }
-
-    /**
-     * At unload: the box's place in its set, and where the other boxes are.
-     *
-     * @return array{n: int, of: int, name: string, text: string, kind: string}|null
-     */
-    public static function atUnload(Invoice $invoice): ?array
-    {
-        $all = static::members($invoice);
-        if ($all->count() < 2) {
-            return null;
-        }
-        $n = $all->search(fn ($b) => $b->id === $invoice->id) + 1;
-        $here = $all->where('container_id', $invoice->container_id);
-        $waiting = $here->where('id', '!=', $invoice->id)->filter(fn ($b) => ! $b->is_verified)->count();
-        $elsewhere = $all->where('container_id', '!=', $invoice->container_id)->filter(fn ($b) => ! $b->is_verified)->count();
-        $done = $all->filter(fn ($b) => $b->is_verified)->count();
-
-        $text = match (true) {
-            $waiting === 0 && $elsewhere === 0 => '✓ All '.$all->count().' boxes are off the container.',
-            $elsewhere === 0 => $waiting.' more still in this container.',
-            $waiting === 0 => $elsewhere.' '.($elsewhere === 1 ? 'is' : 'are').' in another container (not here yet).',
-            default => $waiting.' more in this container, '.$elsewhere.' in another container.',
-        };
-
-        return ['n' => $n, 'of' => $all->count(), 'name' => Str::title((string) $invoice->receiver_name), 'text' => $text,
-            'kind' => $elsewhere > 0 ? 'split' : ($waiting === 0 && $done === $all->count() ? 'done' : 'wait')];
-    }
-
-    /**
-     * On a truck: how many of the set are loaded, and where the others are.
-     *
-     * @return array{n: int, of: int, name: string, text: string, kind: string}|null
-     */
-    public static function onTrip(Invoice $invoice, Deliverylog $trip, string $tripColumn = 'deliverylog_id', string $loadedColumn = 'is_loaded'): ?array
-    {
-        $all = static::members($invoice);
-        if ($all->count() < 2) {
-            return null;
-        }
-        $rows = Tripinvoice::whereIn('invoice_id', $all->pluck('id'))->where($tripColumn, $trip->id)->get()->keyBy('invoice_id');
-        $loaded = $rows->filter(fn ($r) => $r->{$loadedColumn})->count();
-        $left = $all->filter(fn ($b) => isset($rows[$b->id]) && ! $rows[$b->id]->{$loadedColumn});
-        $off = $all->filter(fn ($b) => ! isset($rows[$b->id]));
-
-        $parts = [];
-        if ($left->isNotEmpty()) {
-            $parts[] = 'Still to load: '.$left->map(fn ($b) => $b->invoice.($b->whSection ? ' ('.$b->whSection->code.')' : ''))->join(', ');
-        }
-        if ($off->isNotEmpty()) {
-            $parts[] = $off->count().' not on this trip ('.$off->map(fn ($b) => $b->invoice)->join(', ').')';
-        }
-
-        return ['n' => $loaded, 'of' => $all->count(), 'name' => Str::title((string) $invoice->receiver_name),
-            'text' => $parts ? implode(' · ', $parts) : '✓ Complete · all '.$all->count().' boxes loaded',
-            'kind' => $off->isNotEmpty() ? 'split' : ($left->isEmpty() ? 'done' : 'wait')];
-    }
-
-    /**
-     * Customers on a trip whose set is not complete on the truck, for the Done screen.
-     *
-     * @return list<array{key: string, name: string, have: int, of: int, missing: list<array{id: int, invoice: string, where: string}>, reason: ?string}>
-     */
-    public static function openOnTrip(Deliverylog $trip, string $tripColumn = 'deliverylog_id', string $loadedColumn = 'is_loaded'): array
-    {
-        $rows = Tripinvoice::with('invdata')->where($tripColumn, $trip->id)->get();
-        $keys = $rows->pluck('invdata.set_key')->filter()->unique();
-        if ($keys->isEmpty()) {
-            return [];
-        }
-        $loadedIds = $rows->filter(fn ($r) => $r->{$loadedColumn})->pluck('invoice_id')->all();
-        $boxes = Invoice::with(['whSection:id,code', 'container:id,container_no'])->whereIn('set_key', $keys)
-            ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))->get()->groupBy('set_key');
-        $reasons = SetSplit::where('deliverylog_id', $trip->id)->get()->keyBy('invoice_id');
-        $onTrip = $rows->pluck('invoice_id')->all();
-
-        $out = [];
-        foreach ($boxes as $key => $set) {
-            if ($set->count() < 2) {
-                continue;
-            }
-            $missing = $set->reject(fn ($b) => in_array($b->id, $loadedIds, true));
-            if ($missing->isEmpty() || $set->count() === $missing->count()) {
-                continue; // complete, or none of it loaded yet
-            }
-            $first = $set->first();
-            $out[] = [
-                'key' => $key, 'name' => Str::title((string) $first->receiver_name), 'have' => $set->count() - $missing->count(), 'of' => $set->count(),
-                'missing' => $missing->map(fn ($b) => ['id' => $b->id, 'invoice' => $b->invoice,
-                    'where' => in_array($b->id, $onTrip, true) ? 'on this trip, not loaded'.($b->whSection ? ' · section '.$b->whSection->code : '')
-                        : (! $b->is_verified ? 'not unloaded yet'.($b->container ? ' · container '.$b->container->container_no : '') : ($b->whSection ? 'section '.$b->whSection->code : 'in the warehouse')),
-                    'reason' => $reasons[$b->id]->reason ?? null])->values()->all(),
-            ];
-        }
-
-        return $out;
-    }
-}
-DISPATCH_FILE_END_10
-
-# ---------------------------------------------------------------- app/Support/Boxes/Crossdock.php
-mkdir -p 'app/Support/Boxes'
-cat > 'app/Support/Boxes/Crossdock.php' <<'DISPATCH_FILE_END_11'
-<?php
-
-namespace App\Support\Boxes;
-
-use App\Models\Boxes\WhCrossdock;
-use App\Models\Container;
 use App\Models\Invoice;
 use App\Models\Whdeliverylog;
 use App\Models\Whtripinvoice;
 use App\Services\TripAssignment;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
- * A truck waiting at a container unload (for example a 10-wheeler to the Tarlac warehouse).
- * Boxes for that warehouse go straight from the container onto the truck: one scan
- * verifies the box and loads it. The crew can put a box in its section instead, or pause the truck.
+ * A customer's boxes (same name, phone and city) on a transfer truck (warehouse to warehouse):
+ * on the TRUCK screen, where the other boxes are and which can be brought now;
+ * before the truck leaves, the customers not complete on it and why.
  */
-class Crossdock
+class TruckSets
 {
-    public static function active(?int $containerId): ?WhCrossdock
+    /** Box in this warehouse, unloaded, on no trip: it can go on the truck now. */
+    protected static function free(Invoice $b, ?int $warehouseId): bool
     {
-        if (! $containerId || ! Sections::ready()) {
-            return null;
-        }
-
-        return WhCrossdock::with('trip.warehouse:id,name')->where('container_id', $containerId)->whereNull('ended_at')->latest('id')->first();
-    }
-
-    /** Warehouse trips leaving this warehouse that can take boxes. */
-    public static function trips(?int $warehouseId): Collection
-    {
-        if (! $warehouseId) {
-            return collect();
-        }
-
-        return Whdeliverylog::with('warehouse:id,name', 'truck:id,plate_no')->where('user_whid', $warehouseId)
-            ->where('is_active', true)->where(fn ($q) => $q->where('is_lock', false)->orWhereNull('is_lock'))
-            ->latest('id')->limit(20)->get();
-    }
-
-    public static function start(Container $container, int $tripId): ?WhCrossdock
-    {
-        $trip = static::trips(Auth::user()?->warehouse_id)->firstWhere('id', $tripId);
-        if (! $trip) {
-            return null;
-        }
-        WhCrossdock::where('container_id', $container->id)->whereNull('ended_at')->update(['ended_at' => now()]);
-
-        return WhCrossdock::create(['container_id' => $container->id, 'whdeliverylog_id' => $trip->id, 'started_by' => Auth::id()]);
+        return $b->is_verified && ! $b->wh_is_assigned && ! $b->is_assigned && ! $b->is_delivered
+            && (! $warehouseId || ! $b->warehouse_id || (int) $b->warehouse_id === $warehouseId);
     }
 
     /**
-     * Load the box onto the waiting truck when its section is for the truck's warehouse.
-     * Returns the trip it was loaded on, or null (then it goes to its section as usual).
+     * The set card on the TRUCK screen.
+     *
+     * @return array{n: int, of: int, name: string, text: string, kind: string, rows: list<array{i: string, t: string}>, add: list<array{id: int, invoice: string, section: ?string}>}|null
      */
-    public static function load(Invoice $invoice, ?WhCrossdock $dock, ?\App\Models\Boxes\WhSection $section): ?Whdeliverylog
+    public static function card(Invoice $invoice, Whdeliverylog $trip, ?int $warehouseId): ?array
     {
-        $trip = $dock?->trip;
-        if (! $dock || $dock->paused || ! $trip || ! $section || ! $section->to_warehouse_id || (int) $section->to_warehouse_id !== (int) $trip->warehouse_id) {
+        $all = BoxSets::members($invoice)->load('whSection:id,code');
+        if ($all->count() < 2) {
+            return null;
+        }
+        $rows = Whtripinvoice::where('whdeliverylog_id', $trip->id)->whereIn('invoice_id', $all->pluck('id'))->get()->keyBy('invoice_id');
+        $add = [];
+        $lines = [];
+        foreach ($all->values() as $k => $b) {
+            $label = 'Box '.($k + 1).' · '.$b->invoice;
+            $row = $rows[$b->id] ?? null;
+            if ($row && $row->is_loaded) {
+                $lines[] = ['i' => '🚚', 't' => $label.': on the truck'.($b->id === $invoice->id ? ' (this one)' : '')];
+            } elseif ($row) {
+                $lines[] = ['i' => '📷', 't' => $label.': added, scan it at the truck door'.($b->whSection ? ' (section '.$b->whSection->code.')' : '')];
+            } elseif (! $b->is_verified) {
+                $lines[] = ['i' => '📦', 't' => $label.': '.((int) $b->container_id === (int) $invoice->container_id ? 'still in this container' : 'in another container'.($b->container ? ' '.$b->container->container_no : '').' (not here yet)')];
+            } elseif (static::free($b, $warehouseId)) {
+                $lines[] = ['i' => '🗂️', 't' => $label.': in section '.($b->whSection?->code ?? '?').'. Bring it to the truck too.'];
+                $add[] = ['id' => $b->id, 'invoice' => $b->invoice, 'section' => $b->whSection?->code];
+            } else {
+                $lines[] = ['i' => '↪️', 't' => $label.': on another trip'];
+            }
+        }
+        $loaded = $rows->filter->is_loaded->count();
+        $n = $all->search(fn ($b) => $b->id === $invoice->id) + 1;
+
+        return ['n' => $n, 'of' => $all->count(), 'name' => Str::title((string) $invoice->receiver_name),
+            'text' => $loaded === $all->count() ? '✓ All '.$all->count().' boxes are on the truck.' : $loaded.' of '.$all->count().' on the truck.',
+            'kind' => $loaded === $all->count() ? 'done' : ($add ? 'wait' : 'split'), 'rows' => $lines, 'add' => $add, 'loaded' => $loaded];
+    }
+
+    /** "Bring it to the truck too": put the box of the set on the trip (it is scanned at the truck door). */
+    public static function add(Invoice $of, int $invoiceId, Whdeliverylog $trip, ?int $warehouseId): ?Invoice
+    {
+        $box = BoxSets::members($of)->firstWhere('id', $invoiceId);
+        if (! $box || ! static::free($box, $warehouseId)) {
             return null;
         }
         try {
-            DB::transaction(function () use ($invoice, $trip): void {
-                app(TripAssignment::class)->addToWarehouseTrip($trip, [$invoice]);
-                Whtripinvoice::where('whdeliverylog_id', $trip->id)->where('invoice_id', $invoice->id)
-                    ->update(['is_loaded' => true, 'loaded_by' => Auth::id(), 'loaded_at' => now()]);
-            });
+            app(TripAssignment::class)->addToWarehouseTrip($trip, [$box]);
         } catch (Throwable $e) {
             report($e);
 
             return null;
         }
 
-        return Whtripinvoice::where('whdeliverylog_id', $trip->id)->where('invoice_id', $invoice->id)->exists() ? $trip : null;
-    }
-
-    /** "Put in section instead": take the box off the waiting truck again. */
-    public static function unload(Invoice $invoice, WhCrossdock $dock): bool
-    {
-        $row = Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->where('invoice_id', $invoice->id)->where('is_unloaded', false)->first();
-        if (! $row) {
-            return false;
-        }
-        DB::transaction(function () use ($row, $invoice): void {
-            $row->delete();
-            $invoice->update(['wh_is_assigned' => false]);
-        });
-
-        return true;
+        return Whtripinvoice::where('whdeliverylog_id', $trip->id)->where('invoice_id', $box->id)->exists() ? $box : null;
     }
 
     /**
-     * The truck's boxes from this container: on the truck, in the section, still in the container.
+     * Before the truck leaves: customers with some boxes on it, others not.
      *
-     * @return array{trip: string, to: string, onTruck: int, inSection: int, inContainer: int, paused: bool, section: ?string}
+     * @return list<array{name: string, have: int, of: int, missing: list<array{id: int, invoice: string, where: string, reason: ?string}>}>
      */
-    public static function counts(WhCrossdock $dock): array
+    public static function open(Whdeliverylog $trip): array
     {
-        $trip = $dock->trip;
-        $section = Sections::forWarehouse($trip?->user_whid, (int) $trip?->warehouse_id);
-        $forTruck = Invoice::where('container_id', $dock->container_id)->get()
-            ->filter(fn ($b) => (int) Sections::forInvoice($b, $trip?->user_whid)?->to_warehouse_id === (int) $trip?->warehouse_id);
-        $ids = $forTruck->pluck('id');
-        $onTruck = Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->whereIn('invoice_id', $ids)->count();
+        $rows = Whtripinvoice::with('invoice:id,set_key')->where('whdeliverylog_id', $trip->id)->get();
+        $keys = $rows->pluck('invoice.set_key')->filter()->unique();
+        if ($keys->isEmpty()) {
+            return [];
+        }
+        $loadedIds = $rows->filter->is_loaded->pluck('invoice_id')->all();
+        $onTrip = $rows->pluck('invoice_id')->all();
+        $reasons = static::ready() ? SetSplit::where('whdeliverylog_id', $trip->id)->get()->keyBy('invoice_id') : collect();
+        $out = [];
+        foreach (Invoice::with(['whSection:id,code', 'container:id,container_no'])->whereIn('set_key', $keys)
+            ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))->orderBy('id')->get()->groupBy('set_key') as $set) {
+            $missing = $set->reject(fn ($b) => in_array($b->id, $loadedIds, true));
+            if ($set->count() < 2 || $missing->isEmpty() || $missing->count() === $set->count()) {
+                continue;
+            }
+            $out[] = [
+                'name' => Str::title((string) $set->first()->receiver_name).($set->first()->receiver_city ? ' · '.Str::title((string) $set->first()->receiver_city) : ''),
+                'have' => $set->count() - $missing->count(), 'of' => $set->count(),
+                'missing' => $missing->map(fn ($b) => ['id' => $b->id, 'invoice' => $b->invoice,
+                    'where' => in_array($b->id, $onTrip, true) ? 'On this trip, not scanned at the truck yet'.($b->whSection ? ' · section '.$b->whSection->code : '')
+                        : (! $b->is_verified ? 'In container '.($b->container?->container_no ?? '?').' (not unloaded yet)'
+                            : ($b->wh_is_assigned || $b->is_assigned ? 'On another trip' : 'In section '.($b->whSection?->code ?? '?'))),
+                    'reason' => $reasons[$b->id]->reason ?? null])->values()->all(),
+            ];
+        }
 
-        return [
-            'trip' => (string) $trip?->trip_number, 'to' => (string) ($trip?->warehouse?->name ?? 'the other warehouse'),
-            'onTruck' => $onTruck,
-            'inSection' => $forTruck->filter(fn ($b) => $b->is_verified)->count() - $onTruck,
-            'inContainer' => $forTruck->filter(fn ($b) => ! $b->is_verified)->count(),
-            'paused' => (bool) $dock->paused, 'section' => $section?->code,
-        ];
+        return $out;
     }
-}
-DISPATCH_FILE_END_11
-
-# ---------------------------------------------------------------- app/Support/Boxes/Sections.php
-mkdir -p 'app/Support/Boxes'
-cat > 'app/Support/Boxes/Sections.php' <<'DISPATCH_FILE_END_12'
-<?php
-
-namespace App\Support\Boxes;
-
-use App\Models\AppSetting;
-use App\Models\Boxes\WhSection;
-use App\Models\Invoice;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Str;
-
-/**
- * Which section of the warehouse a box goes to, from the receiver's province.
- * Each warehouse sets its own sections (Admin → Settings → Warehouse sections);
- * sections with no warehouse are for every warehouse.
- */
-class Sections
-{
-    /** @var array<int, Collection<int, WhSection>> */
-    protected static array $memo = [];
 
     public static function ready(): bool
     {
-        return Schema::hasTable('wh_sections');
+        return Schema::hasColumn('set_splits', 'whdeliverylog_id');
     }
 
-    /** The sections of a warehouse, in order. */
-    public static function of(?int $warehouseId): Collection
+    /** @param array<int|string, string> $why invoice id => reason */
+    public static function saveReasons(Whdeliverylog $trip, array $why): void
     {
         if (! static::ready()) {
-            return collect();
+            return;
         }
-
-        return static::$memo[(int) $warehouseId] ??= WhSection::query()->with(['hub:id,hub_name', 'toWarehouse:id,name'])
-            ->where('is_active', true)
-            ->where(fn ($q) => $q->whereNull('warehouse_id')->when($warehouseId, fn ($q) => $q->orWhere('warehouse_id', $warehouseId)))
-            ->orderBy('sort')->orderBy('code')->get();
-    }
-
-    public static function forget(): void
-    {
-        static::$memo = [];
-    }
-
-    /** Does this warehouse use sections at all? */
-    public static function used(?int $warehouseId): bool
-    {
-        return static::of($warehouseId)->where('kind', 'area')->isNotEmpty();
-    }
-
-    /** "Cebu" for "Province of Cebu", "cebu ", "CEBU PROV." */
-    public static function clean(?string $province): string
-    {
-        $p = Str::lower(Str::squish((string) $province));
-        $p = preg_replace('/\b(province of|prov\.?|province)\b/u', '', $p);
-        $p = trim(preg_replace('/[^\p{L}\p{N} ]+/u', ' ', $p));
-        $p = Str::squish($p);
-
-        return match ($p) {
-            'ncr', 'metro manila', 'national capital region', 'manila' => 'metro manila',
-            default => $p,
-        };
-    }
-
-    /**
-     * The section for a box. A box with no province, or a province no section has, goes to the
-     * Check address section (when the warehouse has one).
-     */
-    public static function forInvoice(Invoice $invoice, ?int $warehouseId = null): ?WhSection
-    {
-        $sections = static::of($warehouseId ?? $invoice->warehouse_id);
-        if ($sections->isEmpty()) {
-            return null;
+        $ids = collect(static::open($trip))->pluck('missing')->flatten(1)->pluck('id')->all();
+        foreach ($why as $id => $reason) {
+            if (in_array((int) $id, $ids, true) && array_key_exists($reason, SetSplit::REASONS)) {
+                SetSplit::updateOrCreate(['invoice_id' => (int) $id, 'whdeliverylog_id' => $trip->id],
+                    ['reason' => $reason, 'user_id' => Auth::id(), 'set_key' => Invoice::whereKey($id)->value('set_key')]);
+            }
         }
-        $province = static::clean($invoice->receiver_province);
-        if ($province !== '') {
-            foreach ($sections->where('kind', 'area') as $s) {
-                foreach ((array) $s->provinces as $p) {
-                    if (static::clean($p) === $province) {
-                        return $s;
-                    }
-                }
+    }
+
+    /** The form for Lock trip / Truck left: one reason for each box left behind. */
+    public static function reasonFields(Whdeliverylog $trip): array
+    {
+        $open = static::open($trip);
+        if (! $open) {
+            return [];
+        }
+        $fields = [\Filament\Schemas\Components\Text::make(count($open).' '.Str::plural('customer', count($open)).' not complete on this truck. Bring the boxes, or pick why each one stays behind.')];
+        foreach ($open as $set) {
+            foreach ($set['missing'] as $m) {
+                $fields[] = \Filament\Forms\Components\ToggleButtons::make('why.'.$m['id'])
+                    ->label($set['name'].' ('.$set['have'].' of '.$set['of'].' on the truck) · '.$m['invoice'])
+                    ->helperText($m['where'])
+                    ->options(SetSplit::REASONS)->inline()->required()->default($m['reason']);
             }
         }
 
-        return $sections->firstWhere('kind', 'check');
-    }
-
-    /** Why a box went to Check address (shown in the Scan app). */
-    public static function whyCheck(Invoice $invoice): string
-    {
-        return blank($invoice->receiver_province)
-            ? 'No province in the address.'
-            : 'No section is set for "'.Str::title($invoice->receiver_province).'".';
-    }
-
-    /** The section a section-label QR names ("SEC-12"), or null. */
-    public static function fromCode(string $code): ?WhSection
-    {
-        return preg_match('/^SEC-(\d+)$/', $code, $m) && static::ready() ? WhSection::find((int) $m[1]) : null;
-    }
-
-    /** The section for boxes going to another warehouse (for "put in section instead"). */
-    public static function forWarehouse(?int $warehouseId, int $toWarehouseId): ?WhSection
-    {
-        return static::of($warehouseId)->firstWhere('to_warehouse_id', $toWarehouseId);
-    }
-
-    /** Also scan the section label at unload? Off by default, set for each warehouse. */
-    public static function labelScan(?int $warehouseId): bool
-    {
-        return (bool) AppSetting::get('sections.label_scan.'.(int) $warehouseId, false);
-    }
-
-    public static function setLabelScan(?int $warehouseId, bool $on): void
-    {
-        AppSetting::put('sections.label_scan.'.(int) $warehouseId, $on ? '1' : null);
-    }
-
-    /** For the Scan app: the big tile. */
-    public static function tile(?WhSection $s): ?array
-    {
-        return $s ? ['code' => $s->code, 'name' => $s->name ?: $s->goesTo(), 'color' => $s->color, 'kind' => $s->kind] : null;
+        return $fields;
     }
 }
-DISPATCH_FILE_END_12
+DISPATCH_FILE_END_4
 
-# ---------------------------------------------------------------- app/Support/Help/DefaultGuides.php
-mkdir -p 'app/Support/Help'
-cat > 'app/Support/Help/DefaultGuides.php' <<'DISPATCH_FILE_END_13'
-<?php
-
-namespace App\Support\Help;
-
-/**
- * The guides the system starts with, in English and Tagalog. They are copied into
- * the help_guides table once (missing slugs only), then Admin → Help guides can edit them.
- *
- * Apps: admin, warehouse, company (partner hub), scan (Scan app), driver (Driver app).
- * "pages" are route names without the panel part ("pages.scaninvoice", "resources.deliverylogs.*"):
- * the "?" on those pages opens this guide. "links" are where "Do it now" goes, per app.
- */
-class DefaultGuides
-{
-    /** topic => [icon, English, Tagalog] */
-    public const TOPICS = [
-        'boxes' => ['📦', 'Boxes & inventory', 'Mga box at inventory'],
-        'trips' => ['🚚', 'Trips & loading', 'Mga trip at pag-load'],
-        'trucks' => ['📍', 'Trucks & tracking', 'Mga truck at tracking'],
-        'receivers' => ['💬', 'Receivers & SMS', 'Mga receiver at SMS'],
-        'apps' => ['📱', 'Phone apps', 'Mga app sa phone'],
-        'settings' => ['⚙️', 'Settings & AI', 'Settings at AI'],
-    ];
-
-    public static function all(): array
-    {
-        $s = fn (string $te, string $xe, string $tt, string $xt, ?string $img = null) => ['title_en' => $te, 'text_en' => $xe, 'title_tl' => $tt, 'text_tl' => $xt, 'image' => $img];
-        $p = fn (string $qe, string $ae, string $qt, string $at) => ['q_en' => $qe, 'a_en' => $ae, 'q_tl' => $qt, 'a_tl' => $at];
-        $img = fn (string $name) => 'images/help/'.$name.'.jpg';
-
-        return [
-            // ───────────────────────────── boxes ─────────────────────────────
-            [
-                'slug' => 'unload-container', 'topic' => 'boxes', 'icon' => '📥', 'apps' => ['admin', 'warehouse', 'scan'],
-                'title_en' => 'Unload a container', 'title_tl' => 'Mag-unload ng container',
-                'summary_en' => 'Scan every box as it comes off the container. Each scanned box is checked and counted in the inventory.',
-                'summary_tl' => 'I-scan ang bawat box pagbaba sa container. Ang na-scan na box ay checked at bilang na sa inventory.',
-                'when_en' => 'A container arrived at the warehouse and the boxes are being taken off.',
-                'when_tl' => 'Dumating ang container sa bodega at ibinababa na ang mga box.',
-                'steps' => [
-                    $s('Open Unload', 'In the Scan app tap Unload container. On a computer open Unload Container in the menu.', 'Buksan ang Unload', 'Sa Scan app, pindutin ang Unload container. Sa computer, buksan ang Unload Container sa menu.', $img('scan-home')),
-                    $s('Choose the container', 'Pick the container number from the list. Only containers that are not finished are shown.', 'Piliin ang container', 'Piliin ang container number sa listahan. Ang lalabas lang ay mga container na hindi pa tapos.', $img('unload')),
-                    $s('Scan each box', 'Scan the barcode on every box. Green means checked. Red tells you why (wrong container, already scanned, not on the list).', 'I-scan ang bawat box', 'I-scan ang barcode ng bawat box. Green ay okay. Kapag red, sasabihin kung bakit (ibang container, na-scan na, wala sa listahan).'),
-                    $s('Take a photo if asked', 'If box photos are switched on, take the photo and mark damaged or wet boxes.', 'Mag-picture kung hinihingi', 'Kung naka-on ang box photos, mag-picture at markahan kung sira o basa ang box.'),
-                    $s('Finish', 'When all boxes are scanned, press Finish. The boxes left over are listed as missing.', 'Tapusin', 'Kapag na-scan na lahat, pindutin ang Finish. Ang mga hindi na-scan ay ililista na missing.'),
-                ],
-                'result_en' => 'The boxes are now in the inventory and can be put on a trip.',
-                'result_tl' => 'Nasa inventory na ang mga box at puwede nang ilagay sa trip.',
-                'problems' => [
-                    $p('The box is not on the list', 'It may be on another container or not on the manifest. Put it aside and tell the office; it shows in Unmanifested.', 'Wala sa listahan ang box', 'Baka nasa ibang container o wala sa manifest. Itabi muna at sabihan ang office; lalabas ito sa Unmanifested.'),
-                    $p('It says already scanned', 'That box was scanned before. Nothing to do, go to the next box.', 'Sabi ay na-scan na', 'Na-scan na dati ang box. Wala nang gagawin, sunod na box na.'),
-                ],
-                'pages' => ['pages.scaninvoice', 'pages.unloadedcontainer', 'resources.containers.*', 'resources.unmanifesteds.*'],
-                'links' => ['admin' => 'pages.scaninvoice', 'warehouse' => 'pages.unloadedcontainer'],
-                'related' => ['inventory-count', 'box-photos', 'search-box'], 'sort' => 10,
-            ],
-            [
-                'slug' => 'inventory-count', 'topic' => 'boxes', 'icon' => '🔢', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'How the inventory counts', 'title_tl' => 'Paano binibilang ang inventory',
-                'summary_en' => 'A box is counted when it was scanned at Unload, is not delivered, and is not on a truck.',
-                'summary_tl' => 'Bilang ang box kapag na-scan sa Unload, hindi pa na-deliver, at wala sa truck.',
-                'when_en' => 'The number in Inventories looks too high or too low, or one box is missing from it.',
-                'when_tl' => 'Mukhang sobra o kulang ang bilang sa Inventories, o may box na wala roon.',
-                'steps' => [
-                    $s('It goes in at Unload', 'A box is added when it is scanned at Unload Container (or received at Warehouse unload).', 'Pumapasok sa Unload', 'Nadadagdag ang box kapag na-scan sa Unload Container (o natanggap sa Warehouse unload).'),
-                    $s('It goes out at Load Truck', 'When the box is scanned onto a truck it leaves the inventory, even before it is delivered.', 'Lumalabas sa Load Truck', 'Kapag na-scan na pasakay sa truck, bawas na ito sa inventory, kahit hindi pa na-deliver.'),
-                    $s('It comes back at Return Boxes', 'A box that was not delivered is counted again only after it is scanned in Return Boxes.', 'Bumabalik sa Return Boxes', 'Ang box na hindi na-deliver ay bibilang ulit lang kapag na-scan sa Return Boxes.'),
-                    $s('Delivered boxes never count', 'Once delivered, a box is gone from the inventory for good.', 'Ang na-deliver ay hindi na bilang', 'Kapag na-deliver na, wala na ito sa inventory.'),
-                ],
-                'result_en' => 'Inventory = scanned in, minus loaded on a truck, plus returned, minus delivered.',
-                'result_tl' => 'Inventory = na-scan papasok, bawas ang naka-load sa truck, dagdag ang na-return, bawas ang na-deliver.',
-                'problems' => [
-                    $p('A box was not delivered but is not in inventory', 'It is still "on the truck". Scan it in Return Boxes and it is counted again.', 'Hindi na-deliver pero wala sa inventory', 'Naka-"on the truck" pa ito. I-scan sa Return Boxes at bibilang na ulit.'),
-                    $p('A box is in inventory but not in the warehouse', 'It was never scanned onto the truck. Search the box to see its last scan.', 'Nasa inventory pero wala sa bodega', 'Hindi ito na-scan sa Load Truck. Hanapin ang box para makita ang huling scan.'),
-                ],
-                'pages' => ['resources.inventories.*', 'pages.dashboard'],
-                'links' => ['admin' => 'resources.inventories.index', 'warehouse' => 'resources.inventories.index'],
-                'related' => ['return-boxes', 'unload-container', 'search-box'], 'sort' => 20,
-            ],
-            [
-                'slug' => 'search-box', 'topic' => 'boxes', 'icon' => '🔍', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'Find a box and see where it is', 'title_tl' => 'Hanapin ang box at kung nasaan ito',
-                'summary_en' => 'Type the invoice number to see every scan of the box: unload, trip, truck, delivered or not, with photos.',
-                'summary_tl' => 'I-type ang invoice number para makita ang lahat ng scan ng box: unload, trip, truck, na-deliver o hindi, may photos.',
-                'when_en' => 'A receiver or a consolidator asks where a box is.',
-                'when_tl' => 'May receiver o consolidator na nagtatanong kung nasaan ang box.',
-                'steps' => [
-                    $s('Open the search', 'Open Search Invoice (Partner hub: Track a box).', 'Buksan ang search', 'Buksan ang Search Invoice (sa Partner hub: Track a box).'),
-                    $s('Type the invoice number', 'Type all or part of the number and press Enter.', 'I-type ang invoice number', 'I-type ang buo o bahagi ng number at pindutin ang Enter.'),
-                    $s('Read the history', 'The newest step is on top: which trip and truck, who scanned it and when, and the delivery photos.', 'Basahin ang history', 'Nasa itaas ang pinakabago: anong trip at truck, sino ang nag-scan at kailan, at ang delivery photos.'),
-                ],
-                'result_en' => 'You know where the box is and who had it last.',
-                'result_tl' => 'Alam mo na kung nasaan ang box at sino ang huling may hawak.',
-                'problems' => [
-                    $p('Nothing found', 'Check the number on the label. If it was never unloaded it is not in the system yet; check Unmanifested.', 'Walang lumabas', 'Tingnan ulit ang number sa label. Kung hindi pa na-unload, wala pa sa system; tingnan ang Unmanifested.'),
-                ],
-                'pages' => ['resources.searchinvs.*', 'pages.track'],
-                'links' => ['admin' => 'resources.searchinvs.index', 'warehouse' => 'resources.searchinvs.index', 'company' => 'pages.track'],
-                'related' => ['inventory-count', 'box-photos'], 'sort' => 30,
-            ],
-            [
-                'slug' => 'box-photos', 'topic' => 'boxes', 'icon' => '📷', 'apps' => ['admin', 'warehouse', 'company', 'scan'],
-                'title_en' => 'Box photos', 'title_tl' => 'Mga photo ng box',
-                'summary_en' => 'Photos taken at unload, loading, return and delivery are kept with the box. See them all in Box Photos.',
-                'summary_tl' => 'Ang photos sa unload, loading, return at delivery ay nakatabi sa box. Makikita lahat sa Box Photos.',
-                'when_en' => 'You need proof a box was fine, damaged, or delivered.',
-                'when_tl' => 'Kailangan mo ng patunay na okay, sira, o na-deliver ang box.',
-                'steps' => [
-                    $s('Choose when photos are needed', 'Admin → Settings → Box photos: switch photos on for unload, load, return, and pick "every box" or "only damaged".', 'Piliin kung kailan kailangan ng photo', 'Admin → Settings → Box photos: i-on ang photos sa unload, load, return, at piliin kung "lahat ng box" o "sira lang".'),
-                    $s('Take the photo while scanning', 'After the scan, the Scan app asks for the photo and the condition (good, damaged, wet, opened).', 'Mag-picture habang nag-i-scan', 'Pagkatapos ng scan, hihingi ang Scan app ng photo at kondisyon (okay, sira, basa, bukas).'),
-                    $s('Look at them later', 'Open Box Photos, search the invoice, and open a photo to see it big.', 'Tingnan mamaya', 'Buksan ang Box Photos, hanapin ang invoice, at buksan ang photo para lumaki.'),
-                ],
-                'result_en' => 'Every photo is kept with the box and its scan.',
-                'result_tl' => 'Nakatabi ang bawat photo kasama ng box at scan nito.',
-                'problems' => [
-                    $p('The photo did not upload', 'Weak signal. Tap the photo button again; the scan itself is already saved.', 'Hindi na-upload ang photo', 'Mahina ang signal. Pindutin ulit ang photo; naka-save na ang scan mismo.'),
-                ],
-                'pages' => ['pages.box-photos', 'pages.box-photo-settings'],
-                'links' => ['admin' => 'pages.box-photos', 'warehouse' => 'pages.box-photos', 'company' => 'pages.box-photos'],
-                'related' => ['unload-container', 'driver-deliver'], 'sort' => 40,
-            ],
-            [
-                'slug' => 'return-boxes', 'topic' => 'boxes', 'icon' => '↩️', 'apps' => ['admin', 'warehouse', 'company', 'scan'],
-                'title_en' => 'Return a box that was not delivered', 'title_tl' => 'I-return ang box na hindi na-deliver',
-                'summary_en' => 'When the truck comes back, scan the boxes that were not delivered. They go back to the inventory.',
-                'summary_tl' => 'Pagbalik ng truck, i-scan ang mga box na hindi na-deliver. Babalik sila sa inventory.',
-                'when_en' => 'A truck is back with boxes the driver could not deliver.',
-                'when_tl' => 'Bumalik ang truck na may mga box na hindi na-deliver ng driver.',
-                'steps' => [
-                    $s('Open Return Boxes', 'In the Scan app tap Return boxes. On a computer open Return Boxes (Warehouse: Hub Return Boxes).', 'Buksan ang Return Boxes', 'Sa Scan app, pindutin ang Return boxes. Sa computer, buksan ang Return Boxes (Warehouse: Hub Return Boxes).'),
-                    $s('Choose the trip', 'Pick the trip the box was on. The list shows how many boxes are still out.', 'Piliin ang trip', 'Piliin ang trip kung saan nakasakay ang box. Makikita kung ilan pa ang nasa labas.', $img('return')),
-                    $s('Scan each box', 'Scan every box that came back. Green means it is back in the inventory.', 'I-scan ang bawat box', 'I-scan ang bawat box na bumalik. Green ay balik na sa inventory.'),
-                    $s('Finish', 'Press Finish. The returned boxes can be planned on a new trip.', 'Tapusin', 'Pindutin ang Finish. Puwede nang ilagay ulit sa bagong trip ang mga box.'),
-                ],
-                'result_en' => 'The boxes are counted in the inventory again, marked "returned".',
-                'result_tl' => 'Bilang na ulit sa inventory ang mga box, may markang "returned".',
-                'problems' => [
-                    $p('It says the box was delivered', 'The driver pressed Deliver. If it was a mistake, the driver can Undo within 30 minutes; after that ask the office.', 'Sabi ay na-deliver na', 'Pinindot ng driver ang Deliver. Kung mali, puwedeng mag-Undo ang driver sa loob ng 30 minuto; pagkatapos noon, sa office na.'),
-                ],
-                'pages' => ['pages.return-boxes', 'pages.hub-return-boxes'],
-                'links' => ['admin' => 'pages.return-boxes', 'warehouse' => 'pages.hub-return-boxes', 'company' => 'pages.return-boxes'],
-                'related' => ['inventory-count', 'not-delivered-list', 'driver-cant-deliver'], 'sort' => 50,
-            ],
-
-            // ───────────────────────────── trips ─────────────────────────────
-            [
-                'slug' => 'create-trip', 'topic' => 'trips', 'icon' => '🗓️', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'Make a delivery trip', 'title_tl' => 'Gumawa ng delivery trip',
-                'summary_en' => 'A trip is one truck going out on one day. Make the trip, then add the boxes by area.',
-                'summary_tl' => 'Ang trip ay isang truck na lalabas sa isang araw. Gawin ang trip, tapos idagdag ang mga box ayon sa area.',
-                'when_en' => 'Boxes are in the inventory and a truck is free.',
-                'when_tl' => 'May mga box sa inventory at may bakanteng truck.',
-                'steps' => [
-                    $s('New trip', 'Open Delivery Log and press New. Choose the truck and the date it leaves.', 'Bagong trip', 'Buksan ang Delivery Log at pindutin ang New. Piliin ang truck at petsa ng alis.', $img('create-trip')),
-                    $s('Add the boxes', 'Open Assign invoices, choose the trip, pick the areas (province, city, barangay) and add the boxes.', 'Idagdag ang mga box', 'Buksan ang Assign invoices, piliin ang trip, piliin ang mga area (probinsya, siyudad, barangay) at idagdag ang mga box.'),
-                    $s('Check the order', 'Press Stops & loading on the trip. The system puts the stops in order and says which boxes go to the front or back.', 'Tingnan ang order', 'Pindutin ang Stops & loading sa trip. Iaayos ng system ang mga stop at sasabihin kung aling box ang sa harap o likod.'),
-                    $s('Load the truck', 'Scan the boxes in Load Truck. See the guide "Load a truck".', 'I-load ang truck', 'I-scan ang mga box sa Load Truck. Tingnan ang gabay na "Mag-load ng truck".'),
-                ],
-                'result_en' => 'The trip has its boxes and is ready to load. Partner hubs can also use Incoming boxes → Create trip.',
-                'result_tl' => 'May mga box na ang trip at handa nang i-load. Sa Partner hub, puwede rin sa Incoming boxes → Create trip.',
-                'problems' => [
-                    $p('The truck is not in the list', 'The truck is already on an active trip, or it is switched off. Check Trucks.', 'Wala ang truck sa listahan', 'May active trip pa ang truck, o naka-off ito. Tingnan sa Trucks.'),
-                    $p('Too many boxes for one truck', 'Make a second trip, or let the AI trip helper split them.', 'Sobra ang box para sa isang truck', 'Gumawa ng ikalawang trip, o hayaan ang AI trip helper na hatiin.'),
-                ],
-                'pages' => ['resources.deliverylogs.*', 'resources.whdeliverylogs.*', 'pages.routeinvoice', 'pages.hubroute', 'pages.incoming-boxes'],
-                'links' => ['admin' => 'resources.deliverylogs.index', 'warehouse' => 'resources.deliverylogs.index', 'company' => 'pages.incoming-boxes'],
-                'related' => ['ai-trip-helper', 'stops-loading', 'load-truck'], 'sort' => 10,
-            ],
-            [
-                'slug' => 'ai-trip-helper', 'topic' => 'trips', 'icon' => '✨', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'Let the AI draft the trips', 'title_tl' => 'Hayaan ang AI na gumawa ng draft ng trips',
-                'summary_en' => 'The AI groups the ready boxes by area into your free trucks. You check, change, and press Create.',
-                'summary_tl' => 'Igugrupo ng AI ang mga handang box ayon sa area sa mga bakanteng truck. Ikaw ang titingin, magbabago, at pipindot ng Create.',
-                'when_en' => 'Many boxes are waiting and you want a quick first plan.',
-                'when_tl' => 'Maraming box ang naghihintay at gusto mo ng mabilis na unang plano.',
-                'steps' => [
-                    $s('Open AI trip helper', 'Open AI trip helper in the menu. It must be switched on in Settings → AI.', 'Buksan ang AI trip helper', 'Buksan ang AI trip helper sa menu. Dapat naka-on ito sa Settings → AI.'),
-                    $s('Press Draft trips', 'The AI keeps the same receiver together and puts priority and tried-before boxes first.', 'Pindutin ang Draft trips', 'Pinagsasama ng AI ang parehong receiver at inuuna ang priority at mga box na sinubukan na dati.'),
-                    $s('Check and create', 'Move boxes or trucks if needed, then press Create. Trip numbers are given as usual.', 'Tingnan at i-create', 'Ilipat ang box o truck kung kailangan, tapos pindutin ang Create. Bibigyan ng trip number gaya ng dati.'),
-                ],
-                'result_en' => 'Real trips are made from the draft. Nothing is made until you press Create.',
-                'result_tl' => 'Gagawa ng totoong trip mula sa draft. Walang mangyayari hangga\'t hindi pinipindot ang Create.',
-                'problems' => [
-                    $p('The page says AI is off', 'An admin switches it on in Settings → AI (an API key is needed).', 'Sabi ay naka-off ang AI', 'Ang admin ang mag-o-on sa Settings → AI (kailangan ng API key).'),
-                ],
-                'pages' => ['pages.ai-trips'],
-                'links' => ['admin' => 'pages.ai-trips', 'warehouse' => 'pages.ai-trips', 'company' => 'pages.ai-trips'],
-                'related' => ['create-trip', 'ai-settings'], 'sort' => 20,
-            ],
-            [
-                'slug' => 'stops-loading', 'topic' => 'trips', 'icon' => '🧭', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'Stops in order and the loading list', 'title_tl' => 'Pagkakasunod ng stops at ang loading list',
-                'summary_en' => 'Each trip gets its stops in driving order and a loading list: the last stops go in FRONT (by the cab) first, the first stops go in the BACK (at the door) last.',
-                'summary_tl' => 'Ang bawat trip ay may stops na naka-ayos sa daan at loading list: ang huling stops ay unang ipapasok sa HARAP (sa may cab), ang unang stops ay huli sa LIKOD (sa may pinto).',
-                'when_en' => 'Before loading, so the first stops are easy to reach at the door.',
-                'when_tl' => 'Bago mag-load, para madaling abutin sa pinto ang mga unang stop.',
-                'steps' => [
-                    $s('Open Stops & loading', 'In Delivery Log press Stops & loading on the trip row.', 'Buksan ang Stops & loading', 'Sa Delivery Log, pindutin ang Stops & loading sa row ng trip.', $img('stops')),
-                    $s('Check the map', 'The stops are numbered on the map. Drag a stop to change the order, or press Sort again.', 'Tingnan ang mapa', 'May number ang mga stop sa mapa. I-drag para baguhin ang order, o pindutin ulit ang Sort.'),
-                    $s('Print the loading list', 'Press Print loading list. It is grouped FRONT → MIDDLE → BACK, in the order to put the boxes in.', 'I-print ang loading list', 'Pindutin ang Print loading list. Naka-grupo ito HARAP → GITNA → LIKOD, ayon sa pagkakasunod ng pagpasok.'),
-                ],
-                'result_en' => 'The crew loads in the right order and the driver sees the same stops in the Driver app.',
-                'result_tl' => 'Tama ang pagkaka-load ng crew at pareho ang stops na makikita ng driver sa Driver app.',
-                'problems' => [
-                    $p('A stop has no pin on the map', 'The address was not found. Fix it on the stop, or switch on AI address cleaning in Settings → Maps & routes.', 'Walang pin ang stop sa mapa', 'Hindi nahanap ang address. Ayusin sa stop, o i-on ang AI address cleaning sa Settings → Maps & routes.'),
-                ],
-                'pages' => ['pages.trip-stops', 'pages.maps-routes'],
-                'links' => ['admin' => 'resources.deliverylogs.index', 'warehouse' => 'resources.deliverylogs.index', 'company' => 'resources.deliverylogs.index'],
-                'related' => ['load-truck', 'maps-routes', 'driver-navigate'], 'sort' => 30,
-            ],
-            [
-                'slug' => 'load-truck', 'topic' => 'trips', 'icon' => '🚛', 'apps' => ['admin', 'warehouse', 'company', 'scan'],
-                'title_en' => 'Load a truck', 'title_tl' => 'Mag-load ng truck',
-                'summary_en' => 'Scan each box as it goes on the truck. The screen says which spot it goes in: FRONT, MIDDLE or BACK.',
-                'summary_tl' => 'I-scan ang bawat box pagsakay sa truck. Sasabihin ng screen kung saan ilalagay: HARAP, GITNA o LIKOD.',
-                'when_en' => 'The trip has its boxes and the truck is at the loading bay.',
-                'when_tl' => 'May mga box na ang trip at nasa loading bay na ang truck.',
-                'steps' => [
-                    $s('Open Load truck', 'In the Scan app tap Load truck (Partner hub: Hub load). On a computer open Load Truck.', 'Buksan ang Load truck', 'Sa Scan app, pindutin ang Load truck (Partner hub: Hub load). Sa computer, buksan ang Load Truck.'),
-                    $s('Choose the trip', 'Pick the trip. You see how many boxes are left to load.', 'Piliin ang trip', 'Piliin ang trip. Makikita kung ilan pa ang hindi naka-load.', $img('load')),
-                    $s('Scan and place', 'Scan each box and put it where the screen says. "Load next" shows which boxes to bring now.', 'I-scan at ilagay', 'I-scan ang bawat box at ilagay kung saan sinasabi ng screen. Ang "Load next" ay nagsasabi kung aling box ang susunod.'),
-                    $s('Finish', 'Press Finish when all boxes are on. The driver can start the trip.', 'Tapusin', 'Pindutin ang Finish kapag nakasakay na lahat. Puwede nang umalis ang driver.'),
-                ],
-                'result_en' => 'The boxes are on the truck, out of the inventory, and in the Driver app.',
-                'result_tl' => 'Nasa truck na ang mga box, bawas na sa inventory, at nasa Driver app na.',
-                'problems' => [
-                    $p('It says the box is on another trip', 'The box belongs to a different trip. Put it aside or ask the office to move it.', 'Sabi ay nasa ibang trip ang box', 'Sa ibang trip ang box. Itabi muna o ipalipat sa office.'),
-                    $p('It says too early', 'That box is for an early stop and goes near the door, so load the boxes for later stops first. Press Load it anyway if you are sure.', 'Sabi ay masyadong maaga', 'Para sa maagang stop ang box at ilalagay sa may pinto, kaya unahin ang mga box ng huling stops. Pindutin ang Load it anyway kung sigurado ka.'),
-                ],
-                'pages' => ['pages.scanload', 'pages.whloaded', 'pages.hubloaded', 'pages.load-truck'],
-                'links' => ['admin' => 'pages.scanload', 'warehouse' => 'pages.hubloaded', 'company' => 'pages.load-truck'],
-                'related' => ['stops-loading', 'create-trip', 'inventory-count'], 'sort' => 40,
-            ],
-            [
-                'slug' => 'warehouse-transfer', 'topic' => 'trips', 'icon' => '🔁', 'apps' => ['warehouse', 'scan'],
-                'title_en' => 'Move boxes to another warehouse', 'title_tl' => 'Ilipat ang mga box sa ibang bodega',
-                'summary_en' => 'Load the boxes at Warehouse load here, and the other warehouse scans them at Warehouse unload.',
-                'summary_tl' => 'I-load ang mga box sa Warehouse load dito, at i-scan sila ng kabilang bodega sa Warehouse unload.',
-                'when_en' => 'Boxes must go to another warehouse before delivery.',
-                'when_tl' => 'Kailangang dalhin muna ang mga box sa ibang bodega bago i-deliver.',
-                'steps' => [
-                    $s('Make the transfer trip', 'Open WH Delivery Logs and press New. Choose the truck and the warehouse it goes to.', 'Gumawa ng transfer trip', 'Buksan ang WH Delivery Logs at pindutin ang New. Piliin ang truck at ang bodegang pupuntahan.'),
-                    $s('Load', 'In the Scan app tap Warehouse load, choose the trip, scan each box.', 'Mag-load', 'Sa Scan app, pindutin ang Warehouse load, piliin ang trip, i-scan ang bawat box.'),
-                    $s('Receive', 'At the other warehouse tap Warehouse unload, choose the arriving trip, scan each box.', 'Tanggapin', 'Sa kabilang bodega, pindutin ang Warehouse unload, piliin ang dumarating na trip, i-scan ang bawat box.'),
-                ],
-                'result_en' => 'The boxes are in the other warehouse\'s inventory.',
-                'result_tl' => 'Nasa inventory na ng kabilang bodega ang mga box.',
-                'problems' => [
-                    $p('The boxes are in neither inventory', 'They were loaded but not yet received. They count again once scanned at Warehouse unload.', 'Wala sa dalawang inventory ang box', 'Na-load pero hindi pa natatanggap. Bibilang ulit kapag na-scan sa Warehouse unload.'),
-                ],
-                'pages' => ['pages.whloaded', 'pages.whunloaded', 'resources.whdeliverylogs.*'],
-                'links' => ['warehouse' => 'pages.whloaded'],
-                'related' => ['inventory-count', 'load-truck'], 'sort' => 50,
-            ],
-            [
-                'slug' => 'hub-boxes', 'topic' => 'trips', 'icon' => '🏬', 'apps' => ['admin', 'company'],
-                'title_en' => 'Boxes at each partner hub', 'title_tl' => 'Mga box sa bawat partner hub',
-                'summary_en' => 'The dashboard shows, for each hub, the boxes coming, waiting, on a truck, delivered and not delivered.',
-                'summary_tl' => 'Makikita sa dashboard, bawat hub, ang mga box na paparating, naghihintay, nasa truck, na-deliver at hindi na-deliver.',
-                'when_en' => 'You want to know how busy a hub is or which boxes are stuck.',
-                'when_tl' => 'Gusto mong malaman kung gaano ka-busy ang hub o aling box ang naiipit.',
-                'steps' => [
-                    $s('Open the dashboard', 'The hub boxes are on the dashboard. The numbers refresh every minute.', 'Buksan ang dashboard', 'Nasa dashboard ang hub boxes. Nag-a-update ang bilang bawat minuto.'),
-                    $s('Open a number', 'Click a number to see those boxes.', 'Buksan ang isang bilang', 'I-click ang bilang para makita ang mga box na iyon.'),
-                    $s('Partner hub: Incoming boxes', 'At the hub, Incoming boxes shows what is coming and lets you make your own trip.', 'Partner hub: Incoming boxes', 'Sa hub, ang Incoming boxes ay nagpapakita ng paparating at puwede kang gumawa ng sariling trip.'),
-                ],
-                'result_en' => 'You see where every hub\'s boxes are.',
-                'result_tl' => 'Makikita mo kung nasaan ang mga box ng bawat hub.',
-                'problems' => [],
-                'pages' => ['pages.dashboard', 'resources.logistichubs.*', 'pages.incoming-boxes'],
-                'links' => ['admin' => 'pages.dashboard', 'company' => 'pages.incoming-boxes'],
-                'related' => ['not-delivered-list', 'create-trip'], 'sort' => 60,
-            ],
-            [
-                'slug' => 'not-delivered-list', 'topic' => 'trips', 'icon' => '⚠️', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'Not delivered: what to do next', 'title_tl' => 'Hindi na-deliver: ano ang susunod',
-                'summary_en' => 'Boxes the driver could not deliver are listed with the reason, the note and the photo. Call, plan again, or return.',
-                'summary_tl' => 'Nakalista ang mga box na hindi na-deliver kasama ang dahilan, note at photo. Tawagan, i-plano ulit, o i-return.',
-                'when_en' => 'After a trip, some boxes came back.',
-                'when_tl' => 'Pagkatapos ng trip, may mga box na bumalik.',
-                'steps' => [
-                    $s('Open the list', 'Partner hub: Not delivered. Admin and Warehouse: the trip in Delivery Log, tab Not delivered.', 'Buksan ang listahan', 'Partner hub: Not delivered. Admin at Warehouse: ang trip sa Delivery Log, tab na Not delivered.'),
-                    $s('Read the reason', 'No one home, address not found, refused… The driver\'s note and photo are there.', 'Basahin ang dahilan', 'Walang tao, hindi mahanap ang address, tinanggihan… Nandoon ang note at photo ng driver.'),
-                    $s('Return the box', 'Scan it in Return Boxes when the truck is back.', 'I-return ang box', 'I-scan sa Return Boxes pagbalik ng truck.'),
-                    $s('Plan it again', 'The returned box can go on the next trip. Tried-before boxes are put first.', 'I-plano ulit', 'Puwedeng isakay sa susunod na trip ang box na na-return. Inuuna ang mga box na sinubukan na.'),
-                ],
-                'result_en' => 'The box is back in the inventory and goes out again.',
-                'result_tl' => 'Balik sa inventory ang box at lalabas ulit.',
-                'problems' => [
-                    $p('The receiver says it was never tried', 'Open the box history: the time, the place on the map and the photo show the try.', 'Sabi ng receiver hindi sinubukan', 'Buksan ang history ng box: ang oras, lugar sa mapa at photo ang patunay.'),
-                ],
-                'pages' => ['pages.not-delivered'],
-                'links' => ['company' => 'pages.not-delivered', 'admin' => 'resources.deliverylogs.index', 'warehouse' => 'resources.deliverylogs.index'],
-                'related' => ['return-boxes', 'driver-cant-deliver', 'sms-setup'], 'sort' => 70,
-            ],
-
-            // ───────────────────────────── trucks ─────────────────────────────
-            [
-                'slug' => 'truck-tracking', 'topic' => 'trucks', 'icon' => '📍', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'See where the trucks are', 'title_tl' => 'Tingnan kung nasaan ang mga truck',
-                'summary_en' => 'Truck tracking shows every truck on a trip on a map, its stops, speed, and alerts.',
-                'summary_tl' => 'Ipinapakita ng Truck tracking ang bawat truck na nasa trip sa mapa, ang stops, bilis, at alerts.',
-                'when_en' => 'You want to know if a truck is on the way, late, or stopped.',
-                'when_tl' => 'Gusto mong malaman kung paparating, late, o nakatigil ang truck.',
-                'steps' => [
-                    $s('Open Truck tracking', 'Open Truck tracking in the menu. Trucks on a trip are listed on the left.', 'Buksan ang Truck tracking', 'Buksan ang Truck tracking sa menu. Nasa kaliwa ang mga truck na nasa trip.', $img('tracking')),
-                    $s('Pick a truck', 'Click a truck to see it on the map with its stops. The map refreshes every 30 seconds.', 'Pumili ng truck', 'I-click ang truck para makita sa mapa kasama ang stops. Nag-a-update ang mapa bawat 30 segundo.'),
-                    $s('Open the truck page', 'Press Open truck for the day\'s route, Replay, and the Alerts tab.', 'Buksan ang page ng truck', 'Pindutin ang Open truck para sa ruta ng araw, Replay, at tab na Alerts.'),
-                ],
-                'result_en' => 'You see each truck\'s last place and how its trip is going.',
-                'result_tl' => 'Makikita mo ang huling lugar ng bawat truck at kung kumusta ang trip.',
-                'problems' => [
-                    $p('The truck has no location', 'The driver has not agreed to location yet, or the phone has no signal. See "Location in the Driver app".', 'Walang location ang truck', 'Hindi pa pumapayag sa location ang driver, o walang signal ang phone. Tingnan ang "Location sa Driver app".'),
-                    $p('Using a GPS tracker instead', 'Admin → Settings → Truck tracking gives each truck a tracker link to paste in the tracker\'s settings.', 'Gamit ay GPS tracker', 'Sa Admin → Settings → Truck tracking, may tracker link ang bawat truck na ilalagay sa settings ng tracker.'),
-                ],
-                'pages' => ['pages.truck-tracking', 'pages.truck-tracking.truck', 'pages.tracking-settings'],
-                'links' => ['admin' => 'pages.truck-tracking', 'warehouse' => 'pages.truck-tracking', 'company' => 'pages.truck-tracking'],
-                'related' => ['end-of-day', 'driver-location'], 'sort' => 10,
-            ],
-            [
-                'slug' => 'end-of-day', 'topic' => 'trucks', 'icon' => '🌙', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'End-of-day truck summary', 'title_tl' => 'Buod ng mga truck sa dulo ng araw',
-                'summary_en' => 'After work, the day in short: for each truck what went well and what to look at. It can also be emailed.',
-                'summary_tl' => 'Pagkatapos ng trabaho, ang buod ng araw: sa bawat truck, ano ang maganda at ano ang dapat tingnan. Puwede ring i-email.',
-                'when_en' => 'At the end of the day, or the next morning.',
-                'when_tl' => 'Sa dulo ng araw, o kinaumagahan.',
-                'steps' => [
-                    $s('Open the summary', 'Truck tracking → End of day.', 'Buksan ang buod', 'Truck tracking → End of day.'),
-                    $s('Choose the day', 'Pick a date to see an older day.', 'Piliin ang araw', 'Pumili ng petsa para makita ang lumang araw.'),
-                    $s('Email it every day', 'Admin → Settings → Truck tracking: type the emails for the daily summary (sent 6 PM).', 'I-email araw-araw', 'Admin → Settings → Truck tracking: i-type ang mga email para sa araw-araw na buod (ipinapadala 6 PM).'),
-                ],
-                'result_en' => 'You know which trucks had a good day and which need a talk.',
-                'result_tl' => 'Alam mo kung aling truck ang maganda ang araw at alin ang kailangang kausapin.',
-                'problems' => [
-                    $p('The summary has no AI notes', 'Switch on "End-of-day truck summary" in Settings → AI.', 'Walang AI notes ang buod', 'I-on ang "End-of-day truck summary" sa Settings → AI.'),
-                ],
-                'pages' => ['pages.truck-tracking.end-of-day'],
-                'links' => ['admin' => 'pages.truck-tracking.end-of-day', 'warehouse' => 'pages.truck-tracking.end-of-day', 'company' => 'pages.truck-tracking.end-of-day'],
-                'related' => ['truck-tracking', 'ai-settings'], 'sort' => 20,
-            ],
-
-            // ───────────────────────────── receivers ─────────────────────────────
-            [
-                'slug' => 'sms-setup', 'topic' => 'receivers', 'icon' => '💬', 'apps' => ['admin'],
-                'title_en' => 'Send SMS to receivers', 'title_tl' => 'Magpadala ng SMS sa mga receiver',
-                'summary_en' => 'Receivers get a text when the box is out for delivery, when the driver is next, delivered, or not delivered.',
-                'summary_tl' => 'Makakatanggap ng text ang receiver kapag palabas na ang box, kapag sila na ang susunod, na-deliver, o hindi na-deliver.',
-                'when_en' => 'You want receivers to know when their box comes.',
-                'when_tl' => 'Gusto mong malaman ng receiver kung kailan darating ang box.',
-                'steps' => [
-                    $s('Get an SMS account', 'Make an account at Semaphore (semaphore.co) and copy the API key. Twilio also works.', 'Kumuha ng SMS account', 'Gumawa ng account sa Semaphore (semaphore.co) at kopyahin ang API key. Puwede rin ang Twilio.', $img('sms')),
-                    $s('Paste the key', 'Settings → SMS: choose the provider, paste the key and the sender name, press Send test.', 'Ilagay ang key', 'Settings → SMS: piliin ang provider, ilagay ang key at sender name, pindutin ang Send test.'),
-                    $s('Choose the messages', 'Switch on the texts you want and edit the words. Tagalog and Bisaya are used by province.', 'Piliin ang mga mensahe', 'I-on ang mga text na gusto mo at baguhin ang salita. Tagalog at Bisaya ayon sa probinsya.'),
-                    $s('Watch the SMS log', 'SMS log shows every text and if it was sent, a bad number, or the receiver replied STOP.', 'Tingnan ang SMS log', 'Makikita sa SMS log ang bawat text at kung na-send, mali ang number, o nag-reply ng STOP ang receiver.'),
-                ],
-                'result_en' => 'One text per receiver at each step, within your monthly limit.',
-                'result_tl' => 'Isang text bawat receiver sa bawat hakbang, pasok sa monthly limit mo.',
-                'problems' => [
-                    $p('Status says Bad number', 'The receiver\'s mobile number on the invoice is wrong or too short. Fix it on the invoice.', 'Bad number ang status', 'Mali o kulang ang mobile number ng receiver sa invoice. Ayusin sa invoice.'),
-                    $p('How much does it cost?', 'Semaphore is about ₱0.50 per SMS (160 characters). Set a monthly limit in Settings → SMS.', 'Magkano ang bayad?', 'Sa Semaphore mga ₱0.50 bawat SMS (160 characters). Maglagay ng monthly limit sa Settings → SMS.'),
-                ],
-                'pages' => ['pages.sms-settings', 'pages.sms-log'],
-                'links' => ['admin' => 'pages.sms-settings'],
-                'related' => ['not-delivered-list', 'ai-settings'], 'sort' => 10,
-            ],
-
-            // ───────────────────────────── apps ─────────────────────────────
-            [
-                'slug' => 'install-apps', 'topic' => 'apps', 'icon' => '📲', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'Put the Scan app and Driver app on a phone', 'title_tl' => 'Ilagay ang Scan app at Driver app sa phone',
-                'summary_en' => 'Open the link on the phone and add it to the home screen. It works like an app.',
-                'summary_tl' => 'Buksan ang link sa phone at i-add sa home screen. Gagana itong parang app.',
-                'when_en' => 'A new crew member or driver starts.',
-                'when_tl' => 'May bagong crew o driver.',
-                'steps' => [
-                    $s('Open Install apps', 'Open Install apps. Each app has a QR code.', 'Buksan ang Install apps', 'Buksan ang Install apps. May QR code ang bawat app.'),
-                    $s('Scan the QR with the phone', 'The crew scans the Scan app QR; drivers scan the Driver app QR.', 'I-scan ang QR gamit ang phone', 'Ang crew ay i-scan ang QR ng Scan app; ang driver ay QR ng Driver app.'),
-                    $s('Add to home screen', 'Android: tap Install. iPhone: Share → Add to Home Screen.', 'I-add sa home screen', 'Android: pindutin ang Install. iPhone: Share → Add to Home Screen.'),
-                    $s('Sign in', 'Sign in with their own email and password.', 'Mag-sign in', 'Mag-sign in gamit ang sariling email at password.'),
-                ],
-                'result_en' => 'The app is on the phone\'s home screen.',
-                'result_tl' => 'Nasa home screen na ng phone ang app.',
-                'problems' => [
-                    $p('The crew sees "can\'t scan here"', 'Their account type is wrong. Set it to Warehouse or Company in Users.', 'Sabi ng crew "can\'t scan here"', 'Mali ang account type. Gawing Warehouse o Company sa Users.'),
-                ],
-                'pages' => ['pages.install-apps', 'pages.app-icons'],
-                'links' => ['warehouse' => 'pages.install-apps', 'company' => 'pages.install-apps'],
-                'related' => ['driver-location'], 'sort' => 10,
-            ],
-            [
-                'slug' => 'scan-tips', 'topic' => 'apps', 'icon' => '📷', 'apps' => ['scan'],
-                'title_en' => 'Scanning tips', 'title_tl' => 'Mga tip sa pag-scan',
-                'summary_en' => 'Green is good, red tells you what is wrong. Every scan is saved right away.',
-                'summary_tl' => 'Green ay okay, red ay may mali at sasabihin kung ano. Naka-save agad ang bawat scan.',
-                'when_en' => 'You are new to the Scan app.',
-                'when_tl' => 'Bago ka sa Scan app.',
-                'steps' => [
-                    $s('Pick what you are doing', 'On the home screen tap Unload, Load, Return, or Hub load.', 'Piliin ang gagawin', 'Sa home screen, pindutin ang Unload, Load, Return, o Hub load.', $img('scan-home')),
-                    $s('Hold the barcode flat', 'Keep the label 15–20 cm from the camera, in good light.', 'Itapat nang maayos ang barcode', 'Ilayo ang label nang 15–20 cm sa camera, sa maliwanag na lugar.'),
-                    $s('Type it if it will not scan', 'Type the invoice number in the box under the camera and press →.', 'I-type kung ayaw ma-scan', 'I-type ang invoice number sa box sa ilalim ng camera at pindutin ang →.'),
-                    $s('Read red messages', 'Red says why: wrong trip, already scanned, not on the list. Put the box aside and go on.', 'Basahin ang red na mensahe', 'Sinasabi ng red kung bakit: ibang trip, na-scan na, wala sa listahan. Itabi ang box at tuloy lang.'),
-                ],
-                'result_en' => 'Fast scanning with fewer mistakes.',
-                'result_tl' => 'Mabilis na pag-scan at mas kaunting mali.',
-                'problems' => [
-                    $p('The camera does not open', 'Allow the camera for this app in the phone settings, then open the app again.', 'Ayaw bumukas ng camera', 'Payagan ang camera para sa app sa settings ng phone, tapos buksan ulit ang app.'),
-                ],
-                'pages' => [], 'links' => [],
-                'related' => ['unload-container', 'load-truck', 'return-boxes'], 'sort' => 5,
-            ],
-
-            // ───────────────────────────── driver ─────────────────────────────
-            [
-                'slug' => 'driver-deliver', 'topic' => 'apps', 'icon' => '✅', 'apps' => ['driver', 'admin', 'company'],
-                'title_en' => 'Deliver a box', 'title_tl' => 'Mag-deliver ng box',
-                'summary_en' => 'Scan the box, check the name, take the proof photo, press Deliver.',
-                'summary_tl' => 'I-scan ang box, tingnan ang pangalan, kunan ng proof photo, pindutin ang Deliver.',
-                'when_en' => 'You are at the receiver with the box.',
-                'when_tl' => 'Nasa receiver ka na dala ang box.',
-                'steps' => [
-                    $s('Scan the box', 'Tap Scan and point at the label.', 'I-scan ang box', 'Pindutin ang Scan at itapat sa label.', $img('driver-home')),
-                    $s('Check before handing over', 'Check the receiver\'s name and the box number on the screen.', 'Tingnan bago iabot', 'Tingnan ang pangalan ng receiver at box number sa screen.'),
-                    $s('Take the proof photo', 'Take a photo of the box with the receiver or at the door. You can add more than one.', 'Kunan ng proof photo', 'Kunan ng photo ang box kasama ang receiver o sa pinto. Puwedeng higit sa isa.'),
-                    $s('Press Deliver', 'Press Deliver this box. The receiver gets a text if SMS is on.', 'Pindutin ang Deliver', 'Pindutin ang Deliver this box. Makakatanggap ng text ang receiver kung naka-on ang SMS.'),
-                ],
-                'result_en' => 'The box is delivered, with the time, place and photo.',
-                'result_tl' => 'Na-deliver na ang box, may oras, lugar at photo.',
-                'problems' => [
-                    $p('It says not this box', 'The box is not on your trip. Keep it on the truck and tell the office.', 'Sabi ay "Not this box"', 'Wala sa trip mo ang box. Iwan sa truck at sabihan ang office.'),
-                    $p('No signal', 'Deliver anyway. It is saved on the phone and sent when there is signal.', 'Walang signal', 'Mag-deliver pa rin. Naka-save sa phone at ipapadala kapag may signal na.'),
-                ],
-                'pages' => [], 'links' => [],
-                'related' => ['driver-undo', 'driver-cant-deliver', 'driver-offline'], 'sort' => 20,
-            ],
-            [
-                'slug' => 'driver-cant-deliver', 'topic' => 'apps', 'icon' => '🚫', 'apps' => ['driver'],
-                'title_en' => 'Can\'t deliver', 'title_tl' => 'Hindi ma-deliver',
-                'summary_en' => 'Choose the reason, take a photo, and keep the box on the truck.',
-                'summary_tl' => 'Piliin ang dahilan, mag-picture, at iwan ang box sa truck.',
-                'when_en' => 'No one is home, the address is wrong, or the receiver refused.',
-                'when_tl' => 'Walang tao, mali ang address, o tinanggihan ng receiver.',
-                'steps' => [
-                    $s('Scan the box', 'Scan it like a delivery, then press Can\'t deliver.', 'I-scan ang box', 'I-scan gaya ng delivery, tapos pindutin ang Can\'t deliver.'),
-                    $s('Choose the reason', 'No one home, address not found, phone unreachable, refused, and others.', 'Piliin ang dahilan', 'Walang tao, hindi mahanap ang address, hindi ma-contact, tinanggihan, at iba pa.'),
-                    $s('Photo and note', 'Take a photo of the place and add a short note. With voice note on, just say what happened.', 'Photo at note', 'Kunan ng photo ang lugar at maglagay ng maikling note. Kung naka-on ang voice note, sabihin lang ang nangyari.'),
-                    $s('Keep it on the truck', 'Bring it back. The office scans it in Return Boxes.', 'Iwan sa truck', 'Ibalik ito. I-scan ng office sa Return Boxes.'),
-                ],
-                'result_en' => 'The box is marked not delivered with the reason; the office plans it again.',
-                'result_tl' => 'Minarkahan ang box na hindi na-deliver kasama ang dahilan; ipa-plano ulit ng office.',
-                'problems' => [
-                    $p('The receiver came back', 'Scan the box again and press Deliver.', 'Bumalik ang receiver', 'I-scan ulit ang box at pindutin ang Deliver.'),
-                ],
-                'pages' => [], 'links' => [],
-                'related' => ['driver-deliver', 'return-boxes'], 'sort' => 30,
-            ],
-            [
-                'slug' => 'driver-undo', 'topic' => 'apps', 'icon' => '↶', 'apps' => ['driver'],
-                'title_en' => 'Undo a delivery', 'title_tl' => 'I-undo ang delivery',
-                'summary_en' => 'Pressed Deliver by mistake? Undo it within 30 minutes.',
-                'summary_tl' => 'Napindot ang Deliver nang mali? I-undo sa loob ng 30 minuto.',
-                'when_en' => 'Wrong box, or the receiver did not get it.',
-                'when_tl' => 'Maling box, o hindi natanggap ng receiver.',
-                'steps' => [
-                    $s('Right away', 'Tap Undo on the green bar that shows after Deliver.', 'Agad-agad', 'Pindutin ang Undo sa green bar na lumalabas pagkatapos ng Deliver.'),
-                    $s('Later', 'Boxes → Delivered, find the box, tap Undo and choose why.', 'Mamaya', 'Boxes → Delivered, hanapin ang box, pindutin ang Undo at piliin kung bakit.'),
-                ],
-                'result_en' => 'The box is back in your To deliver list.',
-                'result_tl' => 'Balik ang box sa listahan ng To deliver.',
-                'problems' => [
-                    $p('There is no Undo button', 'More than 30 minutes passed. Ask the office to undo it.', 'Walang Undo button', 'Lumampas na ng 30 minuto. Ipa-undo sa office.'),
-                ],
-                'pages' => [], 'links' => [],
-                'related' => ['driver-deliver'], 'sort' => 40,
-            ],
-            [
-                'slug' => 'driver-navigate', 'topic' => 'apps', 'icon' => '🗺️', 'apps' => ['driver'],
-                'title_en' => 'Go to the next stop', 'title_tl' => 'Pumunta sa susunod na stop',
-                'summary_en' => 'Where to go next shows the next stop. Tap Navigate and choose Waze, Google Maps or Apple Maps.',
-                'summary_tl' => 'Ipinapakita ng Where to go next ang susunod na stop. Pindutin ang Navigate at piliin ang Waze, Google Maps o Apple Maps.',
-                'when_en' => 'You finished a stop and want directions to the next one.',
-                'when_tl' => 'Tapos ka sa isang stop at gusto mo ng direksyon sa susunod.',
-                'steps' => [
-                    $s('Look at the next stop', 'On Today, Where to go next shows the receiver, the address and the boxes.', 'Tingnan ang susunod na stop', 'Sa Today, ipinapakita ng Where to go next ang receiver, address at mga box.'),
-                    $s('Tap Navigate', 'Choose Waze, Google Maps or Apple Maps. The app opens with the route from where you are.', 'Pindutin ang Navigate', 'Piliin ang Waze, Google Maps o Apple Maps. Bubukas ang app na may ruta mula kung nasaan ka.'),
-                    $s('Call if needed', 'Tap Call to phone the receiver before you arrive.', 'Tumawag kung kailangan', 'Pindutin ang Call para tawagan ang receiver bago dumating.'),
-                ],
-                'result_en' => 'You drive the stops in the planned order.',
-                'result_tl' => 'Sinusunod mo ang stops ayon sa plano.',
-                'problems' => [
-                    $p('The pin is in the wrong place', 'Call the receiver. Tell the office so the address is fixed for next time.', 'Mali ang lugar ng pin', 'Tawagan ang receiver. Sabihan ang office para maayos ang address sa susunod.'),
-                ],
-                'pages' => [], 'links' => [],
-                'related' => ['driver-offline', 'driver-location'], 'sort' => 10,
-            ],
-            [
-                'slug' => 'driver-location', 'topic' => 'apps', 'icon' => '📡', 'apps' => ['driver', 'admin', 'warehouse', 'company'],
-                'title_en' => 'Location in the Driver app', 'title_tl' => 'Location sa Driver app',
-                'summary_en' => 'During a trip the app sends the truck\'s location so the office sees it on the map. Only during trips.',
-                'summary_tl' => 'Habang may trip, ipinapadala ng app ang location ng truck para makita ng office sa mapa. Habang may trip lang.',
-                'when_en' => 'The app asks to use your location, or the office cannot see your truck.',
-                'when_tl' => 'Humihingi ang app ng location, o hindi makita ng office ang truck mo.',
-                'steps' => [
-                    $s('Agree once', 'On the first trip the app asks. Tap I agree.', 'Pumayag minsan', 'Sa unang trip, magtatanong ang app. Pindutin ang I agree.'),
-                    $s('Allow location on the phone', 'When the phone asks, tap Allow (Android: "While using the app"; iPhone: "Allow While Using App").', 'Payagan ang location sa phone', 'Kapag nagtanong ang phone, pindutin ang Allow (Android: "While using the app"; iPhone: "Allow While Using App").'),
-                    $s('Keep the app open', 'Keep the Driver app open on the screen while driving, with the phone charging.', 'Panatilihing bukas ang app', 'Iwanang bukas ang Driver app sa screen habang nagmamaneho, naka-charge ang phone.'),
-                ],
-                'result_en' => 'The office sees the truck move. It stops when the trip ends.',
-                'result_tl' => 'Nakikita ng office ang galaw ng truck. Titigil kapag tapos ang trip.',
-                'problems' => [
-                    $p('I pressed Block by mistake', 'Phone Settings → the browser or the app → Location → Allow. Then open the app again.', 'Napindot ang Block', 'Settings ng phone → browser o app → Location → Allow. Tapos buksan ulit ang app.'),
-                ],
-                'pages' => [], 'links' => [],
-                'related' => ['truck-tracking', 'driver-navigate'], 'sort' => 50,
-            ],
-            [
-                'slug' => 'driver-offline', 'topic' => 'apps', 'icon' => '📶', 'apps' => ['driver'],
-                'title_en' => 'No signal', 'title_tl' => 'Walang signal',
-                'summary_en' => 'The Driver app keeps working with no signal. Deliveries wait on the phone and are sent later.',
-                'summary_tl' => 'Gumagana pa rin ang Driver app kahit walang signal. Naka-hold sa phone ang deliveries at ipapadala mamaya.',
-                'when_en' => 'The top bar says No signal or waiting to send.',
-                'when_tl' => 'Sabi sa itaas ay No signal o waiting to send.',
-                'steps' => [
-                    $s('Keep working', 'Scan, deliver and take photos as usual.', 'Tuloy lang ang trabaho', 'Mag-scan, mag-deliver at mag-picture gaya ng dati.'),
-                    $s('Watch the top bar', 'It shows how many are waiting to send.', 'Tingnan ang bar sa itaas', 'Ipinapakita kung ilan ang naghihintay maipadala.'),
-                    $s('Signal comes back', 'Everything is sent by itself. Do not sign out until it says all sent.', 'Bumalik ang signal', 'Kusang maipapadala lahat. Huwag mag-sign out hangga\'t hindi sinasabing all sent.'),
-                ],
-                'result_en' => 'Nothing is lost when there is no signal.',
-                'result_tl' => 'Walang nawawala kahit walang signal.',
-                'problems' => [
-                    $p('It says needs attention', 'One delivery could not be saved (for example the box was moved). Tap it and follow what it says.', 'Sabi ay needs attention', 'May isang delivery na hindi ma-save (hal. nailipat ang box). Pindutin ito at sundin ang sinasabi.'),
-                    $p('Maps with no signal', 'Download the area in Google Maps or Waze before the trip (offline maps).', 'Mapa kahit walang signal', 'I-download ang area sa Google Maps o Waze bago ang trip (offline maps).'),
-                ],
-                'pages' => [], 'links' => [],
-                'related' => ['driver-deliver', 'driver-navigate'], 'sort' => 60,
-            ],
-
-            // ───────────────────────────── settings ─────────────────────────────
-            [
-                'slug' => 'ai-settings', 'topic' => 'settings', 'icon' => '✨', 'apps' => ['admin'],
-                'title_en' => 'Switch on the AI helpers', 'title_tl' => 'I-on ang mga AI helper',
-                'summary_en' => 'Each AI helper is switched on one by one in Settings → AI, with a monthly spending limit.',
-                'summary_tl' => 'Isa-isang ino-on ang bawat AI helper sa Settings → AI, may monthly na limit sa gastos.',
-                'when_en' => 'A page says the AI is off, or you want to try a helper.',
-                'when_tl' => 'Sabi ng page ay naka-off ang AI, o gusto mong subukan ang isang helper.',
-                'steps' => [
-                    $s('Open Settings → AI', 'Only an admin can open it.', 'Buksan ang Settings → AI', 'Admin lang ang makakabukas.'),
-                    $s('Paste the API key', 'Paste the Anthropic API key and set the monthly limit.', 'Ilagay ang API key', 'Ilagay ang Anthropic API key at itakda ang monthly limit.'),
-                    $s('Switch helpers on', 'Tick each helper you want (trip helper, photo check, SMS writer, Help answers…) and Save.', 'I-on ang mga helper', 'I-check ang bawat helper na gusto mo (trip helper, photo check, SMS writer, Help answers…) at i-Save.'),
-                ],
-                'result_en' => 'The helpers show in their pages and menus.',
-                'result_tl' => 'Lalabas ang mga helper sa kanilang mga page at menu.',
-                'problems' => [],
-                'pages' => ['pages.ai-settings'],
-                'links' => ['admin' => 'pages.ai-settings'],
-                'related' => ['ai-trip-helper', 'sms-setup', 'help-edit'], 'sort' => 10,
-            ],
-            [
-                'slug' => 'maps-routes', 'topic' => 'settings', 'icon' => '🗺️', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'Maps & routes settings', 'title_tl' => 'Settings ng Maps & routes',
-                'summary_en' => 'Choose the map, where trucks start, how stops are sorted, and if messy addresses are fixed by AI.',
-                'summary_tl' => 'Piliin ang mapa, kung saan nagsisimula ang truck, paano inaayos ang stops, at kung aayusin ng AI ang magulong address.',
-                'when_en' => 'Setting up the system, or stops are not found on the map.',
-                'when_tl' => 'Sine-set up ang system, o hindi mahanap ang stops sa mapa.',
-                'steps' => [
-                    $s('Open Maps & routes', 'Settings → Maps & routes.', 'Buksan ang Maps & routes', 'Settings → Maps & routes.'),
-                    $s('Start point', 'Set where each hub\'s trucks leave from.', 'Simula', 'Itakda kung saan umaalis ang mga truck ng bawat hub.'),
-                    $s('Address cleaning', 'Switch on AI address cleaning so more stops are found.', 'Paglilinis ng address', 'I-on ang AI address cleaning para mas maraming stop ang mahanap.'),
-                ],
-                'result_en' => 'New trips are sorted with these settings.',
-                'result_tl' => 'Aayusin ang mga bagong trip gamit ang settings na ito.',
-                'problems' => [],
-                'pages' => ['pages.maps-routes'],
-                'links' => ['admin' => 'pages.maps-routes', 'warehouse' => 'pages.maps-routes', 'company' => 'pages.maps-routes'],
-                'related' => ['stops-loading'], 'sort' => 20,
-            ],
-            [
-                'slug' => 'help-edit', 'topic' => 'settings', 'icon' => '📝', 'apps' => ['admin'],
-                'title_en' => 'Edit the help guides', 'title_tl' => 'Baguhin ang mga gabay',
-                'summary_en' => 'Admins can change any guide, add screenshots, and write new guides for your team.',
-                'summary_tl' => 'Puwedeng baguhin ng admin ang kahit anong gabay, magdagdag ng screenshot, at gumawa ng bagong gabay.',
-                'when_en' => 'A guide is out of date or your team does something its own way.',
-                'when_tl' => 'Luma na ang gabay o may sariling paraan ang team ninyo.',
-                'steps' => [
-                    $s('Open Help guides', 'Settings → Help guides.', 'Buksan ang Help guides', 'Settings → Help guides.'),
-                    $s('Edit or add', 'Change the words in English and Tagalog, add steps, upload a screenshot for a step.', 'Baguhin o magdagdag', 'Baguhin ang salita sa English at Tagalog, magdagdag ng hakbang, mag-upload ng screenshot.'),
-                    $s('Choose who sees it', 'Tick the panels and apps it shows in, then Save.', 'Piliin kung sino ang makakakita', 'I-check ang mga panel at app kung saan lalabas, tapos i-Save.'),
-                ],
-                'result_en' => 'Everyone sees the new guide right away. "Was this helpful?" votes show which guides to improve.',
-                'result_tl' => 'Makikita agad ng lahat ang bagong gabay. Ang mga boto sa "Nakatulong ba?" ay nagsasabi kung aling gabay ang dapat ayusin.',
-                'problems' => [],
-                'pages' => ['resources.help-guides.*'],
-                'links' => ['admin' => 'resources.help-guides.index'],
-                'related' => ['ai-settings'], 'sort' => 90,
-            ],
-            // ───────────────────────────── fuel ─────────────────────────────
-            [
-                'slug' => 'fuel-driver', 'topic' => 'apps', 'icon' => '⛽', 'apps' => ['driver'],
-                'title_en' => 'Add a fuel fill', 'title_tl' => 'Mag-add ng karga ng fuel',
-                'summary_en' => 'After every fill: photo of the receipt, check the numbers, card or cash, photo of the odometer.',
-                'summary_tl' => 'Pagkatapos magpakarga: picture ng resibo, tingnan ang numbers, card o cash, picture ng odometer.',
-                'when_en' => 'You just filled the truck at a station.',
-                'when_tl' => 'Kakakarga mo lang ng truck sa gasolinahan.',
-                'steps' => [
-                    $s('Show the company card', 'For ₱1,000 and up, show the cashier the card with the company name and TIN so they write it on the receipt.', 'Ipakita ang company card', 'Kapag ₱1,000 pataas, ipakita sa cashier ang card na may pangalan at TIN ng kompanya para isulat sa resibo.'),
-                    $s('Photo of the receipt', 'Today → ⛽ Add fuel → Take receipt photo. Lay the receipt flat, all of it in the photo.', 'Picture ng resibo', 'Today → ⛽ Add fuel → Take receipt photo. Ilapag ang resibo, buo dapat sa picture.'),
-                    $s('Check and choose', 'Check diesel or gasoline, liters, price, total and VAT. Choose fuel card or cash.', 'Tingnan at piliin', 'Tingnan kung diesel o gasoline, liters, presyo, total at VAT. Piliin kung fuel card o cash.'),
-                    $s('Photo of the odometer', 'Take a photo of the total km on the dashboard, check the number, press Save fill.', 'Picture ng odometer', 'Kunan ang total km sa dashboard, tingnan ang numero, pindutin ang Save fill.'),
-                ],
-                'result_en' => 'The office sees the fill, the km per liter and the receipt. Give the paper receipt to the office.',
-                'result_tl' => 'Makikita ng office ang karga, km per liter at resibo. Ibigay ang papel na resibo sa office.',
-                'problems' => [
-                    $p('It says wrong fuel', 'The receipt says another fuel than the truck uses. Check the receipt and tell the office right away.', 'Sabi ay wrong fuel', 'Ibang fuel ang nasa resibo kaysa sa gamit ng truck. Tingnan ang resibo at sabihan agad ang office.'),
-                    $p('The card does not work', 'Use the fuel cash from the office and choose Cash. Keep the receipt.', 'Ayaw ng card', 'Gamitin ang fuel cash galing office at piliin ang Cash. Itago ang resibo.'),
-                ],
-                'pages' => ['pages.fuel'], 'links' => ['driver' => 'pages.fuel'],
-                'related' => ['driver-deliver'], 'sort' => 60,
-            ],
-            [
-                'slug' => 'fuel-office', 'topic' => 'trucks', 'icon' => '⛽', 'apps' => ['admin', 'warehouse', 'company'],
-                'title_en' => 'Fuel: fills, cards, cash and VAT', 'title_tl' => 'Fuel: karga, card, cash at VAT',
-                'summary_en' => 'See what each truck used and spent, check alerts, match the fuel card statement, give and settle fuel cash, and export VAT.',
-                'summary_tl' => 'Tingnan ang nagamit at gastos ng bawat truck, ang alerts, i-match ang fuel card statement, magbigay at mag-settle ng fuel cash, at i-export ang VAT.',
-                'when_en' => 'Every week, when the fuel card statement comes, and before a long trip.',
-                'when_tl' => 'Linggo-linggo, pagdating ng fuel card statement, at bago ang mahabang trip.',
-                'steps' => [
-                    $s('Set up once', 'Admin → Settings → Fuel: company TIN, fuel card, each truck\'s fuel, tank and card last 4. Settings → AI: switch on "Read fuel receipts".', 'I-set up minsan', 'Admin → Settings → Fuel: company TIN, fuel card, fuel, tank at card last 4 ng bawat truck. Settings → AI: i-on ang "Read fuel receipts".'),
-                    $s('Check the alerts', 'Fuel → Alerts: wrong fuel, a fill bigger than the tank, filled away from the truck, km per liter dropping, odd price.', 'Tingnan ang alerts', 'Fuel → Alerts: maling fuel, kargang lampas sa tangke, nag-fill malayo sa truck, bumababang km per liter, kakaibang presyo.'),
-                    $s('Match the card statement', 'Fuel → Fuel cards: import the CSV from the card website. Charges with no fill in the app are flagged.', 'I-match ang card statement', 'Fuel → Fuel cards: i-import ang CSV galing sa website ng card. Naka-flag ang charges na walang karga sa app.'),
-                    $s('Fuel cash for a trip', 'Delivery Log → trip → Fuel: the estimate, give the cash, then settle the change when the truck is back.', 'Fuel cash para sa trip', 'Delivery Log → trip → Fuel: ang estimate, ibigay ang cash, tapos i-settle ang sukli pagbalik ng truck.'),
-                    $s('VAT for the accountant', 'Fuel → VAT → Excel for the accountant. Keep the paper receipts.', 'VAT para sa accountant', 'Fuel → VAT → Excel for the accountant. Itago ang papel na resibo.'),
-                ],
-                'result_en' => 'You know what fuel costs per truck and per box, and what VAT you can claim.',
-                'result_tl' => 'Alam mo ang gastos sa fuel bawat truck at bawat box, at ang VAT na puwedeng i-claim.',
-                'problems' => [
-                    $p('Charges say "Card or plate not known"', 'Put the card\'s last 4 digits on the truck in Settings → Fuel, then import again.', 'Sabi ay "Card or plate not known"', 'Ilagay ang last 4 digits ng card sa truck sa Settings → Fuel, tapos i-import ulit.'),
-                    $p('No price this week', 'Prices come from this week\'s receipts. Until the first one, Admin can set the price in Fuel → Prices.', 'Walang presyo ngayong linggo', 'Galing sa mga resibo ngayong linggo ang presyo. Habang wala pa, puwedeng i-set ng Admin sa Fuel → Prices.'),
-                ],
-                'pages' => ['pages.fuel', 'pages.trip-fuel', 'pages.fuel-settings'],
-                'links' => ['admin' => 'pages.fuel', 'warehouse' => 'pages.fuel', 'company' => 'pages.fuel'],
-                'related' => ['truck-tracking', 'create-trip'], 'sort' => 40,
-            ],
-            // ───────────────────────────── warehouse sections ─────────────────────────────
-            [
-                'slug' => 'warehouse-sections', 'topic' => 'boxes', 'icon' => '🗂️', 'apps' => ['admin', 'warehouse', 'scan'],
-                'title_en' => 'Warehouse sections, box sets and the waiting truck', 'title_tl' => 'Mga seksyon ng bodega, set ng box at truck na naghihintay',
-                'summary_en' => 'At unload the Scan app shows the section of each box from the receiver\'s province, keeps a customer\'s boxes together, and can load boxes straight onto a waiting truck.',
-                'summary_tl' => 'Sa unloading, ipinapakita ng Scan app ang seksyon ng bawat box ayon sa probinsya ng receiver, pinagsasama ang mga box ng isang customer, at puwedeng ikarga agad sa truck na naghihintay.',
-                'when_en' => 'Every container unload and every truck you load.',
-                'when_tl' => 'Sa bawat pag-unload ng container at bawat truck na kinakargahan.',
-                'steps' => [
-                    $s('Set the sections once', 'Admin → Settings → Warehouse sections: one section per destination, with its provinces. Print the QR labels if you use the label scan.', 'I-set ang mga seksyon minsan', 'Admin → Settings → Warehouse sections: isang seksyon bawat destinasyon, kasama ang mga probinsya. I-print ang QR labels kung gagamit ng label scan.'),
-                    $s('Scan at the container door', 'Scan each box as it comes off. The big letter on the phone is its section: put the box there. X means check the address first.', 'Mag-scan sa pinto ng container', 'I-scan ang bawat box pagbaba. Ang malaking letra sa phone ang seksyon nito: doon ilagay. Ang X ay check address muna.'),
-                    $s('Keep sets together', '"Box 2 of 3" shows where the customer\'s other boxes are: still in this container, or in another one.', 'Pagsamahin ang set', 'Ang "Box 2 of 3" ay nagsasabi kung nasaan ang ibang box ng customer: nasa container pa, o nasa ibang container.'),
-                    $s('A truck is waiting', 'Tap "A truck is waiting" and pick the warehouse trip. Its boxes show 🚚: put them straight on the truck. "Put in section instead" keeps one box in its section.', 'May truck na naghihintay', 'Pindutin ang "A truck is waiting" at piliin ang warehouse trip. Ang mga box nito ay may 🚚: diretso sa truck. Ang "Put in section instead" ay itatabi ang box sa seksyon.'),
-                    $s('Many phones at once', 'Several people can scan the same container or truck. The counter is shared; a box already scanned by someone else is not counted again.', 'Sabay-sabay ang maraming phone', 'Puwedeng sabay-sabay mag-scan ang ilang tao sa iisang container o truck. Iisa ang bilang; hindi na binibilang ulit ang box na na-scan na ng iba.'),
-                ],
-                'result_en' => 'Every box is in its section or on its truck, and a customer\'s boxes stay together.',
-                'result_tl' => 'Nasa tamang seksyon o truck ang bawat box, at magkakasama ang mga box ng isang customer.',
-                'problems' => [
-                    $p('It says Wrong hub when loading', 'The box is for another partner hub than this trip. Put it back in its section and tell the office.', 'Sabi ay Wrong hub sa loading', 'Ang box ay para sa ibang partner hub. Ibalik sa seksyon nito at sabihan ang office.'),
-                    $p('Customers missing boxes at the end', 'On the Done screen, find the boxes, or pick why each one stays behind (not arrived, damaged, cannot find, truck full).', 'May customer na kulang ang box sa dulo', 'Sa Done screen, hanapin ang box, o piliin kung bakit naiwan (wala pa, sira, hindi makita, puno ang truck).'),
-                ],
-                'pages' => ['pages.warehouse-sections', 'pages.scaninvoice', 'pages.unloadedcontainer'],
-                'links' => ['admin' => 'pages.warehouse-sections'],
-                'related' => ['unload-container', 'load-truck'], 'sort' => 25,
-            ],
-        ];
-    }
-}
-DISPATCH_FILE_END_13
-
-# ---------------------------------------------------------------- database/migrations/2026_11_15_000023_create_warehouse_sections.php
+# ---------------------------------------------------------------- database/migrations/2026_11_15_000031_add_set_split_wh_trip.php
 mkdir -p 'database/migrations'
-cat > 'database/migrations/2026_11_15_000023_create_warehouse_sections.php' <<'DISPATCH_FILE_END_14'
+cat > 'database/migrations/2026_11_15_000031_add_set_split_wh_trip.php' <<'DISPATCH_FILE_END_5'
 <?php
 
-use App\Support\Boxes\BoxSets;
-use App\Support\Help\Help;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
-/**
- * Warehouse sections (each one for a destination, chosen by the receiver's province),
- * box sets (all boxes of one customer), who scanned each box, and the truck waiting
- * at a container unload (boxes go straight from the container onto the truck).
- */
+/** Why a customer's box stays behind when a transfer truck (warehouse to warehouse) leaves. */
 return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('wh_sections', function (Blueprint $t) {
-            $t->id();
-            $t->foreignId('warehouse_id')->nullable()->index();
-            $t->string('code', 8);
-            $t->string('name', 80);
-            $t->string('color', 7)->default('#1d6fb8');
-            $t->string('kind', 12)->default('area'); // area, returns, check
-            $t->foreignId('logistichub_id')->nullable();   // boxes for this partner hub
-            $t->foreignId('to_warehouse_id')->nullable();  // boxes for this other warehouse (e.g. Tarlac)
-            $t->json('provinces')->nullable();
-            $t->unsignedSmallInteger('sort')->default(0);
-            $t->boolean('is_active')->default(true);
-            $t->timestamps();
-        });
-
-        Schema::table('invoices', function (Blueprint $t) {
-            $t->foreignId('wh_section_id')->nullable()->index();
-            $t->timestamp('sectioned_at')->nullable();
-            $t->foreignId('verified_by')->nullable();
-            $t->string('set_key', 40)->nullable()->index();
-        });
-        Schema::table('tripinvoices', function (Blueprint $t) {
-            $t->foreignId('loaded_by')->nullable();
-            $t->timestamp('loaded_at')->nullable();
-        });
-        Schema::table('whtripinvoices', function (Blueprint $t) {
-            $t->foreignId('loaded_by')->nullable();
-            $t->timestamp('loaded_at')->nullable();
-        });
-
-        Schema::create('wh_crossdocks', function (Blueprint $t) {
-            $t->id();
-            $t->foreignId('container_id')->index();
-            $t->foreignId('whdeliverylog_id');
-            $t->foreignId('started_by')->nullable();
-            $t->boolean('paused')->default(false);
-            $t->timestamp('ended_at')->nullable();
-            $t->timestamps();
-        });
-
-        Schema::create('set_splits', function (Blueprint $t) {
-            $t->id();
-            $t->foreignId('invoice_id')->index();
-            $t->string('set_key', 40)->nullable();
-            $t->foreignId('deliverylog_id')->nullable();
-            $t->string('reason', 40);
-            $t->foreignId('user_id')->nullable();
-            $t->timestamps();
-        });
-
-        // sets for the boxes already in the system
-        DB::table('invoices')->select('id', 'receiver_name', 'receiver_mobile_no', 'receiver_city')->orderBy('id')
-            ->chunkById(500, function ($rows) {
-                foreach ($rows as $r) {
-                    DB::table('invoices')->where('id', $r->id)->update(['set_key' => BoxSets::keyFor($r->receiver_name, $r->receiver_mobile_no, $r->receiver_city)]);
-                }
-            });
-
-        Help::installDefaults();
+        if (Schema::hasTable('set_splits') && ! Schema::hasColumn('set_splits', 'whdeliverylog_id')) {
+            Schema::table('set_splits', fn (Blueprint $t) => $t->foreignId('whdeliverylog_id')->nullable()->index());
+        }
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('set_splits');
-        Schema::dropIfExists('wh_crossdocks');
-        Schema::table('whtripinvoices', fn (Blueprint $t) => $t->dropColumn(['loaded_by', 'loaded_at']));
-        Schema::table('tripinvoices', fn (Blueprint $t) => $t->dropColumn(['loaded_by', 'loaded_at']));
-        Schema::table('invoices', function (Blueprint $t) {
-            $t->dropIndex(['wh_section_id']);
-            $t->dropIndex(['set_key']);
-            $t->dropColumn(['wh_section_id', 'sectioned_at', 'verified_by', 'set_key']);
-        });
-        Schema::dropIfExists('wh_sections');
+        if (Schema::hasColumn('set_splits', 'whdeliverylog_id')) {
+            Schema::table('set_splits', fn (Blueprint $t) => $t->dropColumn('whdeliverylog_id'));
+        }
     }
 };
-DISPATCH_FILE_END_14
+DISPATCH_FILE_END_5
 
 # ---------------------------------------------------------------- resources/css/filament/admin/theme.css
 mkdir -p 'resources/css/filament/admin'
-cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_15'
+cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_6'
 @import '../../../../vendor/filament/filament/resources/css/theme.css';
 
 /* The Archivo font comes with the app (no internet needed): pages open fast even on a slow connection. */
@@ -6789,7 +5133,11 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sx__tile strong { font-size: 3.6rem; line-height: 1; font-weight: 900; letter-spacing: -0.02em; }
 .ds-sx__tile span { font-size: 1.05rem; font-weight: 800; }
 .ds-sx__tile em { font-style: normal; font-size: 0.8rem; opacity: .9; }
-.ds-sx__tile.is-truck strong { font-size: 2.8rem; }
+.ds-sx__tile.is-truck strong { font-size: 3.6rem; letter-spacing: 0.02em; }
+.ds-sx__setrows { list-style: none; margin: 0.25rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; color: var(--sa-text); }
+.ds-sx__setrows li { display: grid; grid-template-columns: 1.4rem 1fr; }
+.ds-sx__setadd { margin-top: 0.35rem; min-height: 2.8rem; border-radius: 0.75rem; background: #f6be00; color: #0a1219; font-weight: 800; font-size: 0.9rem; padding: 0 0.8rem; }
+.ds-sx__here { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.55rem 0.8rem; border-radius: 0.8rem; background: rgb(246 140 0 / .16); color: #ffd39a; font-size: 0.85rem; }
 @keyframes ds-sx-in { from { transform: scale(.96); opacity: .4; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .ds-sx__tile { animation: none; } }
 .ds-sx__set { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.7rem 0.9rem; border-radius: 1rem; background: rgb(255 255 255 / .06); font-size: 0.92rem; }
@@ -6853,161 +5201,189 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-ws__result { display: flex; gap: 0.9rem; align-items: center; margin-top: 0.75rem; padding: 0.75rem 1rem; border-radius: 0.9rem; background: color-mix(in srgb, var(--c) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 40%, transparent); }
 .ds-ws__result > strong { display: grid; place-items: center; min-width: 3rem; height: 3rem; padding: 0 0.4rem; border-radius: 0.7rem; background: var(--c); color: #fff; font-size: 1.6rem; font-weight: 900; }
 .ds-ws__result small { display: block; color: #6b7b88; font-size: 0.8rem; }
-DISPATCH_FILE_END_15
 
-# ---------------------------------------------------------------- resources/views/boxes/section-labels.blade.php
-mkdir -p 'resources/views/boxes'
-cat > 'resources/views/boxes/section-labels.blade.php' <<'DISPATCH_FILE_END_16'
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Section labels · {{ $warehouse->name }}</title>
-<style>
-    @page { size: A4; margin: 12mm; }
-    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #0b1620; }
-    .bar { padding: 14px 18px; display: flex; gap: 12px; align-items: center; justify-content: space-between; background: #f3f5f7; }
-    .bar button { padding: 10px 16px; border: 0; border-radius: 10px; background: #f6be00; font-weight: 800; cursor: pointer; }
-    .label { page-break-after: always; break-after: page; min-height: 255mm; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10mm; padding: 10mm; }
-    .code { width: 120mm; height: 120mm; border-radius: 10mm; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 90mm; font-weight: 900; line-height: 1; }
-    .name { font-size: 16mm; font-weight: 800; text-align: center; }
-    .prov { font-size: 6mm; color: #44525e; text-align: center; max-width: 170mm; }
-    .qr svg { width: 55mm; height: 55mm; }
-    .hint { font-size: 4.5mm; color: #6b7b88; }
-    @media print { .bar { display: none; } }
-</style>
-</head>
-<body>
-<div class="bar"><strong>{{ $sections->count() }} section labels · {{ $warehouse->name }}</strong><button type="button" onclick="window.print()">Print</button></div>
-@forelse ($sections as $s)
-    <div class="label">
-        <div class="code" style="background: {{ $s['color'] }}">{{ $s['code'] }}</div>
-        <div class="name">{{ $s['name'] }}</div>
-        @if ($s['provinces'])<div class="prov">{{ $s['provinces'] }}</div>@endif
-        <div class="qr">{!! $s['qr'] !!}</div>
-        <div class="hint">Scan this label in the Scan app (only when "section label scan" is on)</div>
-    </div>
-@empty
-    <p style="padding: 20px">No sections for this warehouse yet.</p>
-@endforelse
-</body>
-</html>
-DISPATCH_FILE_END_16
-
-# ---------------------------------------------------------------- resources/views/filament/boxes/sections.blade.php
-mkdir -p 'resources/views/filament/boxes'
-cat > 'resources/views/filament/boxes/sections.blade.php' <<'DISPATCH_FILE_END_17'
-<x-filament-panels::page>
-<form wire:submit="save" class="ds-ws">
-    <div class="ds-ws__top">
-        <label class="ds-ws__wh"><span>Warehouse</span>
-            <select wire:model.live="warehouseId">@foreach ($warehouses as $id => $name)<option value="{{ $id }}">{{ $name }}</option>@endforeach</select>
-        </label>
-        <span class="ds-ws__acts">
-            @if ($labelsUrl && count($rows))<x-filament::button tag="a" :href="$labelsUrl" target="_blank" color="gray" icon="heroicon-o-printer">Print QR labels</x-filament::button>@endif
-            <x-filament::button type="button" color="gray" wire:click="addRow" icon="heroicon-o-plus">Add section</x-filament::button>
-        </span>
-    </div>
-
-    <section class="ds-board__panel ds-ws__list">
-        <div class="ds-ws__row is-head"><span>Code</span><span>Name</span><span>Kind</span><span>Goes to</span><span>Receiver provinces (comma between)</span><span>Boxes</span><span></span></div>
-        @forelse ($rows as $i => $r)
-            <div class="ds-ws__row" wire:key="sec-{{ $r['id'] ?? 'n'.$i }}">
-                <span class="ds-ws__code" style="--c: {{ $r['color'] }}"><input type="text" wire:model.live.debounce.400ms="rows.{{ $i }}.code" maxlength="8" aria-label="Code">
-                    <select wire:model.live="rows.{{ $i }}.color" aria-label="Color">@foreach ($colors as $c)<option value="{{ $c }}">{{ $c }}</option>@endforeach</select></span>
-                <input type="text" wire:model="rows.{{ $i }}.name" placeholder="Cebu hub" aria-label="Name">
-                <select wire:model.live="rows.{{ $i }}.kind" aria-label="Kind">@foreach ($kinds as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select>
-                <select wire:model="rows.{{ $i }}.to" aria-label="Goes to">@foreach ($targets as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select>
-                @if ($r['kind'] === 'area')
-                    <textarea wire:model="rows.{{ $i }}.provinces" rows="2" placeholder="Cebu, Bohol, Negros Oriental" aria-label="Provinces"></textarea>
-                @else
-                    <small class="ds-ws__muted">{{ $r['kind'] === 'check' ? 'Boxes with no province, or a province no section has.' : 'Boxes coming back from the hubs.' }}</small>
-                @endif
-                <b class="num">{{ $r['id'] ? ($counts[$r['id']] ?? 0) : '—' }}</b>
-                <button type="button" class="ds-ws__del" wire:click="removeRow({{ $i }})" wire:confirm="Remove section {{ $r['code'] }}?" aria-label="Remove">✕</button>
-            </div>
-        @empty
-            <div class="ds-ws__empty">
-                <p>No sections yet for this warehouse. Without sections, unloading works as before.</p>
-                <x-filament::button type="button" wire:click="suggest">Start with one section per hub</x-filament::button>
-            </div>
-        @endforelse
-        @error('rows')<p class="ds-ws__err">{{ $message }}</p>@enderror
-        @foreach ($errors->get('rows.*') as $msgs)<p class="ds-ws__err">{{ $msgs[0] }}</p>@break @endforeach
-    </section>
-
-    <div class="ds-ws__two">
-        <section class="ds-board__panel ds-ws__box">
-            <h3>At unload</h3>
-            <label class="ds-ws__toggle"><input type="checkbox" wire:model="labelScan"><span><b>Also scan the section label</b><small>Off: a box is saved in its section when it is scanned at the container. On: the crew also scans the QR on the section (once for a cartful of boxes).</small></span></label>
-            <p class="ds-ws__muted">Start with this off, for speed. Switch it on if boxes are often not where the system says.</p>
-        </section>
-        <section class="ds-board__panel ds-ws__box">
-            <h3>How it works</h3>
-            <p class="ds-ws__muted">At unload the Scan app shows the section for each box, from the receiver's province, and keeps a customer's boxes together ("box 2 of 3"). A box with no province, or a province no section has, goes to <b>Check address</b>. Boxes for another warehouse can go straight onto a waiting truck.</p>
-        </section>
-    </div>
-    <div><x-filament::button type="submit">Save</x-filament::button></div>
-</form>
-</x-filament-panels::page>
-DISPATCH_FILE_END_17
-
-# ---------------------------------------------------------------- resources/views/filament/pages/scaninvoice.blade.php
-mkdir -p 'resources/views/filament/pages'
-cat > 'resources/views/filament/pages/scaninvoice.blade.php' <<'DISPATCH_FILE_END_18'
-<x-filament-panels::page>
-    @php($progress = $this->progress())
-
-    <x-scan.station :heading="$this->stationHeading()" :description="$this->stationDescription()" :icon="$this->stationIcon()">
-        <x-slot name="form">
-            {{ $this->form }}
-
-            <x-barcode-scanner method="scan" continuous :cooldown="1500" />
-        </x-slot>
-
-        <x-slot name="progress">
-            @if ($this->data['container_id'] ?? null)
-                <x-scan.progress :loaded="$progress['loaded']" :total="$progress['total']" :label="$this->progressLabel()"
-                    :last="$progress['last'] ?? null" :issues="$progress['issues'] ?? 0" :unmanifested="$progress['unmanifested'] ?? 0"
-                    done-text="Every box on the manifest is scanned." />
-            @endif
-        </x-slot>
-
-        <x-slot name="result">
-            <x-scan.result :invoice="$this->lastInvoice()" :status="$lastStatus" :title="$lastMessage">
-                <div class="ds-result__actions">
-                    {{ $this->reportIssueAction }}
-                </div>
-            </x-scan.result>
-
-            @if ($route)
-                <div class="ds-ws__result" style="--c: {{ $route['color'] ?? '#1d6fb8' }}">
-                    <strong>{{ ($route['kind'] ?? '') === 'truck' ? '🚚' : $route['code'] }}</strong>
-                    <span><b>{{ ($route['kind'] ?? '') === 'truck' ? 'Truck '.$route['trip'].' → '.$route['name'] : 'Section '.$route['code'].' · '.$route['name'] }}</b>
-                        @if ($setInfo)<small>{{ $setInfo['name'] }} · box {{ $setInfo['n'] }} of {{ $setInfo['of'] }} · {{ $setInfo['text'] }}</small>@endif
-                        @if (! empty($route['why']))<small>{{ $route['why'] }}</small>@endif</span>
-                </div>
-            @endif
-
-            @if ($missingCode)
-                <div class="ds-result__actions">
-                    {{ $this->unmanifestedAction }}
-                </div>
-            @endif
-            @include('filament.partials.scan-photo')
-        </x-slot>
-
-        <x-slot name="aside">
-            <x-scan.household :rows="$this->household()" done-label="verified" />
-        </x-slot>
-    </x-scan.station>
-
-</x-filament-panels::page>
-DISPATCH_FILE_END_18
+/* ------------------------------------------------------------------ Sea shipments, wrong hub & returns */
+.ds-sp { display: flex; flex-direction: column; gap: 1rem; }
+.ds-sp h3 { margin: 0; font-size: 0.98rem; font-weight: 800; }
+.ds-sp select, .ds-sp input[type=text], .ds-sp input[type=number], .ds-sp input[type=date] { min-height: 2.25rem; padding: 0.35rem 0.6rem; border-radius: 0.55rem; border: 1px solid #d5dde3; background: #fff; font-size: 0.85rem; color: inherit; box-sizing: border-box; }
+.dark .ds-sp select, .dark .ds-sp input[type=text], .dark .ds-sp input[type=number], .dark .ds-sp input[type=date] { background: #0b1d2a; border-color: rgb(255 255 255 / .12); }
+.ds-sp__new { padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.ds-sp__newrow { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.ds-sp__newrow select, .ds-sp__newrow input { flex: 1 1 12rem; }
+.ds-sp__err { margin: 0; color: #c8372d; font-size: 0.85rem; }
+.ds-sp__filter { display: flex; gap: 0.35rem; }
+.ds-sp__filter button { padding: 0.35rem 0.85rem; border-radius: 999px; font-size: 0.8rem; font-weight: 700; background: #eef2f5; color: #3d4f5c; }
+.ds-sp__filter button.is-on { background: #0e2433; color: #fff; }
+.dark .ds-sp__filter button { background: rgb(255 255 255 / .06); color: #c9d5de; }
+.dark .ds-sp__filter button.is-on { background: #e6edf3; color: #0e2433; }
+.ds-sp__list { display: flex; flex-direction: column; gap: 0.5rem; }
+.ds-sp__item { display: grid; grid-template-columns: 2.5rem 1fr auto auto; gap: 1rem; align-items: center; padding: 0.8rem 1rem; }
+.ds-sp__icon { font-size: 1.5rem; }
+.ds-sp__main { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.ds-sp__main small, .ds-sp__nums small { color: #6b7b88; font-size: 0.78rem; }
+.ds-sp__bar { display: flex; gap: 0.2rem; margin-top: 0.25rem; max-width: 20rem; }
+.ds-sp__bar i { flex: 1; height: 0.35rem; border-radius: 999px; background: #dfe5ea; }
+.ds-sp__bar i.is-done { background: #17895e; }
+.ds-sp__bar i.is-now { background: #f6be00; }
+.dark .ds-sp__bar i { background: rgb(255 255 255 / .1); }
+.ds-sp__nums { display: flex; flex-direction: column; align-items: flex-end; }
+.ds-sp__nums b { font-size: 1.2rem; }
+.ds-sp__state { padding: 0.25rem 0.7rem; border-radius: 999px; font-size: 0.75rem; font-weight: 800; background: #eef5fb; color: #1d6fb8; white-space: nowrap; }
+.ds-sp__state.is-received { background: #e2f5ec; color: #17895e; }
+.ds-sp__state.is-preparing { background: #eef2f5; color: #3d4f5c; }
+.ds-sp__steps { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0.5rem; padding: 1rem; overflow-x: auto; }
+.ds-sp__step { display: flex; flex-direction: column; gap: 0.3rem; min-width: 6rem; font-size: 0.85rem; color: #8a99a5; }
+.ds-sp__step i { height: 0.4rem; border-radius: 999px; background: #dfe5ea; }
+.ds-sp__step.is-done { color: inherit; }
+.ds-sp__step.is-done i { background: #17895e; }
+.ds-sp__step.is-now { color: inherit; }
+.ds-sp__step.is-now i { background: #f6be00; }
+.ds-sp__step small { font-size: 0.72rem; color: #8a99a5; }
+.ds-sp__head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.75rem; }
+.ds-sp__track { display: flex; gap: 0.75rem; align-items: center; font-size: 1rem; }
+.ds-sp__track > span:first-child { font-size: 1.6rem; }
+.ds-sp__track small { display: block; color: #6b7b88; font-size: 0.78rem; }
+.ds-sp__acts { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.ds-sp__block { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.7rem 1rem; border-radius: 0.75rem; background: #fff4e0; color: #7a4a00; font-size: 0.88rem; }
+.dark .ds-sp__block { background: rgb(240 169 59 / .14); color: #f6c46b; }
+.ds-sp__grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 1rem; align-items: start; }
+.ds-sp__box { padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.7rem; }
+.ds-sp__nums4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
+.ds-sp__nums4 span { display: flex; flex-direction: column; padding: 0.7rem; border-radius: 0.7rem; background: #f3f6f8; }
+.dark .ds-sp__nums4 span { background: rgb(255 255 255 / .04); }
+.ds-sp__nums4 small { font-size: 0.72rem; color: #6b7b88; }
+.ds-sp__nums4 b { font-size: 1.4rem; }
+.ds-sp__nums4 .is-bad b { color: #c8372d; }
+.ds-sp__warn { margin: 0; padding: 0.55rem 0.75rem; border-radius: 0.6rem; background: #fde8e6; color: #a3281f; font-size: 0.85rem; }
+.dark .ds-sp__warn { background: rgb(255 107 94 / .12); color: #ff9d93; }
+.ds-sp__sets { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; padding: 0.6rem 0.75rem; border-radius: 0.6rem; background: #eef5fb; }
+.dark .ds-sp__sets { background: rgb(90 168 255 / .08); }
+.ds-sp__dl { display: grid; grid-template-columns: 1fr auto; gap: 0.35rem 0.75rem; margin: 0; font-size: 0.88rem; }
+.ds-sp__dl dt { color: #6b7b88; }
+.ds-sp__dl dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.ds-sp__perbox { display: flex; justify-content: space-between; align-items: baseline; margin: 0; padding: 0.7rem 0.9rem; border-radius: 0.7rem; background: #eef5fb; font-weight: 800; }
+.ds-sp__perbox b { font-size: 1.4rem; }
+.dark .ds-sp__perbox { background: rgb(90 168 255 / .08); }
+.ds-sp__pics { display: flex; gap: 0.5rem; }
+.ds-sp__pics a { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.72rem; color: #6b7b88; }
+.ds-sp__pics img { width: 5rem; height: 5rem; object-fit: cover; border-radius: 0.6rem; }
+.ds-sp__form { padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: 0.8rem; }
+.ds-sp__fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.6rem; }
+.ds-sp__fields label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; color: #6b7b88; }
+.ds-sp__fields .is-wide { grid-column: span 2; }
+.ds-sp__fields input[type=file] { font-size: 0.78rem; }
+.ds-sp__table { padding: 0.25rem 0; overflow-x: auto; }
+.ds-sp__tr { display: grid; grid-template-columns: 1.4fr 1fr 1.6fr auto; gap: 0.8rem; align-items: center; padding: 0.7rem 1rem; border-top: 1px solid rgb(0 0 0 / .06); min-width: 46rem; font-size: 0.88rem; }
+.dark .ds-sp__tr { border-color: rgb(255 255 255 / .07); }
+.ds-sp__tr.is-head { border-top: 0; font-size: 0.72rem; font-weight: 700; color: #6b7b88; }
+.ds-sp__tr > span { display: flex; flex-direction: column; gap: 0.2rem; }
+.ds-sp__tr small { color: #6b7b88; font-size: 0.76rem; }
+.ds-sp__tr select { font-size: 0.75rem; min-height: 1.9rem; }
+.ds-sp__tag { align-self: flex-start; font-style: normal; font-size: 0.72rem; font-weight: 800; padding: 0.15rem 0.55rem; border-radius: 999px; background: #eef2f5; color: #3d4f5c; }
+.ds-sp__tag.is-bad { background: #fde8e6; color: #a3281f; }
+.ds-sp__ok { color: #17895e; }
+.ds-sp__btns { flex-direction: row !important; gap: 0.35rem; flex-wrap: wrap; justify-content: flex-end; }
+.ds-sp__pad { padding: 1rem; }
+.ds-sp__barrow { display: grid; grid-template-columns: 11rem 1fr 2.5rem; gap: 0.6rem; align-items: center; font-size: 0.86rem; }
+.ds-sp__barrow i { height: 0.7rem; border-radius: 999px; background: #eef2f5; overflow: hidden; }
+.ds-sp__barrow i b { display: block; height: 100%; background: #1d6fb8; border-radius: 999px; }
+@media (max-width: 1000px) { .ds-sp__grid { grid-template-columns: 1fr; } .ds-sp__fields { grid-template-columns: 1fr 1fr; } .ds-sp__nums4 { grid-template-columns: 1fr 1fr; } }
+.ds-sx__stop { margin: 0; padding: 0.7rem 0.9rem; border-radius: 0.9rem; background: rgb(255 107 94 / .15); color: #ff9d93; font-weight: 700; font-size: 0.9rem; text-align: left; }
+.ds-ws__row.is-view { grid-template-columns: 4rem 1.3fr 2fr 6rem 1.6fr; min-width: 48rem; }
+.ds-ws__row.is-view > span { display: flex; flex-direction: column; }
+.ds-ws__badge { display: grid !important; place-items: center; width: 2.6rem; height: 2.6rem; border-radius: 0.6rem; background: var(--c); color: #fff; font-weight: 900; font-size: 1.15rem; }
+.ds-ws__pad { padding: 1rem; }
+.ds-ws__box input[type=text] { max-width: 22rem; }
+.ds-sp__tr.is-cost { grid-template-columns: 1.6fr 1fr 1.2fr 1.2fr 1fr; min-width: 40rem; }
+.ds-sp__barrow.is-plain { grid-template-columns: 1fr auto auto; }
+/* ============================== Box sizes ============================== */
+.ds-bx { display: flex; flex-direction: column; gap: 1rem; }
+.ds-bx__head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.ds-bx__head p { margin: 0; max-width: 46rem; color: var(--ds-steel); }
+.ds-bx__switch { display: inline-flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.9rem 0.5rem 0.5rem; border-radius: 0.8rem; font-weight: 800; background: #fff; color: var(--ds-steel); box-shadow: inset 0 0 0 1px rgb(14 36 51 / 0.12); cursor: pointer; }
+.ds-bx__switch i { position: relative; width: 2.4rem; height: 1.4rem; border-radius: 999px; background: #c7d0d7; }
+.ds-bx__switch i::after { content: ''; position: absolute; top: 0.2rem; left: 0.2rem; width: 1rem; height: 1rem; border-radius: 50%; background: #fff; transition: left .15s; }
+.ds-bx__switch.is-on { background: #e7f5ee; color: #17694a; box-shadow: none; }
+.ds-bx__switch.is-on i { background: var(--ds-ok); }
+.ds-bx__switch.is-on i::after { left: 1.2rem; }
+.ds-bx__two { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
+@media (max-width: 64rem) { .ds-bx__two { grid-template-columns: 1fr; } }
+.ds-bx__types, .ds-bx__trucks, .ds-bx__same { display: flex; flex-direction: column; gap: 0.5rem; }
+.ds-bx__side { display: flex; flex-direction: column; gap: 1rem; }
+.ds-bx__type { display: grid; grid-template-columns: minmax(0, 1fr) auto 4rem; align-items: center; gap: 0.75rem; padding: 0.7rem 0.8rem; border-radius: 0.8rem; box-shadow: inset 0 0 0 1px rgb(14 36 51 / 0.08); }
+.ds-bx__type.is-new { background: #fff8e0; box-shadow: inset 0 0 0 1px #f2dc8c; }
+.ds-bx__type.is-plain { background: rgb(14 36 51 / 0.03); box-shadow: none; }
+.ds-bx__name { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.ds-bx__name > span:first-child { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.ds-bx__name small { color: var(--ds-steel); font-size: 0.78rem; }
+.ds-bx__tag { font-style: normal; font-size: 0.65rem; font-weight: 800; padding: 0.1rem 0.45rem; border-radius: 999px; }
+.ds-bx__tag.is-base { background: var(--ds-navy); color: #fff; }
+.ds-bx__tag.is-new { background: #fff1c2; color: #7a5600; }
+.ds-bx__links { display: flex; gap: 0.75rem; }
+.ds-bx__links button { font-size: 0.75rem; font-weight: 700; color: var(--ds-steel); text-decoration: underline; text-underline-offset: 2px; }
+.ds-bx__step { display: inline-flex; align-items: center; gap: 0.35rem; }
+.ds-bx__step button { width: 2rem; height: 2rem; border-radius: 0.5rem; background: rgb(14 36 51 / 0.07); font-weight: 800; font-size: 1.05rem; }
+.ds-bx__step b { min-width: 2.2rem; text-align: center; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.ds-bx__step input { width: 4rem; text-align: center; padding: 0.3rem; border-radius: 0.5rem; border: 1px solid rgb(14 36 51 / 0.15); font-weight: 800; background: transparent; }
+.ds-bx__pic { display: flex; align-items: flex-end; justify-content: center; height: 2.6rem; }
+.ds-bx__pic i { display: block; border-radius: 4px; background: var(--ds-navy-3); }
+.ds-bx__same > div, .ds-bx__trucks > div { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0; border-top: 1px solid rgb(14 36 51 / 0.08); }
+.ds-bx__same > div > span, .ds-bx__trucks > div > span:first-child { flex: 1; display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.ds-bx__same small, .ds-bx__trucks small { color: var(--ds-steel); font-size: 0.78rem; }
+.ds-bx__trucks small.ds-bx__past { color: #5b46c2; }
+.ds-bx__ai { align-self: flex-start; padding: 0.55rem 0.9rem; border-radius: 0.7rem; font-weight: 800; background: #f1eefc; color: #3b2f7a; box-shadow: inset 0 0 0 1px #d9d1f7; }
+.dark .ds-bx__type { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08); }
+.dark .ds-bx__type.is-new { background: rgb(246 190 0 / 0.08); }
+.dark .ds-bx__switch { background: #10283a; }
+.dark .ds-bx__step button { background: rgb(255 255 255 / 0.08); }
+.dark .ds-bx__pic i { background: var(--ds-signal); }
+.ds-sa__size { background: rgb(246 190 0 / 0.18) !important; color: #f6be00 !important; font-weight: 800; }
+.ds-sa__count small.ds-sa__space { color: #f6be00; font-weight: 700; }
+.ds-bx__note { margin: 0; padding: 0.6rem 0.8rem; border-radius: 0.7rem; background: #fff8e0; color: #7a5600; font-size: 0.9rem; }
+.ds-bx__dims { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; font-size: 0.75rem; color: #6b7b88; margin-top: 0.25rem; }
+.ds-bx__dims input { width: 3.6rem; height: 1.8rem; padding: 0 0.35rem; border-radius: 0.4rem; border: 1px solid #d5dde3; background: #fff; font-size: 0.78rem; color: inherit; }
+.dark .ds-bx__dims input { background: #0b1d2a; border-color: rgb(255 255 255 / .12); }
+.ds-bx__dims button { margin-left: 0.25rem; padding: 0.15rem 0.5rem; border-radius: 999px; background: #eef5fb; color: #1d6fb8; font-weight: 700; font-size: 0.72rem; }
+.ds-sx__topup { display: flex; flex-direction: column; gap: 0.45rem; width: 100%; padding: 0.9rem; border-radius: 1rem; background: rgb(52 195 143 / .1); box-shadow: inset 0 0 0 1px rgb(52 195 143 / .4); text-align: left; }
+.ds-sx__topup > small { color: var(--sa-muted); font-size: 0.78rem; }
+.ds-sx__toprow { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; align-items: center; padding: 0.5rem 0.6rem; border-radius: 0.7rem; background: rgb(255 255 255 / .05); font-size: 0.86rem; }
+.ds-sx__toprow small { display: block; color: var(--sa-muted); font-size: 0.76rem; }
+.ds-sx__toprow button { padding: 0.35rem 0.7rem; border-radius: 0.6rem; background: var(--sa-ok); color: #0a1219; font-weight: 800; font-size: 0.78rem; }
+.ds-sp__lines { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.ds-sp__line { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.4rem 0.3rem 0.7rem; border-radius: 999px; background: #eef2f5; font-size: 0.8rem; }
+.dark .ds-sp__line { background: rgb(255 255 255 / .06); }
+.ds-sp__x { width: 1.4rem; height: 1.4rem; border-radius: 50%; color: #c8372d; }
+.ds-sp__search { display: flex; align-items: center; gap: 0.5rem; padding: 0 0.75rem; min-height: 2.6rem; border-radius: 0.7rem; box-shadow: inset 0 0 0 1.5px #0e2433; background: #fff; }
+.dark .ds-sp__search { background: #0b1d2a; box-shadow: inset 0 0 0 1.5px rgb(255 255 255 / .3); }
+.ds-sp__search input { flex: 1; border: 0 !important; box-shadow: none !important; background: transparent !important; outline: none; font-size: 0.92rem; padding: 0 !important; }
+.ds-sp__search button { width: 1.5rem; height: 1.5rem; border-radius: 50%; background: #eef2f5; font-size: 0.7rem; }
+.ds-sp__group { margin-top: 0.4rem; font-size: 0.72rem; color: #6b7b88; }
+.ds-sp__pick { display: grid; grid-template-columns: 1.1rem 1fr auto; gap: 0.7rem; align-items: center; padding: 0.7rem 0.8rem; border-radius: 0.75rem; text-align: left; box-shadow: inset 0 0 0 1px #e6ebef; }
+.dark .ds-sp__pick { box-shadow: inset 0 0 0 1px rgb(255 255 255 / .1); }
+.ds-sp__pick i { width: 1.1rem; height: 1.1rem; border-radius: 50%; box-shadow: inset 0 0 0 2px #b7c4cf; }
+.ds-sp__pick.is-on { box-shadow: inset 0 0 0 2px #0e2433; background: #f3f6f8; }
+.dark .ds-sp__pick.is-on { box-shadow: inset 0 0 0 2px #e6edf3; background: rgb(255 255 255 / .04); }
+.ds-sp__pick.is-on i { box-shadow: inset 0 0 0 6px #0e2433; }
+.ds-sp__pick span { display: flex; flex-direction: column; }
+.ds-sp__pick small { color: #6b7b88; font-size: 0.76rem; }
+.ds-sp__pick em { font-style: normal; font-size: 0.78rem; font-weight: 800; color: #3d4f5c; }
+.ds-sp__none { margin: 0; padding: 0.8rem; border-radius: 0.7rem; background: #f6f8fa; color: #5b6b78; font-size: 0.88rem; }
+.dark .ds-sp__none { background: rgb(255 255 255 / .04); }
+.ds-sp__lbl { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; color: #6b7b88; }
+.ds-sp__tr.is-isl { grid-template-columns: 1.6fr 1fr 1.6fr 1.2fr; }
+.ds-sp__way { justify-self: start; padding: 0.35rem 0.8rem; border-radius: 999px; font-size: 0.8rem; font-weight: 800; box-shadow: inset 0 0 0 1px #dfe5ea; color: #33424e; }
+.ds-sp__way.is-sea { background: #0e2433; color: #fff; box-shadow: none; }
+.dark .ds-sp__way.is-sea { background: #e6edf3; color: #0e2433; }
+.ds-pt__q { font-size: 1.25rem; }
+.ds-pt__count { display: grid; grid-template-columns: 3.5rem 1fr 3.5rem; gap: 0.8rem; align-items: center; padding: 1rem; border-radius: 1.3rem; background: rgb(255 255 255 / .05); }
+.ds-pt__count button { height: 3.5rem; border-radius: 1rem; background: rgb(255 255 255 / .08); color: var(--sa-text); font-size: 1.6rem; }
+.ds-pt__count input { width: 100%; text-align: center; border: 0; background: transparent; color: var(--sa-text); font-size: 3.2rem; font-weight: 800; font-variant-numeric: tabular-nums; outline: none; }
+.ds-pt__hint { margin: 0; text-align: center; color: var(--sa-muted); font-size: 0.82rem; }
+DISPATCH_FILE_END_6
 
 # ---------------------------------------------------------------- resources/views/filament/scan/app.blade.php
 mkdir -p 'resources/views/filament/scan'
-cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_19'
+cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_7'
 @php
     $ring = fn (int $done, int $total, int $len = 289) => $len - ($total > 0 ? round($len * min($done, $total) / $total) : 0);
     $condOrder = array_keys($conditions);
@@ -7138,7 +5514,7 @@ cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_19'
                 <span class="ds-sa__ring is-tiny">
                     <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring($progress['loaded'] ?? 0, $progress['total'] ?? 0) }}"/></svg>
                 </span>
-                <span class="ds-sa__count"><strong>{{ $progress['loaded'] ?? 0 }}</strong><small>of {{ $progress['total'] ?? 0 }}</small></span>
+                <span class="ds-sa__count"><strong>{{ $progress['loaded'] ?? 0 }}</strong><small>of {{ $progress['total'] ?? 0 }}</small>@if ($space)<small class="ds-sa__space">{{ \App\Support\BoxSizes::fmt($space['loaded']) }}{{ $space['cap'] ? ' / '.$space['cap'] : '' }} space</small>@endif</span>
                 <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button>
             </header>
 
@@ -7148,30 +5524,10 @@ cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_19'
                 </div>
             @endif
 
-            @if ($this->mode === 'unload')
-                @if ($truck)
-                    <div @class(['ds-sx__truck', 'is-paused' => $truck['paused']])>
-                        <span class="ds-sx__truckhead"><b>🚚 {{ $truck['paused'] ? 'Paused · ' : '' }}Truck {{ $truck['trip'] }} → {{ $truck['to'] }}</b>
-                            <span>
-                                <button type="button" wire:click="truckPause({{ $truck['paused'] ? 'false' : 'true' }})">{{ $truck['paused'] ? 'Resume' : 'Pause' }}</button>
-                                <button type="button" wire:click="truckStop" wire:confirm="The truck leaves now? Its boxes still in the container go to section {{ $truck['section'] ?? '' }}.">Truck leaves</button>
-                            </span>
-                        </span>
-                        <span class="ds-sx__truckn"><span><b>{{ $truck['onTruck'] }}</b> on truck</span><span><b>{{ max(0, $truck['inSection']) }}</b> in section {{ $truck['section'] ?? '' }}</span><span><b>{{ $truck['inContainer'] }}</b> still in container</span></span>
-                    </div>
-                @elseif ($truckPicker)
-                    <div class="ds-sx__picker">
-                        <strong>Which truck is waiting?</strong>
-                        @forelse ($trucks as $tk)
-                            <button type="button" wire:click="truckStart({{ $tk['id'] }})"><b>{{ $tk['name'] }}</b><small>→ {{ $tk['to'] }}{{ $tk['truck'] ? ' · '.$tk['truck'] : '' }}</small></button>
-                        @empty
-                            <p>No open warehouse trip from this warehouse. Make the trip first (Warehouse → Warehouse trips).</p>
-                        @endforelse
-                        <button type="button" class="ds-sx__link" wire:click="openTruckPicker(false)">Cancel</button>
-                    </div>
-                @elseif (! $status)
-                    <button type="button" class="ds-sx__link" wire:click="openTruckPicker">🚚 A truck is waiting for some of these boxes?</button>
-                @endif
+            @if ($this->mode === 'unload' && $trucks)
+                @foreach ($trucks as $tk)
+                    <div class="ds-sx__here"><b>🚚 Truck to {{ $tk['to'] }} is here</b><span>{{ $tk['onTruck'] }} on truck</span></div>
+                @endforeach
             @endif
 
             @if (! $status && $loadNext && $loadNext['stop'])
@@ -7184,13 +5540,15 @@ cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_19'
                     <div class="ds-sa__hit">
                         <span class="ds-sa__mark is-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
                         <span><strong>{{ $box->invoice }}</strong><small>{{ $def['ok'] }}</small></span>
-                        @if ($box->boxtype)<em>{{ $box->boxtype }}</em>@endif
+                        @if ($boxSize && $boxSize['space'] != 1)<em class="ds-sa__size">{{ $boxSize['name'] }} · takes {{ \App\Support\BoxSizes::fmt($boxSize['space']) }} space</em>@elseif ($box->boxtype)<em>{{ $box->boxtype }}</em>@endif
                     </div>
+                    @if ($this->mode === 'count')<p class="ds-sa__msg">{{ $message }}</p>@endif
                     @if ($route)
                         <div @class(['ds-sx__tile', 'is-truck' => ($route['kind'] ?? '') === 'truck']) style="--sx: {{ $route['color'] ?? '#1d6fb8' }}">
-                            <small>{{ ($route['kind'] ?? '') === 'truck' ? 'Put it on the truck' : 'Put this box in' }}</small>
-                            <strong>{{ ($route['kind'] ?? '') === 'truck' ? '🚚' : $route['code'] }}</strong>
-                            <span>{{ ($route['kind'] ?? '') === 'truck' ? 'Truck '.$route['trip'].' → '.$route['name'] : $route['name'] }}</span>
+                            <small>{{ ($route['kind'] ?? '') === 'truck' ? 'Carry this box to' : 'Put this box in' }}</small>
+                            <strong>{{ ($route['kind'] ?? '') === 'truck' ? 'TRUCK' : $route['code'] }}</strong>
+                            <span>{{ ($route['kind'] ?? '') === 'truck' ? $route['name'].(! empty($route['plate']) ? ' · '.$route['plate'] : '') : $route['name'] }}</span>
+                            @if (($route['kind'] ?? '') === 'truck')<em>✓ Already loaded on trip {{ $route['trip'] }}. No need to scan it again.</em>@endif
                             @if (! empty($route['why']))<em>{{ $route['why'] }}</em>@endif
                             @if (! empty($route['pending']))<em>Then scan the QR on section {{ $route['code'] }}.</em>@endif
                         </div>
@@ -7203,6 +5561,12 @@ cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_19'
                             <span><b>{{ $setInfo['name'] }}</b> · box {{ $setInfo['n'] }} of {{ $setInfo['of'] }}</span>
                             <span class="ds-sx__dots">@for ($i = 1; $i <= min(12, $setInfo['of']); $i++)<i @class(['is-on' => $i <= $setInfo['n']])></i>@endfor</span>
                             <small>{{ $setInfo['text'] }}</small>
+                            @if (! empty($setInfo['rows']))
+                                <ul class="ds-sx__setrows">@foreach ($setInfo['rows'] as $sr)<li><span>{{ $sr['i'] }}</span>{{ $sr['t'] }}</li>@endforeach</ul>
+                            @endif
+                            @foreach ($setInfo['add'] ?? [] as $sa)
+                                <button type="button" class="ds-sx__setadd" wire:click="addSetBox({{ $sa['id'] }})">Bring {{ $sa['invoice'] }} from section {{ $sa['section'] ?? '?' }} · add to truck</button>
+                            @endforeach
                         </div>
                     @endif
                     @if ($spot)
@@ -7319,7 +5683,33 @@ cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_19'
                 <span><strong class="is-bad">{{ $today['problems'] }}</strong><small>problems today</small></span>
             </div>
             <p class="ds-sa__note">{{ $complete ? 'Everything on this '.$def['kind'].' is scanned. The office sees it right away.' : 'You can come back and finish later; every scan is already saved.' }}</p>
+            @if ($topUp && $topUp['room'] >= 1)
+                <div class="ds-sx__topup">
+                    <strong>Room for about {{ \App\Support\BoxSizes::fmt($topUp['room']) }} more on the truck</strong>
+                    @forelse ($topUp['boxes'] as $tb)
+                        <div class="ds-sx__toprow" wire:key="tu-{{ $tb['id'] }}">
+                            <span><b>{{ $tb['invoice'] }} · {{ $tb['name'] }}</b><small>{{ $tb['place'] }}{{ $tb['section'] ? ' · section '.$tb['section'] : '' }}{{ $tb['space'] != 1 ? ' · takes '.\App\Support\BoxSizes::fmt($tb['space']) : '' }}</small></span>
+                            <button type="button" wire:click="topUpAdd({{ $tb['id'] }})">Add</button>
+                        </div>
+                    @empty
+                        <small>No waiting boxes for these provinces.</small>
+                    @endforelse
+                    <small>Waiting boxes for the same provinces, oldest and priority first. Add one, then scan it onto the truck.</small>
+                </div>
+            @endif
+            @if ($countResult)
+                <div class="ds-sx__open">
+                    <strong>Section {{ $countResult['code'] }}: {{ $countResult['found'] }} found{{ $countResult['moved'] ? ' · '.$countResult['moved'].' moved in' : '' }}</strong>
+                    @if (count($countResult['missing']))
+                        <span>{{ count($countResult['missing']) }} missing: {{ implode(', ', array_slice($countResult['missing'], 0, 12)) }}{{ count($countResult['missing']) > 12 ? '…' : '' }}</span>
+                    @else
+                        <span>✓ Nothing missing.</span>
+                    @endif
+                    <button type="button" class="ds-sa__secondary" wire:click="closeCount" wire:confirm="Close the count of section {{ $countResult['code'] }}?">Close the count</button>
+                </div>
+            @endif
             @if (count($openSets))
+                @if ($noReason)<p class="ds-sx__stop">⛔ Not ready to leave: {{ $noReason }} {{ $noReason === 1 ? 'customer has' : 'customers have' }} boxes left behind with no reason.</p>@endif
                 <div class="ds-sx__open">
                     <strong>{{ count($openSets) }} {{ count($openSets) === 1 ? 'customer is' : 'customers are' }} missing boxes</strong>
                     @foreach ($openSets as $os)
@@ -7342,92 +5732,11 @@ cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_19'
 </div>
 <x-filament-actions::modals />
 </x-filament-panels::page>
-DISPATCH_FILE_END_19
-
-# ---------------------------------------------------------------- routes/web.php
-mkdir -p 'routes'
-cat > 'routes/web.php' <<'DISPATCH_FILE_END_20'
-<?php
-
-use App\Http\Controllers\AiChatController;
-use App\Http\Controllers\BoxPhotoController;
-use App\Http\Controllers\DriverOfflineController;
-use App\Http\Controllers\FuelController;
-use App\Http\Controllers\InstallQrController;
-use App\Http\Controllers\InvoiceController;
-use App\Http\Controllers\LoadingListController;
-use App\Http\Controllers\PwaController;
-use App\Http\Controllers\TrackController;
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
-use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
-use Illuminate\Support\Facades\Route;
-
-// Printable delivery receipt. Only signed-in users (any panel) may print.
-Route::get('/tripinv/{invoice}/printpdf', [InvoiceController::class, 'tripinvoice'])
-    ->middleware('auth')
-    ->whereNumber('invoice')
-    ->name('invoicepdf');
-
-// Several receipts at once (at most 15), one per page: /tripinv/print?ids=1,2,3
-Route::get('/tripinv/print', [InvoiceController::class, 'bulk'])
-    ->middleware('auth')
-    ->name('invoicepdf.bulk');
-
-// Install the Delivery panel as an app (PWA): manifest, icons, service worker and offline page.
-Route::controller(PwaController::class)->group(function () {
-    Route::get('/sw.js', 'serviceWorker')->name('pwa.sw');
-    Route::get('/pwa/offline', 'offline')->name('pwa.offline');
-    Route::get('/pwa/{panel}/manifest.webmanifest', 'manifest')->whereIn('panel', ['delivery', 'scan'])->name('pwa.manifest');
-    Route::get('/pwa/{panel}/icon-{size}.png', 'icon')->whereIn('panel', ['delivery', 'scan'])->whereNumber('size')->name('pwa.icon');
-});
-
-Route::middleware('web')->group(function () {
-    Route::get('/box-photos/{photo}.jpg', [BoxPhotoController::class, 'show'])->whereNumber('photo')->name('box-photos.show');
-    Route::get('/box-photos/{photo}/download', [BoxPhotoController::class, 'download'])->whereNumber('photo')->name('box-photos.download');
-});
-
-// Driver app without signal: today's boxes for the phone, sending what was saved offline, and the offline page.
-Route::middleware('web')->group(function () {
-    Route::get('/delivery-offline/trip', [DriverOfflineController::class, 'trip'])->name('driver-offline.trip');
-    Route::post('/delivery-offline/sync', [DriverOfflineController::class, 'sync'])->name('driver-offline.sync');
-    Route::get('/delivery-offline', [DriverOfflineController::class, 'shell'])->name('driver-offline.shell');
-});
-
-// Customer chat: receivers ask about their own box (only while "Customer chat" is on in Admin → Settings → AI).
-Route::middleware(['web', 'throttle:30,60'])->controller(AiChatController::class)->group(function () {
-    Route::get('/ask-box', 'show')->name('ai-chat.show');
-    Route::post('/ask-box', 'start')->name('ai-chat.start');
-    Route::get('/ask-box/{token}', 'chat')->name('ai-chat.chat');
-    Route::post('/ask-box/{token}', 'ask')->name('ai-chat.ask');
-});
-
-// Install QR codes for the phone apps (signed-in staff only): download, poster, stickers.
-Route::middleware(['web', 'auth'])->controller(InstallQrController::class)->group(function () {
-    Route::get('/install-qr/{app}.png', 'png')->whereIn('app', ['scan', 'driver'])->name('install-qr.png');
-    Route::get('/install-qr/{app}/poster', 'poster')->whereIn('app', ['scan', 'driver'])->name('install-qr.poster');
-    Route::get('/install-qr/{app}/stickers', 'stickers')->whereIn('app', ['scan', 'driver'])->name('install-qr.stickers');
-});
-
-// Maps & routes: printed loading list of a trip (FRONT → MIDDLE → BACK).
-Route::middleware(['web', 'auth'])->get('/trip-loading/{trip}', [LoadingListController::class, 'show'])
-    ->whereNumber('trip')->name('trip.loading-list');
-
-// Truck tracking: the Driver app sends locations during a trip; GPS trackers send to a secret link.
-Route::middleware(['web', 'auth', 'throttle:120,1'])->post('/delivery-track', [TrackController::class, 'driver'])->name('track.driver');
-Route::middleware(['throttle:600,1'])->match(['get', 'post'], '/track/in/{token}', [TrackController::class, 'tracker'])
-    ->withoutMiddleware([ValidateCsrfToken::class, VerifyCsrfToken::class, 'Illuminate\Foundation\Http\Middleware\PreventRequestForgery'])
-    ->name('track.tracker');
-
-// Fuel › VAT: the month's fuel receipts for the accountant (signed-in staff, their own hub).
-Route::get('/fuel/vat-export', [FuelController::class, 'vatExport'])->middleware(['web', 'auth'])->name('fuel.vat-export');
-
-// Printable QR labels for the warehouse sections.
-Route::get('/sections/labels', App\Http\Controllers\SectionLabelsController::class)->middleware(['web', 'auth'])->name('sections.labels');
-DISPATCH_FILE_END_20
+DISPATCH_FILE_END_7
 
 # ---------------------------------------------------------------- tests/Feature/WarehouseSectionsTest.php
 mkdir -p 'tests/Feature'
-cat > 'tests/Feature/WarehouseSectionsTest.php' <<'DISPATCH_FILE_END_21'
+cat > 'tests/Feature/WarehouseSectionsTest.php' <<'DISPATCH_FILE_END_8'
 <?php
 
 use App\Filament\Pages\WarehouseSections;
@@ -7493,6 +5802,8 @@ beforeEach(function () {
     $this->rosa = $box('S-301', 'Rosa Lim', 'Tarlac');
     $this->ben = $box('S-302', 'Ben Uy', 'Nueva Ecija');
     $this->nop = $box('S-401', 'Joy Tan', '');
+    $this->otherContainer = $other;
+    $this->box = $box;
 });
 
 function unload($test)
@@ -7524,28 +5835,90 @@ it('shows the section and the set at unload, and does not count a box twice', fu
     unload($this)->call('scan', 'S-102')->assertSee('All 2 boxes are off the container')->assertSee($this->user->first_name)->assertSee('You');
 });
 
-it('loads boxes straight onto a waiting truck, and the crew can keep one in its section', function () {
+it('loads boxes straight onto the truck the office switched on, and the crew can keep one in its section', function () {
     $this->actingAs($this->user);
     $trip = Whdeliverylog::create(['truck_id' => Truck::value('id'), 'warehouse_id' => $this->tarlac->id, 'user_whid' => $this->wh, 'departure_date' => today(), 'delivery_date' => today(), 'is_active' => true, 'user_id' => $this->user->id]);
 
-    unload($this)->call('openTruckPicker')->assertSee('Which truck is waiting?')->assertSee('Tarlac Warehouse')
-        ->call('truckStart', $trip->id)->assertSee('Truck '.$trip->trip_number)
-        ->call('scan', 'S-301')->assertSet('route.kind', 'truck')->assertSee('Put in section instead')
+    // Not switched on: the Tarlac box goes to its section, as always.
+    unload($this)->assertDontSee('is here');
+
+    \App\Support\Boxes\Crossdock::switchOn($trip);
+    unload($this)->assertSee('Truck to Tarlac Warehouse is here')
+        ->call('scan', 'S-301')->assertSet('route.kind', 'truck')->assertSee('TRUCK')->assertSee('Already loaded')->assertSee('Put in section instead')
         ->call('dismiss')->call('scan', 'S-302')->assertSet('route.kind', 'truck')
         ->call('putInSection')->assertSet('route.code', 'T')
         ->call('dismiss')->call('scan', 'S-101')->assertSet('route.code', 'C')
-        ->call('dismiss')->assertSee('on truck');
+        ->call('dismiss')->assertSee('1 on truck');
 
     expect(Whtripinvoice::where('whdeliverylog_id', $trip->id)->pluck('invoice_id')->all())->toBe([$this->rosa->id])
         ->and(Whtripinvoice::where('invoice_id', $this->rosa->id)->value('is_loaded'))->toBeTruthy()
         ->and($this->ben->fresh()->sectioned_at)->not->toBeNull()
         ->and($this->ben->fresh()->wh_is_assigned)->toBeFalse();
 
-    $status = \App\Support\Boxes\Crossdock::counts(\App\Support\Boxes\Crossdock::active($this->container->id));
-    expect($status)->toMatchArray(['onTruck' => 1, 'inSection' => 1, 'inContainer' => 0, 'section' => 'T']);
+    // Locking the trip switches it off by itself.
+    $trip->update(['is_lock' => true]);
+    expect($trip->fresh()->truck_here)->toBeFalse()
+        ->and(\App\Support\Boxes\Crossdock::here($this->wh))->toBeEmpty();
+});
 
-    unload($this)->call('truckPause', true)->call('truckStop');
-    expect(\App\Support\Boxes\Crossdock::active($this->container->id))->toBeNull();
+it('lets the office switch the truck on in the transfer trip, only when a section goes there', function () {
+    $this->actingAs(User::where('email', 'warehouse@example.com')->firstOrFail());
+    Filament::setCurrentPanel(Filament::getPanel('warehouse'));
+    $trip = Whdeliverylog::create(['truck_id' => Truck::value('id'), 'warehouse_id' => $this->tarlac->id, 'user_whid' => $this->wh, 'departure_date' => today(), 'delivery_date' => today(), 'is_active' => true, 'user_id' => $this->user->id]);
+
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->callTableAction('truckHere', $trip);
+    expect($trip->fresh()->truck_here)->toBeTrue();
+
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->assertSee('Here, loading')->callTableAction('truckHere', $trip);
+    expect($trip->fresh()->truck_here)->toBeFalse();
+
+    $this->T->update(['to_warehouse_id' => null]);
+    Sections::forget();
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->callTableAction('truckHere', $trip)->assertNotified('No section goes to Tarlac Warehouse yet');
+    expect($trip->fresh()->truck_here)->toBeFalse();
+});
+
+it('on the TRUCK screen shows where the customer\'s other boxes are, and brings one from the section', function () {
+    $this->actingAs($this->user);
+    $trip = Whdeliverylog::create(['truck_id' => Truck::value('id'), 'warehouse_id' => $this->tarlac->id, 'user_whid' => $this->wh, 'departure_date' => today(), 'delivery_date' => today(), 'is_active' => true, 'user_id' => $this->user->id]);
+    $ana1 = ($this->box)('S-501', 'Ana Cruz', 'Tarlac');
+    $ana1->forceFill(['is_verified' => true, 'wh_section_id' => $this->T->id, 'sectioned_at' => now()])->save();
+    $ana2 = ($this->box)('S-502', 'Ana Cruz', 'Tarlac');
+    $ana3 = ($this->box)('S-503', 'Ana Cruz', 'Tarlac', $this->otherContainer->id);
+    \App\Support\Boxes\Crossdock::switchOn($trip);
+
+    unload($this)->call('scan', 'S-502')->assertSet('route.kind', 'truck')
+        ->assertSee('Box 1 · S-501: in section T. Bring it to the truck too.')
+        ->assertSee('in another container')
+        ->assertSee('Bring S-501 from section T')
+        ->call('addSetBox', $ana1->id)->assertNotified()
+        ->assertSee('added, scan it at the truck door')->assertDontSee('Bring S-501 from section T');
+
+    $row = Whtripinvoice::where('whdeliverylog_id', $trip->id)->where('invoice_id', $ana1->id)->first();
+    expect($row)->not->toBeNull()->and((bool) $row->is_loaded)->toBeFalse();
+
+    $open = \App\Support\Boxes\TruckSets::open($trip);
+    expect($open)->toHaveCount(1)
+        ->and($open[0]['have'])->toBe(1)->and($open[0]['of'])->toBe(3)
+        ->and(collect($open[0]['missing'])->pluck('invoice')->all())->toBe(['S-501', 'S-503'])
+        ->and($open[0]['missing'][1]['where'])->toContain('not unloaded yet');
+
+    // Truck left: a reason is needed for each box left behind.
+    $this->actingAs(User::where('email', 'warehouse@example.com')->firstOrFail());
+    Filament::setCurrentPanel(Filament::getPanel('warehouse'));
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->callTableAction('truckHere', $trip, data: ['why' => [$ana1->id => 'not_found']])
+        ->assertHasTableActionErrors();
+    expect($trip->fresh()->truck_here)->toBeTrue();
+
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->callTableAction('truckHere', $trip, data: ['why' => [$ana1->id => 'not_found', $ana3->id => 'not_arrived']])
+        ->assertHasNoTableActionErrors();
+    expect($trip->fresh()->truck_here)->toBeFalse()
+        ->and(SetSplit::where('whdeliverylog_id', $trip->id)->pluck('reason', 'invoice_id')->all())->toBe([$ana1->id => 'not_found', $ana3->id => 'not_arrived']);
 });
 
 it('with the label scan on, saves boxes in a section only when its QR is scanned', function () {
@@ -7599,7 +5972,7 @@ it('lets the admin set up the sections and print the labels', function () {
     $driver->save();
     $this->actingAs($driver)->get(route('sections.labels', ['warehouse' => $this->wh]))->assertForbidden();
 });
-DISPATCH_FILE_END_21
+DISPATCH_FILE_END_8
 
 echo "▶ Updating the database (keeps your data)"
 php artisan migrate --force

@@ -262,6 +262,23 @@ class ScanApp extends Page
         $this->message = $station->lastMessage;
     }
 
+    /** Unload, TRUCK screen: bring another box of the customer from its section onto the truck too. */
+    public function addSetBox(int $boxId): void
+    {
+        $station = $this->station();
+        if ($this->mode !== 'unload' || ! $this->invoiceId || ! $station || ! method_exists($station, 'addSetBox')) {
+            return;
+        }
+        $code = $station->addSetBox($this->invoiceId, $boxId);
+        if (! $code) {
+            Notification::make()->title('That box cannot go on the truck now (it is on another trip or not in this warehouse).')->warning()->send();
+
+            return;
+        }
+        $this->setInfo = $station->setInfo;
+        Notification::make()->title($code.' added to the truck: bring it and scan it at the truck door (Load transfer truck).')->success()->send();
+    }
+
     /** Load truck, Done screen: room left on the truck, add a waiting box to this trip. */
     public function topUpAdd(int $invoiceId): void
     {

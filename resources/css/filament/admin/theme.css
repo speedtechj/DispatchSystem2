@@ -3700,6 +3700,9 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sx__tile span { font-size: 1.05rem; font-weight: 800; }
 .ds-sx__tile em { font-style: normal; font-size: 0.8rem; opacity: .9; }
 .ds-sx__tile.is-truck strong { font-size: 3.6rem; letter-spacing: 0.02em; }
+.ds-sx__setrows { list-style: none; margin: 0.25rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; color: var(--sa-text); }
+.ds-sx__setrows li { display: grid; grid-template-columns: 1.4rem 1fr; }
+.ds-sx__setadd { margin-top: 0.35rem; min-height: 2.8rem; border-radius: 0.75rem; background: #f6be00; color: #0a1219; font-weight: 800; font-size: 0.9rem; padding: 0 0.8rem; }
 .ds-sx__here { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.55rem 0.8rem; border-radius: 0.8rem; background: rgb(246 140 0 / .16); color: #ffd39a; font-size: 0.85rem; }
 @keyframes ds-sx-in { from { transform: scale(.96); opacity: .4; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .ds-sx__tile { animation: none; } }
