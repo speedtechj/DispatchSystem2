@@ -83,7 +83,7 @@ class TripBoard extends Widget
             return;
         }
 
-        app(TripAssignment::class)->releaseTruck($trip);
+        \App\Support\TripFlow::release($trip, 'done');
         Notification::make()->title("Truck released from trip {$trip->trip_number}")->success()->send();
     }
 

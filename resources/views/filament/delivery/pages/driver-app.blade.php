@@ -42,13 +42,29 @@
                 <a href="{{ \App\Filament\Delivery\Pages\Fuel::getUrl() }}" class="ds-fd__home"><span aria-hidden="true">⛽</span><span><b>Add fuel</b><small>Photo of the receipt and the odometer</small></span><span class="ds-sa__chev">›</span></a>
             @endif
 
-            @if (! $trip)
+            @if (! $trip && $closedTrip)
+                <div class="ds-ts ds-ts--closed">
+                    <small>Trip {{ $closedTrip->trip_number }} done · truck released</small>
+                    <strong>{{ $closedDelivered ? 'All '.$closedDelivered.' boxes delivered' : 'Trip closed' }}</strong>
+                    <span>Every box is delivered or returned. Thank you! Your next trip shows here when the office makes it.</span>
+                </div>
+            @elseif (! $trip)
                 <div class="ds-sa__empty">
                     <span class="ds-sa__empty-icon">@include('filament.scan.icon', ['name' => 'truck'])</span>
                     <strong>You're not on a trip right now</strong>
                     <p>When the office puts you on a truck, today's boxes show up here. Pull down or reopen the app to refresh.</p>
                 </div>
             @else
+                @if ($stageCard)
+                        <div class="ds-ts ds-ts--{{ $stage }}">
+                            <small>{{ $stageCard[0] }}</small>
+                            <strong>Trip {{ $trip->trip_number }}</strong>
+                            <span>{{ $stageCard[1] }}</span>
+                            @if ($canTake)
+                                <button type="button" class="ds-sa__primary" wire:click="takeTrip" wire:confirm="Take trip {{ $trip->trip_number }} with {{ $p['total'] }} boxes?">I take the trip · {{ $p['total'] }} boxes</button>
+                            @endif
+                        </div>
+                @endif
                 @if ($finished)
                     <div class="ds-dr__celebrate">
                         <span class="ds-sa__ring is-big"><svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="48" class="is-track"/><circle cx="55" cy="55" r="48" class="is-fill is-ok" style="stroke-dasharray: 302; stroke-dashoffset: 0"/></svg><span><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></i></span></span>
@@ -72,6 +88,9 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
                         Scan a box to deliver
                     </button>
+                    @if ($stage === 'road')
+                        <button type="button" class="ds-sa__secondary" wire:click="backAtHub" wire:confirm="Back at the hub? Boxes not delivered ({{ $p['left'] }}) are given to the hub and scanned back.">Back at the hub</button>
+                    @endif
                 @endif
 
                 @if ($priority->isNotEmpty())

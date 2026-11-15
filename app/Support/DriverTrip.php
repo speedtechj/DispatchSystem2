@@ -32,19 +32,10 @@ class DriverTrip
         return new self($driver, static::currentTrip($driver));
     }
 
+    /** The trip the person is on now: on its crew (trip steps), or the newest active trip of their truck. */
     public static function currentTrip(User $driver): ?Deliverylog
     {
-        $truckId = Truckcrew::where('crew', $driver->getKey())->latest('id')->value('truck_id');
-
-        if (! $truckId) {
-            return null;
-        }
-
-        return Deliverylog::with('truck')
-            ->where('truck_id', $truckId)
-            ->where('is_active', true)
-            ->latest('id')
-            ->first();
+        return \App\Support\TripFlow::tripFor($driver);
     }
 
     /** Every box on the trip, including ones a partner hub handed over to it. */
@@ -87,8 +78,10 @@ class DriverTrip
             return collect();
         }
 
+        $crew = \App\Support\TripFlow::crew($this->trip)->pluck('user_id');
+
         return User::with('workposition')
-            ->whereIn('id', Truckcrew::where('truck_id', $this->trip->truck_id)->pluck('crew'))
+            ->whereIn('id', $crew->isNotEmpty() ? $crew : Truckcrew::where('truck_id', $this->trip->truck_id)->pluck('crew'))
             ->whereKeyNot($this->driver->getKey())
             ->get()
             ->map(fn (User $user) => [

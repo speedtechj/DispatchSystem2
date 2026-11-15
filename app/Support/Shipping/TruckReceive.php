@@ -120,6 +120,8 @@ class TruckReceive
             TruckReceipt::updateOrCreate(['deliverylog_id' => $trip->id, 'logistichub_id' => $hubId],
                 ['finished_at' => now(), 'finished_by' => $by?->id, 'missing' => $c['missing']->count()]);
         });
+        // The hub has its boxes: the trip may be done now (the truck releases itself).
+        \App\Support\TripFlow::maybeClose($trip->fresh());
 
         return $made;
     }

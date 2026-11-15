@@ -19,6 +19,9 @@ class Deliverylog extends Model
             'is_current' => 'boolean',
             'is_active' => 'boolean',
             'is_lock' => 'boolean',
+            'taken_at' => 'datetime',
+            'back_at' => 'datetime',
+            'closed_at' => 'datetime',
         ];
     }
 
@@ -37,6 +40,14 @@ class Deliverylog extends Model
             }
 
             $trip->trip_number = $hub->hub_code.$hub->nextTripNumber();
+        });
+
+        // Trip steps: the crew of the trip is copied from the truck team (and follows a truck change).
+        static::created(fn (Deliverylog $trip) => \App\Support\TripFlow::copyCrew($trip));
+        static::updated(function (Deliverylog $trip): void {
+            if ($trip->wasChanged('truck_id')) {
+                \App\Support\TripFlow::truckChanged($trip);
+            }
         });
     }
 

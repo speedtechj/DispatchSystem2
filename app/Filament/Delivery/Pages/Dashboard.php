@@ -285,6 +285,10 @@ class Dashboard extends BaseDashboard
             return;
         }
 
+        // Delivering means the trip is on the road, even if nobody tapped "I take the trip".
+        if ($this->driverTrip()->trip) {
+            \App\Support\TripFlow::take($this->driverTrip()->trip, Auth::user());
+        }
         app(TripAssignment::class)->markDelivered($box, $this->photos);
 
         $this->justDelivered = $box->id;
@@ -322,6 +326,9 @@ class Dashboard extends BaseDashboard
         if (! $box || ! $reason) {
             return;
         }
+        if ($this->driverTrip()->trip) {
+            \App\Support\TripFlow::take($this->driverTrip()->trip, Auth::user());
+        }
 
         try {
             app(TripAssignment::class)->recordFailedAttempt($box, Auth::user(), $reason, $this->note ?: null, $this->photos);
@@ -341,6 +348,43 @@ class Dashboard extends BaseDashboard
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedHome;
 
     protected static ?int $navigationSort = 1;
+
+    // ------------------------------------------------------------------ trip steps
+
+    /** "I take the trip": the leadman confirms the box count; the trip is on the road. */
+    public function takeTrip(): void
+    {
+        $trip = $this->driverTrip()->trip;
+        if (! $trip || ! \App\Support\TripFlow::canTake($trip, Auth::user())) {
+            return;
+        }
+        \App\Support\TripFlow::take($trip, Auth::user());
+        Notification::make()->title('Trip '.$trip->trip_number.' is yours · '.$trip->fresh()->taken_boxes.' boxes')->body('Drive safe. Customers see you are on the way.')->success()->send();
+    }
+
+    /** "Back at the hub": boxes not delivered are scanned back; then the trip closes by itself. */
+    public function backAtHub(): void
+    {
+        $trip = $this->driverTrip()->trip;
+        if (! $trip) {
+            return;
+        }
+        \App\Support\TripFlow::back($trip);
+        $closed = ! $trip->fresh()->is_active;
+        Notification::make()->title($closed ? 'Trip done · truck released' : 'Back at the hub')
+            ->body($closed ? 'Every box is delivered or returned.' : 'Give the boxes not delivered to the hub: they are scanned back with Return boxes. Then the trip closes by itself.')->success()->send();
+    }
+
+    /** The card at the top of Today for the trip step (none while on the road). */
+    protected function stageCard(string $stage, array $p, bool $canTake): ?array
+    {
+        return [
+            'planned' => ['Your next trip', 'Planned. You will see the boxes when the truck is loaded.'],
+            'loading' => ['Being loaded', $p['total'].' boxes on the trip so far. Wait for “Trip ready”.'],
+            'ready' => ['Trip ready', 'Check the truck. '.($canTake ? 'Tap when you take the trip: you confirm '.$p['total'].' boxes.' : 'The leadman takes the trip.')],
+            'back' => ['Back at the hub', $p['left'] ? $p['left'].' not delivered: give them to the hub, they are scanned back with Return boxes. Then the trip closes by itself.' : 'The trip closes by itself.'],
+        ][$stage] ?? null;
+    }
 
     public function getTitle(): string|Htmlable
     {
@@ -454,8 +498,15 @@ class Dashboard extends BaseDashboard
             $household = ['count' => $same->count(), 'delivered' => $same->where('is_delivered', true)->count()];
         }
 
+        $stage = $has && \App\Support\TripFlow::ready() ? \App\Support\TripFlow::stage($trip->trip) : null;
+
         return [
             'trip' => $trip->trip,
+            'stage' => $stage,
+            'canTake' => $canTake = $stage === 'ready' && \App\Support\TripFlow::canTake($trip->trip, Auth::user()),
+            'stageCard' => $has && $stage ? $this->stageCard($stage, $trip->progress(), $canTake) : null,
+            'closedTrip' => $closedTrip = ! $has && Auth::user() ? \App\Support\TripFlow::justClosedFor(Auth::user()) : null,
+            'closedDelivered' => $closedTrip ? \App\Support\TripFlow::boxes($closedTrip)->where('is_delivered', true)->count() : 0,
             'progress' => $has ? $trip->progress() : null,
             'finished' => $has && $trip->isFinished(),
             'crew' => $trip->crewmates(),

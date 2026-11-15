@@ -51,7 +51,7 @@ it('celebrates when every box is delivered', function () {
 });
 
 it('explains what to do when the driver is not on a trip', function () {
-    Truckcrew::where('crew', $this->driver->id)->delete();
+    Truckcrew::where('crew', $this->driver->id)->get()->each->delete(); // one by one, as the Trucks page does
 
     $this->actingAs($this->driver)
         ->get('/delivery')

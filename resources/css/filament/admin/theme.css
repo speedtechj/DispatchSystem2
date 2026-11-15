@@ -3951,3 +3951,13 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sp__stop > span { flex: 1; display: flex; flex-direction: column; }
 .ds-sp__stop small { color: rgb(107 123 136); font-size: 0.78rem; }
 .ds-sp__stopn { width: 1.75rem; height: 1.75rem; flex: none; border-radius: 999px; background: #0e2433; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; }
+
+/* Driver app · trip steps */
+.ds-ts { display: flex; flex-direction: column; gap: 0.35rem; padding: 1rem 1.1rem; border-radius: 1.2rem; background: #1d3a52; color: #fff; margin-bottom: 0.75rem; }
+.ds-ts small { opacity: .8; font-weight: 700; }
+.ds-ts strong { font-size: 1.35rem; line-height: 1.2; }
+.ds-ts span { font-size: 0.9rem; opacity: .92; }
+.ds-ts .ds-sa__primary { margin-top: 0.5rem; }
+.ds-ts--loading, .ds-ts--back { background: #8a5a00; }
+.ds-ts--ready { background: #5b2f99; }
+.ds-ts--closed { background: #0e2433; }

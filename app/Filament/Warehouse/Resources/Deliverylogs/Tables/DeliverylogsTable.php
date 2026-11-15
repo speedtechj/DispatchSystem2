@@ -33,6 +33,7 @@ class DeliverylogsTable
             ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
             ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'delivery'))
             ->columns([
+                \App\Filament\Shared\Trips\TripActions::stageColumn(),
                 TextColumn::make('trip_number')
                     ->searchable(),
 
@@ -238,30 +239,8 @@ class DeliverylogsTable
                                 ->success()
                                 ->send();
                         }),
-                    Action::make('releasetruct')
-                        ->requiresConfirmation()
-                        ->label('Released Truck')
-                        ->color('info')
-                        ->icon(Heroicon::Truck)
-                        ->hidden(function ($record) {
-
-                            return ! $record->is_current;
-                        })
-                        ->action(function ($record) {
-
-                            $record->truck->update([
-                                'is_assigned' => 0,
-                            ]);
-                            $record->update([
-                                'is_current' => 0,
-                                'is_active' => 0,
-                            ]);
-
-                            Notification::make()
-                                ->title('Truck Released Successfully')
-                                ->success()
-                                ->send();
-                        }),
+                    \App\Filament\Shared\Trips\TripActions::release(),
+                    \App\Filament\Shared\Trips\TripActions::crew(),
                     EditAction::make()
                         ->label('Edit')
                         ->icon(Heroicon::PencilSquare)

@@ -10,6 +10,27 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class Tripinvoice extends Model
 {
     //
+    /**
+     * Trip steps: when the last box of a trip is delivered or returned (taken off the trip),
+     * the trip closes and the truck is released by itself.
+     */
+    protected static function booted(): void
+    {
+        $check = function (Tripinvoice $row, array $tripIds): void {
+            foreach (array_unique(array_filter($tripIds)) as $id) {
+                \App\Support\TripFlow::maybeClose(Deliverylog::find($id));
+            }
+        };
+        static::updated(function (Tripinvoice $row) use ($check): void {
+            if ($row->wasChanged('is_delivered') && $row->is_delivered) {
+                $check($row, [$row->deliverylog_id, $row->deliveryloghub_id]);
+            } elseif ($row->wasChanged('deliveryloghub_id') && ! $row->deliveryloghub_id) {
+                $check($row, [$row->getOriginal('deliveryloghub_id')]);
+            }
+        });
+        static::deleted(fn (Tripinvoice $row) => $check($row, [$row->deliverylog_id, $row->deliveryloghub_id]));
+    }
+
     protected function casts(): array
     {
         return [
