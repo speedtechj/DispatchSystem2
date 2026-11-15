@@ -197,6 +197,15 @@ class DeliverylogsTable
                     ->button()
                     ->color('gray')
                     ->url(fn ($record): string => TripStops::getUrl(['trip' => $record->id])),
+                Action::make('seaShipment')
+                    ->label('Make it a sea shipment')
+                    ->icon('heroicon-o-globe-asia-australia')
+                    ->button()
+                    ->color('info')
+                    ->tooltip(fn ($record) => ($record->destination?->hub_name ?? 'This hub').' is reached by sea')
+                    ->visible(fn ($record): bool => \App\Support\Shipping\Shipments::ready() && $record->is_active && $record->destination?->is_company
+                        && \App\Support\Shipping\Islands::bySea($record->destination) && ! \App\Models\Shipping\SeaShipment::where('deliverylog_id', $record->id)->exists())
+                    ->url(fn ($record): string => \App\Filament\Warehouse\Pages\SeaShipments::getUrl(['trip' => $record->id])),
                 Action::make('fuel')
                     ->label('Fuel')
                     ->icon('heroicon-o-beaker')

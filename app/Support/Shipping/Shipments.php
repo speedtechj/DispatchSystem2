@@ -95,16 +95,17 @@ class Shipments
         return $code;
     }
 
-    /** Open trips to a partner hub that are not a shipment yet. */
-    public static function tripsFor(int|false|null $hub): Collection
+    /** Open trips to a partner hub reached by sea that are not a shipment yet ($all: every partner hub). */
+    public static function tripsFor(int|false|null $hub, bool $all = false): Collection
     {
         if ($hub === false) {
             return collect();
         }
+        $sea = ! $all && Islands::ready() ? (Islands::seaHubIds() ?: [0]) : null;
 
-        return Deliverylog::with('destination:id,hub_name,is_company', 'truck:id,plate_no')
+        return Deliverylog::with('destination', 'truck:id,plate_no')->withCount('tripinvoices')
             ->where('is_active', true)
-            ->whereHas('destination', fn ($q) => $q->where('is_company', true))
+            ->whereHas('destination', fn ($q) => $q->where('is_company', true)->when($sea, fn ($q) => $q->whereIn('id', $sea)))
             ->whereNotIn('id', SeaShipment::select('deliverylog_id'))
             ->when($hub !== null, fn ($q) => $q->where('logistichub_id', $hub))
             ->latest('id')->limit(50)->get();
@@ -120,8 +121,36 @@ class Shipments
             'port_check' => $mode === 'roro' ? 'off' : ($portCheck && isset(static::PORT_CHECKS[$portCheck]) ? $portCheck : 'count'),
             'port_reason' => $mode === 'roro' ? 'RoRo: the truck drives onto the ferry' : null,
             'status' => 'preparing', 'status_log' => [['status' => 'preparing', 'at' => now()->toIso8601String(), 'by' => Auth::id()]],
-            'created_by' => Auth::id(),
+            'port_to' => Islands::port($hub), 'created_by' => Auth::id(),
         ]);
+    }
+
+    /** While preparing: use another trip. The code stays when the hub is the same. */
+    public static function changeTrip(SeaShipment $s, Deliverylog $trip): bool
+    {
+        if ($s->status !== 'preparing' || SeaShipment::where('deliverylog_id', $trip->id)->where('id', '!=', $s->id)->exists()) {
+            return false;
+        }
+        $hub = Logistichub::findOrFail($trip->assigned_to);
+        $s->update(['deliverylog_id' => $trip->id, 'logistichub_id' => $hub->id,
+            'code' => (int) $hub->id === (int) $s->logistichub_id ? $s->code : static::newCode($hub),
+            'port_to' => (int) $hub->id === (int) $s->logistichub_id ? $s->port_to : Islands::port($hub)]);
+
+        return true;
+    }
+
+    /** While preparing: take the shipment away. The trip and its boxes stay as they are. */
+    public static function remove(SeaShipment $s): bool
+    {
+        if ($s->status !== 'preparing') {
+            return false;
+        }
+        DB::transaction(function () use ($s) {
+            SeaShipmentScan::where('sea_shipment_id', $s->id)->delete();
+            $s->delete();
+        });
+
+        return true;
     }
 
     /** Shipments a person may see. null hub = all (Admin). */

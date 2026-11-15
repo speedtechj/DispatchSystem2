@@ -41,6 +41,11 @@ abstract class SeaShipmentPage extends Page
 
     public $receipt = null;
 
+    /** The "Change trip" list is open. */
+    public bool $changing = false;
+
+    public string $changeSearch = '';
+
     public static function canAccess(): bool
     {
         return Shipments::ready() && parent::canAccess();
@@ -133,6 +138,33 @@ abstract class SeaShipmentPage extends Page
         Notification::make()->title(Shipments::label($s->fresh(), $to))->success()->send();
     }
 
+    public function openChange(bool $open = true): void
+    {
+        $this->changing = $open && ! static::$hubSide;
+        $this->changeSearch = '';
+    }
+
+    public function changeTrip(int $tripId): void
+    {
+        abort_if(static::$hubSide, 403);
+        $s = $this->shipment();
+        $trip = Shipments::tripsFor(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()), true)->firstWhere('id', $tripId);
+        if ($s && $trip && Shipments::changeTrip($s, $trip)) {
+            $this->changing = false;
+            Notification::make()->title($s->fresh()->code.' now uses trip '.$trip->trip_number)->success()->send();
+        }
+    }
+
+    public function removeShipment(): void
+    {
+        abort_if(static::$hubSide, 403);
+        $s = $this->shipment();
+        if ($s && Shipments::remove($s)) {
+            Notification::make()->title($s->code.' removed')->body('Trip '.$s->trip?->trip_number.' and its boxes stay as they are.')->success()->send();
+            $this->redirect(str_replace('SeaShipment', 'SeaShipments', static::class)::getUrl());
+        }
+    }
+
     public function finishReceiving(): void
     {
         $s = $this->shipment();
@@ -164,6 +196,9 @@ abstract class SeaShipmentPage extends Page
             'canPress' => $to && $to !== 'received' && (! static::$hubSide || in_array($to, ['arrived', 'picked_up'], true)),
             'canReceive' => in_array($s->status, ['sailed', 'arrived', 'picked_up'], true) && (static::$hubSide || Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()) === null),
             'whenOf' => fn ($st) => Shipments::when($s, $st),
+            'changeTrips' => $this->changing ? Shipments::tripsFor(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()))
+                ->filter(fn ($t) => $this->changeSearch === '' || collect(preg_split('/\s+/', mb_strtolower(trim($this->changeSearch))))->filter()
+                    ->every(fn ($w) => str_contains(mb_strtolower($t->trip_number.' '.$t->destination?->hub_name.' '.$t->truck?->plate_no), $w)))->take(20) : collect(),
         ];
     }
 }

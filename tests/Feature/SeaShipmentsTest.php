@@ -183,3 +183,45 @@ it('runs RoRo without the port and pick-up steps', function () {
         ->and(Shipments::label($s, 'sailed'))->toBe('On the ferry')
         ->and($s->port_check)->toBe('off');
 });
+
+it('lists only trips to hubs reached by sea, searchable, and lets you change the trip or remove the shipment', function () {
+    $luzon = Logistichub::create(['hub_code' => 'PAM', 'hub_name' => 'Pampanga Hub', 'is_active' => true, 'is_company' => true, 'trip_counter' => 0, 'user_id' => $this->admin->id]);
+    $mk = fn ($hub) => Deliverylog::create(['truck_id' => Truck::value('id'), 'logistichub_id' => $this->admin->logistichub_id, 'assigned_to' => $hub->id, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
+    $toLuzon = $mk($luzon);
+    $toDavao = $mk($this->davao);
+
+    expect(\App\Support\Shipping\Islands::islandOf($this->cebu))->toBe('visayas')
+        ->and(\App\Support\Shipping\Islands::islandOf($this->davao))->toBe('mindanao')
+        ->and(\App\Support\Shipping\Islands::bySea($luzon))->toBeFalse();
+
+    Livewire::test(AdminShipments::class)
+        ->assertSee('Trip '.$this->trip->trip_number)->assertSee('Trip '.$toDavao->trip_number)->assertDontSee('Pampanga Hub')
+        ->assertSee('1 trip to hubs reached by truck is not listed')
+        ->set('tripSearch', 'davao')->assertDontSee('Trip '.$this->trip->trip_number.' →')->assertSee('Trip '.$toDavao->trip_number)
+        ->set('tripSearch', '')->set('island', 'visayas')->assertDontSee('Trip '.$toDavao->trip_number.' →')
+        ->set('island', '')->set('allTrips', true)->assertSee('Pampanga Hub')
+        ->set('allTrips', false)->call('pickTrip', $this->trip->id)->assertSee('Visayas')->call('create');
+
+    // the admin marks Pampanga as reached by sea (RoRo): now it is listed
+    Livewire::test(\App\Filament\Pages\HubIslands::class)->assertSee('Pampanga Hub')->call('toggleSea', $luzon->id)->call('setPort', $this->davao->id, 'Davao Sasa Port');
+    expect(\App\Support\Shipping\Islands::bySea($luzon->fresh()))->toBeTrue()
+        ->and(\App\Support\Shipping\Islands::port($this->davao->fresh()))->toBe('Davao Sasa Port');
+
+    // wrong trip: change it to the Davao trip, then remove the shipment
+    $s = SeaShipment::sole();
+    Livewire::test(AdminShipmentPage::class, ['shipmentId' => $s->id])->assertSee('Change trip')
+        ->call('openChange')->assertSee('Trip '.$toDavao->trip_number)->call('changeTrip', $toDavao->id);
+    $s->refresh();
+    expect($s->deliverylog_id)->toBe($toDavao->id)->and($s->logistichub_id)->toBe($this->davao->id)->and($s->code)->toStartWith('DVO-')
+        ->and($s->port_to)->toBe('Davao Sasa Port');
+
+    Livewire::test(AdminShipmentPage::class, ['shipmentId' => $s->id])->call('removeShipment')->assertRedirect();
+    expect(SeaShipment::count())->toBe(0)->and(Deliverylog::find($toDavao->id))->not->toBeNull()
+        ->and(Tripinvoice::where('deliverylog_id', $this->trip->id)->count())->toBe(4);
+
+    // after sealing there is no change or remove
+    $s2 = Shipments::create($this->trip);
+    $s2->update(['status' => 'sealed']);
+    expect(Shipments::remove($s2))->toBeFalse();
+    Livewire::test(AdminShipmentPage::class, ['shipmentId' => $s2->id])->assertDontSee('Remove shipment');
+});

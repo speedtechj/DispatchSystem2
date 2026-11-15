@@ -24,6 +24,24 @@
             @endif
         </span>
     </div>
+    @if ($s->status === 'preparing' && ! $hubSide)
+        <section class="ds-board__panel ds-sp__box">
+            <h3>Picked the wrong trip, or made it by mistake?</h3>
+            <p class="ds-board__muted">Nothing is sealed yet, so you can still change it.</p>
+            <div class="ds-sp__acts">
+                <x-filament::button color="gray" wire:click="openChange({{ $changing ? 'false' : 'true' }})" icon="heroicon-o-arrows-right-left">Change trip</x-filament::button>
+                <x-filament::button color="danger" outlined wire:click="removeShipment" wire:confirm="Remove {{ $s->code }}? Only the shipment is removed. Trip {{ $s->trip?->trip_number }} and its boxes stay as they are.">Remove shipment</x-filament::button>
+            </div>
+            @if ($changing)
+                <label class="ds-sp__search"><span aria-hidden="true">🔍</span><input type="text" wire:model.live.debounce.300ms="changeSearch" placeholder="Search trip no., hub or truck" aria-label="Search trips"></label>
+                @forelse ($changeTrips as $ct)
+                    <button type="button" class="ds-sp__pick" wire:click="changeTrip({{ $ct->id }})" wire:key="ct-{{ $ct->id }}"><i aria-hidden="true"></i><span><b>Trip {{ $ct->trip_number }} → {{ $ct->destination?->hub_name }}</b><small>{{ $ct->truck?->plate_no ?? 'no truck yet' }}</small></span><em>{{ $ct->tripinvoices_count }} boxes</em></button>
+                @empty
+                    <p class="ds-sp__none">No other open trip to a hub reached by sea.</p>
+                @endforelse
+            @endif
+        </section>
+    @endif
     @if ($blockers && $canPress)
         <div class="ds-sp__block">@foreach ($blockers as $b)<span>⚠ {{ $b }}</span>@endforeach</div>
     @endif
