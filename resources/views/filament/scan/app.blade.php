@@ -138,30 +138,10 @@
                 </div>
             @endif
 
-            @if ($this->mode === 'unload')
-                @if ($truck)
-                    <div @class(['ds-sx__truck', 'is-paused' => $truck['paused']])>
-                        <span class="ds-sx__truckhead"><b>🚚 {{ $truck['paused'] ? 'Paused · ' : '' }}Truck {{ $truck['trip'] }} → {{ $truck['to'] }}</b>
-                            <span>
-                                <button type="button" wire:click="truckPause({{ $truck['paused'] ? 'false' : 'true' }})">{{ $truck['paused'] ? 'Resume' : 'Pause' }}</button>
-                                <button type="button" wire:click="truckStop" wire:confirm="The truck leaves now? Its boxes still in the container go to section {{ $truck['section'] ?? '' }}.">Truck leaves</button>
-                            </span>
-                        </span>
-                        <span class="ds-sx__truckn"><span><b>{{ $truck['onTruck'] }}</b> on truck</span><span><b>{{ max(0, $truck['inSection']) }}</b> in section {{ $truck['section'] ?? '' }}</span><span><b>{{ $truck['inContainer'] }}</b> still in container</span></span>
-                    </div>
-                @elseif ($truckPicker)
-                    <div class="ds-sx__picker">
-                        <strong>Which truck is waiting?</strong>
-                        @forelse ($trucks as $tk)
-                            <button type="button" wire:click="truckStart({{ $tk['id'] }})"><b>{{ $tk['name'] }}</b><small>→ {{ $tk['to'] }}{{ $tk['truck'] ? ' · '.$tk['truck'] : '' }}</small></button>
-                        @empty
-                            <p>No open warehouse trip from this warehouse. Make the trip first (Warehouse → Warehouse trips).</p>
-                        @endforelse
-                        <button type="button" class="ds-sx__link" wire:click="openTruckPicker(false)">Cancel</button>
-                    </div>
-                @elseif (! $status)
-                    <button type="button" class="ds-sx__link" wire:click="openTruckPicker">🚚 A truck is waiting for some of these boxes?</button>
-                @endif
+            @if ($this->mode === 'unload' && $trucks)
+                @foreach ($trucks as $tk)
+                    <div class="ds-sx__here"><b>🚚 Truck to {{ $tk['to'] }} is here</b><span>{{ $tk['onTruck'] }} on truck</span></div>
+                @endforeach
             @endif
 
             @if (! $status && $loadNext && $loadNext['stop'])
@@ -179,9 +159,10 @@
                     @if ($this->mode === 'count')<p class="ds-sa__msg">{{ $message }}</p>@endif
                     @if ($route)
                         <div @class(['ds-sx__tile', 'is-truck' => ($route['kind'] ?? '') === 'truck']) style="--sx: {{ $route['color'] ?? '#1d6fb8' }}">
-                            <small>{{ ($route['kind'] ?? '') === 'truck' ? 'Put it on the truck' : 'Put this box in' }}</small>
-                            <strong>{{ ($route['kind'] ?? '') === 'truck' ? '🚚' : $route['code'] }}</strong>
-                            <span>{{ ($route['kind'] ?? '') === 'truck' ? 'Truck '.$route['trip'].' → '.$route['name'] : $route['name'] }}</span>
+                            <small>{{ ($route['kind'] ?? '') === 'truck' ? 'Carry this box to' : 'Put this box in' }}</small>
+                            <strong>{{ ($route['kind'] ?? '') === 'truck' ? 'TRUCK' : $route['code'] }}</strong>
+                            <span>{{ ($route['kind'] ?? '') === 'truck' ? $route['name'].(! empty($route['plate']) ? ' · '.$route['plate'] : '') : $route['name'] }}</span>
+                            @if (($route['kind'] ?? '') === 'truck')<em>✓ Already loaded on trip {{ $route['trip'] }}. No need to scan it again.</em>@endif
                             @if (! empty($route['why']))<em>{{ $route['why'] }}</em>@endif
                             @if (! empty($route['pending']))<em>Then scan the QR on section {{ $route['code'] }}.</em>@endif
                         </div>

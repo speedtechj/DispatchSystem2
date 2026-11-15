@@ -3,6 +3,8 @@
 namespace App\Filament\Warehouse\Resources\Whdeliverylogs\Tables;
 
 use App\Filament\Tables\TripBoardColumns;
+use App\Filament\Warehouse\Resources\Whdeliverylogs\TruckHereAction;
+use App\Support\Boxes\Crossdock;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\BulkActionGroup;
@@ -36,6 +38,11 @@ class WhdeliverylogsTable
                 TextColumn::make('warehouse.name')
                     ->label('Warehouse')
                     ->sortable(),
+                TextColumn::make('truck_here')
+                    ->label('Truck')
+                    ->badge()->color('warning')
+                    ->getStateUsing(fn ($record) => $record->truck_here ? '🚚 Here, loading' : null)
+                    ->visible(fn () => Crossdock::ready()),
                 TextColumn::make('Total Invoices')
                     ->label('Total Invoices')
                     ->badge()
@@ -134,6 +141,7 @@ class WhdeliverylogsTable
                     ])->default(1),
             ])->deferFilters(false)
             ->recordActions([
+                TruckHereAction::make(),
                 ActionGroup::make([
                     Action::make('locktrip')
                         ->requiresConfirmation()

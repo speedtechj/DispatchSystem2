@@ -94,28 +94,50 @@ it('shows the section and the set at unload, and does not count a box twice', fu
     unload($this)->call('scan', 'S-102')->assertSee('All 2 boxes are off the container')->assertSee($this->user->first_name)->assertSee('You');
 });
 
-it('loads boxes straight onto a waiting truck, and the crew can keep one in its section', function () {
+it('loads boxes straight onto the truck the office switched on, and the crew can keep one in its section', function () {
     $this->actingAs($this->user);
     $trip = Whdeliverylog::create(['truck_id' => Truck::value('id'), 'warehouse_id' => $this->tarlac->id, 'user_whid' => $this->wh, 'departure_date' => today(), 'delivery_date' => today(), 'is_active' => true, 'user_id' => $this->user->id]);
 
-    unload($this)->call('openTruckPicker')->assertSee('Which truck is waiting?')->assertSee('Tarlac Warehouse')
-        ->call('truckStart', $trip->id)->assertSee('Truck '.$trip->trip_number)
-        ->call('scan', 'S-301')->assertSet('route.kind', 'truck')->assertSee('Put in section instead')
+    // Not switched on: the Tarlac box goes to its section, as always.
+    unload($this)->assertDontSee('is here');
+
+    \App\Support\Boxes\Crossdock::switchOn($trip);
+    unload($this)->assertSee('Truck to Tarlac Warehouse is here')
+        ->call('scan', 'S-301')->assertSet('route.kind', 'truck')->assertSee('TRUCK')->assertSee('Already loaded')->assertSee('Put in section instead')
         ->call('dismiss')->call('scan', 'S-302')->assertSet('route.kind', 'truck')
         ->call('putInSection')->assertSet('route.code', 'T')
         ->call('dismiss')->call('scan', 'S-101')->assertSet('route.code', 'C')
-        ->call('dismiss')->assertSee('on truck');
+        ->call('dismiss')->assertSee('1 on truck');
 
     expect(Whtripinvoice::where('whdeliverylog_id', $trip->id)->pluck('invoice_id')->all())->toBe([$this->rosa->id])
         ->and(Whtripinvoice::where('invoice_id', $this->rosa->id)->value('is_loaded'))->toBeTruthy()
         ->and($this->ben->fresh()->sectioned_at)->not->toBeNull()
         ->and($this->ben->fresh()->wh_is_assigned)->toBeFalse();
 
-    $status = \App\Support\Boxes\Crossdock::counts(\App\Support\Boxes\Crossdock::active($this->container->id));
-    expect($status)->toMatchArray(['onTruck' => 1, 'inSection' => 1, 'inContainer' => 0, 'section' => 'T']);
+    // Locking the trip switches it off by itself.
+    $trip->update(['is_lock' => true]);
+    expect($trip->fresh()->truck_here)->toBeFalse()
+        ->and(\App\Support\Boxes\Crossdock::here($this->wh))->toBeEmpty();
+});
 
-    unload($this)->call('truckPause', true)->call('truckStop');
-    expect(\App\Support\Boxes\Crossdock::active($this->container->id))->toBeNull();
+it('lets the office switch the truck on in the transfer trip, only when a section goes there', function () {
+    $this->actingAs(User::where('email', 'warehouse@example.com')->firstOrFail());
+    Filament::setCurrentPanel(Filament::getPanel('warehouse'));
+    $trip = Whdeliverylog::create(['truck_id' => Truck::value('id'), 'warehouse_id' => $this->tarlac->id, 'user_whid' => $this->wh, 'departure_date' => today(), 'delivery_date' => today(), 'is_active' => true, 'user_id' => $this->user->id]);
+
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->callTableAction('truckHere', $trip);
+    expect($trip->fresh()->truck_here)->toBeTrue();
+
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->assertSee('Here, loading')->callTableAction('truckHere', $trip);
+    expect($trip->fresh()->truck_here)->toBeFalse();
+
+    $this->T->update(['to_warehouse_id' => null]);
+    Sections::forget();
+    Livewire::test(\App\Filament\Warehouse\Resources\Whdeliverylogs\Pages\ListWhdeliverylogs::class)
+        ->callTableAction('truckHere', $trip)->assertNotified('No section goes to Tarlac Warehouse yet');
+    expect($trip->fresh()->truck_here)->toBeFalse();
 });
 
 it('with the label scan on, saves boxes in a section only when its QR is scanned', function () {

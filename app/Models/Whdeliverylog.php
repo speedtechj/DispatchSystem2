@@ -17,11 +17,20 @@ class Whdeliverylog extends Model
             'delivery_date' => 'date',
             'is_active' => 'boolean',
             'is_lock' => 'boolean',
+            'truck_here' => 'boolean',
+            'truck_here_at' => 'datetime',
         ];
     }
 
     protected static function booted(): void
     {
+        // "The truck is here now" turns off by itself when the trip is locked or closed.
+        static::saving(function (Whdeliverylog $trip): void {
+            if ($trip->truck_here && ($trip->is_lock || $trip->is_active === false)) {
+                $trip->truck_here = false;
+            }
+        });
+
         static::creating(function (Whdeliverylog $trip): void {
             if (filled($trip->trip_number)) {
                 return;

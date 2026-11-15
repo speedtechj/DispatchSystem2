@@ -86,8 +86,6 @@ class ScanApp extends Page
     #[Locked]
     public ?array $wrongHub = null;
 
-    /** Unload: the list of trucks to pick from is open. */
-    public bool $truckPicker = false;
 
     /** Show the finished and closed ones on the pick list too (greyed out). */
     public bool $showFinished = false;
@@ -264,34 +262,6 @@ class ScanApp extends Page
         $this->message = $station->lastMessage;
     }
 
-    public function openTruckPicker(bool $open = true): void
-    {
-        $this->truckPicker = $open && $this->mode === 'unload';
-    }
-
-    public function truckStart(int $tripId): void
-    {
-        $station = $this->station();
-        if ($this->mode === 'unload' && $station && method_exists($station, 'startTruck') && $station->startTruck($tripId)) {
-            $this->truckPicker = false;
-            Notification::make()->title('Truck waiting: its boxes now go straight onto it')->success()->send();
-        }
-    }
-
-    public function truckPause(bool $paused): void
-    {
-        if ($this->mode === 'unload' && ($station = $this->station()) && method_exists($station, 'pauseTruck')) {
-            $station->pauseTruck($paused);
-        }
-    }
-
-    public function truckStop(): void
-    {
-        if ($this->mode === 'unload' && ($station = $this->station()) && method_exists($station, 'stopTruck')) {
-            $station->stopTruck();
-        }
-    }
-
     /** Load truck, Done screen: room left on the truck, add a waiting box to this trip. */
     public function topUpAdd(int $invoiceId): void
     {
@@ -461,8 +431,7 @@ class ScanApp extends Page
         $target = null;
         $loadNext = null;
         $team = [];
-        $truck = null;
-        $trucks = collect();
+        $trucks = [];
         $openSets = [];
         $countResult = null;
         $topUp = null;
@@ -472,8 +441,7 @@ class ScanApp extends Page
             $target = $station->appChoices()->firstWhere('id', $this->choice);
             $loadNext = $this->screen === 'scan' && method_exists($station, 'loadNext') ? $station->loadNext() : null;
             $team = method_exists($station, 'team') ? $station->team() : [];
-            $truck = method_exists($station, 'truckStatus') ? $station->truckStatus() : null;
-            $trucks = $this->truckPicker && method_exists($station, 'truckChoices') ? $station->truckChoices() : collect();
+            $trucks = $this->mode === 'unload' && method_exists($station, 'truckStatus') ? $station->truckStatus() : [];
             $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
             $countResult = $this->screen === 'done' && method_exists($station, 'countResult') ? $station->countResult() : null;
             // Box sizes: space on the truck while loading (a big box takes more).
@@ -506,7 +474,6 @@ class ScanApp extends Page
             'target' => $target,
             'loadNext' => $loadNext,
             'team' => $team,
-            'truck' => $truck,
             'trucks' => $trucks,
             'openSets' => $openSets,
             'countResult' => $countResult,

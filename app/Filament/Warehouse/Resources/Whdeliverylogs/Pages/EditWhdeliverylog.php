@@ -16,6 +16,7 @@ class EditWhdeliverylog extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
+            \App\Filament\Warehouse\Resources\Whdeliverylogs\TruckHereAction::make(),
             DeleteAction::make()
                 ->before(function (DeleteAction $action): void {
                     $trip = $this->record;

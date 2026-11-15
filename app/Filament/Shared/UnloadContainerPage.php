@@ -179,9 +179,9 @@ abstract class UnloadContainerPage extends Page
             return "{$code} verified.";
         }
 
-        if ($trip = Crossdock::load($invoice, Crossdock::active($container->id), $section)) {
+        if ($trip = Crossdock::load($invoice, $warehouseId, $section)) {
             $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => null])->save();
-            $this->route = ['kind' => 'truck', 'code' => 'TRUCK', 'name' => $trip->warehouse?->name ?? $section->goesTo(), 'trip' => $trip->trip_number, 'color' => '#e8590c'];
+            $this->route = ['kind' => 'truck', 'code' => 'TRUCK', 'name' => $trip->warehouse?->name ?? $section->goesTo(), 'trip' => $trip->trip_number, 'plate' => $trip->truck?->plate_no, 'color' => '#e2700c'];
 
             return "{$code} verified · onto truck {$trip->trip_number}.";
         }
@@ -204,9 +204,9 @@ abstract class UnloadContainerPage extends Page
         }
         $pending = Invoice::where('container_id', $container->id)->where('verified_by', Auth::id())
             ->whereNotNull('wh_section_id')->whereNull('sectioned_at')->get();
-        $dock = Crossdock::active($container->id);
-        if ($dock) {
-            $onTruck = \App\Models\Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->whereIn('invoice_id', $pending->pluck('id'))->pluck('invoice_id')->all();
+        $here = Crossdock::here($warehouseId)->pluck('id');
+        if ($here->isNotEmpty()) {
+            $onTruck = \App\Models\Whtripinvoice::whereIn('whdeliverylog_id', $here)->whereIn('invoice_id', $pending->pluck('id'))->pluck('invoice_id')->all();
             $pending = $pending->reject(fn ($b) => in_array($b->id, $onTruck, true));
         }
         $mine = $pending->where('wh_section_id', $section->id);
@@ -230,15 +230,15 @@ abstract class UnloadContainerPage extends Page
         return $container?->warehouse_id ?? Auth::user()?->warehouse_id;
     }
 
-    // ------------------------------------------------------------------ truck waiting (cross-dock)
+    // ------------------------------------------------------------------ truck here (switched on in the transfer trip)
 
-    /** "Put in section instead": take the box off the waiting truck and keep it in its section. */
+    /** "Put in section instead": take the box off the truck and keep it in its section. */
     public function putInSection(int $invoiceId): bool
     {
         $container = $this->selectedContainer();
-        $dock = Crossdock::active($container?->id);
         $invoice = $container ? Invoice::where('container_id', $container->id)->find($invoiceId) : null;
-        if (! $dock || ! $invoice || ! Crossdock::unload($invoice, $dock)) {
+        $trip = $invoice ? Crossdock::tripOf($invoice, $this->warehouseId($container)) : null;
+        if (! $trip || ! Crossdock::unload($invoice, $trip)) {
             return false;
         }
         $section = $invoice->whSection ?? Sections::forInvoice($invoice, $this->warehouseId($container));
@@ -251,35 +251,10 @@ abstract class UnloadContainerPage extends Page
         return true;
     }
 
-    /** Trucks that can wait at this unload. */
-    public function truckChoices(): Collection
+    /** The trucks here now at this warehouse (switched on in their transfer trip). */
+    public function truckStatus(): array
     {
-        return Crossdock::trips($this->warehouseId($this->selectedContainer()))
-            ->map(fn ($t) => ['id' => $t->id, 'name' => 'WH trip '.$t->trip_number, 'to' => $t->warehouse?->name, 'truck' => $t->truck?->plate_no]);
-    }
-
-    public function startTruck(int $tripId): bool
-    {
-        $container = $this->selectedContainer();
-
-        return $container && Crossdock::start($container, $tripId) !== null;
-    }
-
-    public function pauseTruck(bool $paused): void
-    {
-        Crossdock::active($this->selectedContainer()?->id)?->update(['paused' => $paused]);
-    }
-
-    public function stopTruck(): void
-    {
-        Crossdock::active($this->selectedContainer()?->id)?->update(['ended_at' => now()]);
-    }
-
-    public function truckStatus(): ?array
-    {
-        $dock = Crossdock::active($this->selectedContainer()?->id);
-
-        return $dock ? Crossdock::counts($dock) : null;
+        return Crossdock::status($this->warehouseId($this->selectedContainer()));
     }
 
     /** Who scanned how many boxes off this container. */

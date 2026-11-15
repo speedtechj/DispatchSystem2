@@ -2,8 +2,7 @@
 
 namespace App\Support\Boxes;
 
-use App\Models\Boxes\WhCrossdock;
-use App\Models\Container;
+use App\Models\Boxes\WhSection;
 use App\Models\Invoice;
 use App\Models\Whdeliverylog;
 use App\Models\Whtripinvoice;
@@ -11,55 +10,72 @@ use App\Services\TripAssignment;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 /**
- * A truck waiting at a container unload (for example a 10-wheeler to the Tarlac warehouse).
- * Boxes for that warehouse go straight from the container onto the truck: one scan
- * verifies the box and loads it. The crew can put a box in its section instead, or pause the truck.
+ * A truck waiting at the warehouse (for example a 10-wheeler to the Tarlac warehouse).
+ * The office switches "The truck is here now" on in the transfer trip. While it is on, every
+ * box scanned off any container at this warehouse whose section goes to that warehouse is put
+ * straight on the truck: one scan verifies the box and loads it. Nothing to pick on the phone.
+ * It turns off by itself when the trip is locked or closed.
  */
 class Crossdock
 {
-    public static function active(?int $containerId): ?WhCrossdock
+    public static function ready(): bool
     {
-        if (! $containerId || ! Sections::ready()) {
-            return null;
-        }
+        static $ready;
 
-        return WhCrossdock::with('trip.warehouse:id,name')->where('container_id', $containerId)->whereNull('ended_at')->latest('id')->first();
+        return $ready ??= Schema::hasColumn('whdeliverylogs', 'truck_here');
     }
 
-    /** Warehouse trips leaving this warehouse that can take boxes. */
-    public static function trips(?int $warehouseId): Collection
+    /** Trucks here now at this warehouse, loading while containers are unloaded. */
+    public static function here(?int $warehouseId): Collection
     {
-        if (! $warehouseId) {
+        if (! $warehouseId || ! static::ready() || ! Sections::ready()) {
             return collect();
         }
 
         return Whdeliverylog::with('warehouse:id,name', 'truck:id,plate_no')->where('user_whid', $warehouseId)
-            ->where('is_active', true)->where(fn ($q) => $q->where('is_lock', false)->orWhereNull('is_lock'))
-            ->latest('id')->limit(20)->get();
+            ->where('truck_here', true)->where('is_active', true)
+            ->where(fn ($q) => $q->where('is_lock', false)->orWhereNull('is_lock'))
+            ->orderBy('truck_here_at')->get();
     }
 
-    public static function start(Container $container, int $tripId): ?WhCrossdock
+    /** The truck here for the warehouse this section goes to. */
+    public static function tripFor(?int $warehouseId, ?WhSection $section): ?Whdeliverylog
     {
-        $trip = static::trips(Auth::user()?->warehouse_id)->firstWhere('id', $tripId);
-        if (! $trip) {
+        if (! $section || ! $section->to_warehouse_id) {
             return null;
         }
-        WhCrossdock::where('container_id', $container->id)->whereNull('ended_at')->update(['ended_at' => now()]);
 
-        return WhCrossdock::create(['container_id' => $container->id, 'whdeliverylog_id' => $trip->id, 'started_by' => Auth::id()]);
+        return static::here($warehouseId)->first(fn ($t) => (int) $t->warehouse_id === (int) $section->to_warehouse_id);
+    }
+
+    /** Can this trip be switched on: open, from a warehouse, with a section that goes to its warehouse. */
+    public static function sectionFor(Whdeliverylog $trip): ?WhSection
+    {
+        return Sections::forWarehouse($trip->user_whid, (int) $trip->warehouse_id);
+    }
+
+    public static function switchOn(Whdeliverylog $trip): void
+    {
+        $trip->forceFill(['truck_here' => true, 'truck_here_at' => now(), 'truck_here_by' => Auth::id()])->save();
+    }
+
+    public static function switchOff(Whdeliverylog $trip): void
+    {
+        $trip->forceFill(['truck_here' => false])->save();
     }
 
     /**
-     * Load the box onto the waiting truck when its section is for the truck's warehouse.
+     * Load the box onto the truck here when its section goes to the truck's warehouse.
      * Returns the trip it was loaded on, or null (then it goes to its section as usual).
      */
-    public static function load(Invoice $invoice, ?WhCrossdock $dock, ?\App\Models\Boxes\WhSection $section): ?Whdeliverylog
+    public static function load(Invoice $invoice, ?int $warehouseId, ?WhSection $section): ?Whdeliverylog
     {
-        $trip = $dock?->trip;
-        if (! $dock || $dock->paused || ! $trip || ! $section || ! $section->to_warehouse_id || (int) $section->to_warehouse_id !== (int) $trip->warehouse_id) {
+        $trip = static::tripFor($warehouseId, $section);
+        if (! $trip) {
             return null;
         }
         try {
@@ -77,10 +93,18 @@ class Crossdock
         return Whtripinvoice::where('whdeliverylog_id', $trip->id)->where('invoice_id', $invoice->id)->exists() ? $trip : null;
     }
 
-    /** "Put in section instead": take the box off the waiting truck again. */
-    public static function unload(Invoice $invoice, WhCrossdock $dock): bool
+    /** The truck here that this box was just put on, if any. */
+    public static function tripOf(Invoice $invoice, ?int $warehouseId): ?Whdeliverylog
     {
-        $row = Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->where('invoice_id', $invoice->id)->where('is_unloaded', false)->first();
+        $ids = static::here($warehouseId)->pluck('id');
+
+        return $ids->isEmpty() ? null : static::here($warehouseId)->firstWhere('id', Whtripinvoice::whereIn('whdeliverylog_id', $ids)->where('invoice_id', $invoice->id)->where('is_unloaded', false)->value('whdeliverylog_id'));
+    }
+
+    /** "Put in section instead": take the box off the truck again. */
+    public static function unload(Invoice $invoice, Whdeliverylog $trip): bool
+    {
+        $row = Whtripinvoice::where('whdeliverylog_id', $trip->id)->where('invoice_id', $invoice->id)->where('is_unloaded', false)->first();
         if (! $row) {
             return false;
         }
@@ -93,25 +117,15 @@ class Crossdock
     }
 
     /**
-     * The truck's boxes from this container: on the truck, in the section, still in the container.
+     * The trucks here, for the bar in the Scan app.
      *
-     * @return array{trip: string, to: string, onTruck: int, inSection: int, inContainer: int, paused: bool, section: ?string}
+     * @return array<int, array{id: int, trip: string, to: string, plate: ?string, onTruck: int}>
      */
-    public static function counts(WhCrossdock $dock): array
+    public static function status(?int $warehouseId): array
     {
-        $trip = $dock->trip;
-        $section = Sections::forWarehouse($trip?->user_whid, (int) $trip?->warehouse_id);
-        $forTruck = Invoice::where('container_id', $dock->container_id)->get()
-            ->filter(fn ($b) => (int) Sections::forInvoice($b, $trip?->user_whid)?->to_warehouse_id === (int) $trip?->warehouse_id);
-        $ids = $forTruck->pluck('id');
-        $onTruck = Whtripinvoice::where('whdeliverylog_id', $dock->whdeliverylog_id)->whereIn('invoice_id', $ids)->count();
-
-        return [
-            'trip' => (string) $trip?->trip_number, 'to' => (string) ($trip?->warehouse?->name ?? 'the other warehouse'),
-            'onTruck' => $onTruck,
-            'inSection' => $forTruck->filter(fn ($b) => $b->is_verified)->count() - $onTruck,
-            'inContainer' => $forTruck->filter(fn ($b) => ! $b->is_verified)->count(),
-            'paused' => (bool) $dock->paused, 'section' => $section?->code,
-        ];
+        return static::here($warehouseId)->map(fn ($t) => [
+            'id' => $t->id, 'trip' => (string) $t->trip_number, 'to' => (string) ($t->warehouse?->name ?? 'the other warehouse'),
+            'plate' => $t->truck?->plate_no, 'onTruck' => Whtripinvoice::where('whdeliverylog_id', $t->id)->where('is_loaded', true)->count(),
+        ])->values()->all();
     }
 }
