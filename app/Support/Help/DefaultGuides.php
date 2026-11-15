@@ -748,6 +748,24 @@ class DefaultGuides
                 'pages' => ['pages.wrong-hub', 'pages.coming-back'], 'links' => ['company' => 'pages.wrong-hub', 'warehouse' => 'pages.coming-back'],
                 'related' => ['sea-shipments'], 'sort' => 46,
             ],
+            [
+                'slug' => 'side-menu', 'topic' => 'apps', 'icon' => '🧭', 'apps' => ['admin', 'warehouse', 'company'],
+                'title_en' => 'Find your way in the side menu', 'title_tl' => 'Paano hanapin ang page sa side menu',
+                'summary_en' => 'The menu is grouped by the work of the day. Some pages have a new, clearer name; nothing was removed.',
+                'summary_tl' => 'Naka-grupo ang menu ayon sa trabaho sa araw. May ilang page na may bago at mas malinaw na pangalan; walang tinanggal.',
+                'when_en' => 'You cannot find a page you used before.',
+                'when_tl' => 'Hindi mo makita ang page na ginagamit mo dati.',
+                'steps' => [
+                    $s('Open the group', 'Click a group name (Boxes, Trips, Settings · …) to open or close it. The menu remembers what you closed.', 'Buksan ang grupo', 'I-click ang pangalan ng grupo (Boxes, Trips, Settings · …) para buksan o isara. Tatandaan ng menu ang isinara mo.'),
+                    $s('New names', 'Search Invoice → Find a box · Invoice Issue → Box issues · Deliverylogs → Delivery trips · WH Delivery Logs → Transfers to other warehouses · Logistichubs → Logistic hubs · Panelcategories → Account types · Workpositions → Job positions · Vehicles → Trucks · Company Crew → Crew.', 'Mga bagong pangalan', 'Search Invoice → Find a box · Invoice Issue → Box issues · Deliverylogs → Delivery trips · WH Delivery Logs → Transfers to other warehouses · Logistichubs → Logistic hubs · Panelcategories → Account types · Workpositions → Job positions · Vehicles → Trucks · Company Crew → Crew.'),
+                    $s('Warehouse truck scans', 'Hub Load Truck → Load delivery truck · Load Truck → Load transfer truck · Unload Truck → Receive transfer truck · Hub Return Boxes → Return boxes.', 'Truck scan sa bodega', 'Hub Load Truck → Load delivery truck · Load Truck → Load transfer truck · Unload Truck → Receive transfer truck · Hub Return Boxes → Return boxes.'),
+                ],
+                'result_en' => 'A number beside a page shows what waits there (sea shipments on the way, wrong-hub boxes, boxes coming back).',
+                'result_tl' => 'Ang numero sa tabi ng page ay ang naghihintay doon (sea shipment na papunta, wrong-hub na box, box na pabalik).',
+                'problems' => [],
+                'pages' => [], 'links' => [],
+                'related' => [], 'sort' => 1,
+            ],
         ];
     }
 }

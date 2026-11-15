@@ -26,6 +26,9 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Side menus: groups in the order of the work, clear names, numbers on what waits (App\Support\Navigation\Menu).
+        $this->app->scoped(\Filament\Navigation\NavigationManager::class, fn () => new \App\Support\Navigation\DispatchNavigationManager);
+
         // Forms are built with Filament schemas, which only pass the fields they render.
         Model::unguard();
 
