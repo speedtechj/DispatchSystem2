@@ -664,6 +664,31 @@ class DefaultGuides
                 'links' => ['admin' => 'pages.warehouse-sections'],
                 'related' => ['unload-container', 'load-truck'], 'sort' => 25,
             ],
+            // ───────────────────────────── sea shipments ─────────────────────────────
+            [
+                'slug' => 'sea-shipments', 'topic' => 'trucks', 'icon' => '🚢', 'apps' => ['admin', 'warehouse', 'company', 'scan'],
+                'title_en' => 'Sea shipments to Visayas and Mindanao', 'title_tl' => 'Sea shipment papuntang Visayas at Mindanao',
+                'summary_en' => 'A normal trip to the port, then the van and seal, the port check, the ship, and receiving at the partner hub. Container now, RoRo later.',
+                'summary_tl' => 'Normal na trip papuntang port, tapos ang van at seal, port check, barko, at pag-receive sa partner hub. Container ngayon, RoRo sa susunod.',
+                'when_en' => 'Every container or RoRo truck going to a partner hub by sea.',
+                'when_tl' => 'Bawat container o RoRo truck na papunta sa partner hub sa dagat.',
+                'steps' => [
+                    $s('Make the trip and the shipment', 'Make a normal trip to the partner hub with its boxes (Delivery Log). Then Sea shipments → pick the trip → Make shipment.', 'Gawin ang trip at shipment', 'Gumawa ng normal na trip papunta sa partner hub kasama ang mga box (Delivery Log). Tapos Sea shipments → piliin ang trip → Make shipment.'),
+                    $s('Load and seal', 'Scan app → Load truck: sets and wrong hub are checked. Type the seal number and press "Mark: Loaded & sealed".', 'I-load at i-seal', 'Scan app → Load truck: tinitingnan ang set at wrong hub. I-type ang seal number at pindutin ang "Mark: Loaded & sealed".'),
+                    $s('Port check', 'Full scan (Scan app → Port check), count only with a photo of the receipt, or off with a reason.', 'Port check', 'Full scan (Scan app → Port check), bilang lang kasama ang picture ng resibo, o off na may dahilan.'),
+                    $s('Ship details', 'Type the vessel, BL and ETA and press "Mark: Sailed". The receiver sees "On the way by sea".', 'Detalye ng barko', 'I-type ang vessel, BL at ETA at pindutin ang "Mark: Sailed". Makikita ng receiver ang "On the way by sea".'),
+                    $s('Receive at the hub', 'Partner hub: Scan app → Receive container, then Incoming shipments → Finish receiving. Missing boxes get an Invoice Issue; boxes for another hub go to Wrong hub & returns.', 'I-receive sa hub', 'Partner hub: Scan app → Receive container, tapos Incoming shipments → Finish receiving. Ang nawawalang box ay may Invoice Issue; ang box ng ibang hub ay nasa Wrong hub & returns.'),
+                ],
+                'result_en' => 'You know where every box is from the warehouse to the hub, and what the shipment cost per box.',
+                'result_tl' => 'Alam mo kung nasaan ang bawat box mula bodega hanggang hub, at magkano ang gastos bawat box.',
+                'problems' => [
+                    $p('The hub cannot load a box on its truck', 'The box is still on a sea shipment that was not received. Receive the container first.', 'Hindi ma-load ng hub ang box', 'Nasa sea shipment pa ang box na hindi pa na-receive. I-receive muna ang container.'),
+                    $p('"Not handed over at the port"', 'Fewer boxes at the port than left the warehouse. Check the truck now; with a full scan the app lists which ones.', '"Not handed over at the port"', 'Mas kaunti ang box sa port kaysa umalis sa bodega. Tingnan agad ang truck; sa full scan, ililista ng app kung alin.'),
+                ],
+                'pages' => ['pages.sea-shipments', 'pages.sea-shipment', 'pages.incoming-shipments', 'pages.wrong-hub'],
+                'links' => ['admin' => 'pages.sea-shipments', 'warehouse' => 'pages.sea-shipments', 'company' => 'pages.incoming-shipments'],
+                'related' => ['warehouse-sections', 'load-truck'], 'sort' => 45,
+            ],
         ];
     }
 }

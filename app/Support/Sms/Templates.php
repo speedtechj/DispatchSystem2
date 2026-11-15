@@ -38,6 +38,11 @@ class Templates
             'tl' => 'Hi {name}, ang box mo ({boxes}) ay dumating na sa {hub} at ide-deliver na sa lalong madaling panahon.',
             'ceb' => 'Hi {name}, ang imong box ({boxes}) niabot na sa {hub} ug i-deliver dayon.',
         ],
+        'set_split' => [
+            'en' => 'Hi {name}, {box_count} of your boxes are on the way. Box {boxes} follows on the next trip. Call {hub_phone}.',
+            'tl' => 'Hi {name}, papunta na ang {box_count} sa mga box mo. Ang box {boxes} ay susunod sa next trip. Tumawag sa {hub_phone}.',
+            'ceb' => 'Hi {name}, padulong na ang {box_count} sa imong mga box. Ang box {boxes} mosunod sa sunod nga biyahe. Tawag sa {hub_phone}.',
+        ],
     ];
 
     /** Provinces where receivers get Bisaya, and where they get Tagalog (else English). */

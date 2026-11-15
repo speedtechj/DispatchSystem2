@@ -23,6 +23,7 @@ class SmsSettings
         'delivered' => ['Delivered', 'When the last box of the receiver is delivered', true],
         'not_delivered' => ['Not delivered', 'When the driver marks it not delivered', true],
         'hub_arrived' => ['Arrived at partner hub', 'When the box is handed to a partner hub', false],
+        'set_split' => ['Rest of the boxes follow', 'When some of a customer\'s boxes stay behind at loading', false],
     ];
 
     public static function provider(): string

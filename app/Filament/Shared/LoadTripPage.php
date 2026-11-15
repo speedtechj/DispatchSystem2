@@ -146,6 +146,12 @@ abstract class LoadTripPage extends Page
             return;
         }
 
+        if (static::$atHub && \App\Support\Shipping\Shipments::ready() && ($sea = \App\Support\Shipping\Shipments::stillAtSea($tripinvoice))) {
+            $this->scanResult('danger', "{$code} is still on sea shipment {$sea->code}".($sea->eta ? ' (arriving about '.$sea->eta->format('M j').')' : '').'. Receive the container first (Scan app → Receive container).', $tripinvoice->invdata);
+
+            return;
+        }
+
         if ($tripinvoice->{$this->loadedColumn()}) {
             $who = $tripinvoice->loaded_by && $tripinvoice->loaded_by !== Auth::id() ? User::find($tripinvoice->loaded_by)?->first_name : null;
             $when = $tripinvoice->loaded_at ? \Illuminate\Support\Carbon::parse($tripinvoice->loaded_at)->format('g:i A') : null;
@@ -214,8 +220,11 @@ abstract class LoadTripPage extends Page
         if (! $ok) {
             return false;
         }
-        SetSplit::updateOrCreate(['invoice_id' => $invoiceId, 'deliverylog_id' => $trip->id],
+        $split = SetSplit::updateOrCreate(['invoice_id' => $invoiceId, 'deliverylog_id' => $trip->id],
             ['reason' => $reason, 'user_id' => Auth::id(), 'set_key' => Invoice::whereKey($invoiceId)->value('set_key')]);
+        if ($split->wasRecentlyCreated) {
+            BoxSets::textRestFollows($split, $trip, $this->tripColumn(), $this->loadedColumn());
+        }
 
         return true;
     }

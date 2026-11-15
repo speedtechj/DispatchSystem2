@@ -344,6 +344,7 @@ class Help
             'load', 'hub_load' => 'load-truck',
             'return' => 'return-boxes',
             'wh_load', 'wh_unload' => 'warehouse-transfer',
+            'port', 'ship_receive' => 'sea-shipments',
             default => 'scan-tips',
         };
     }

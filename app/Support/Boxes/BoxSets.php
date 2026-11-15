@@ -98,6 +98,32 @@ class BoxSets
             'kind' => $off->isNotEmpty() ? 'split' : ($left->isEmpty() ? 'done' : 'wait')];
     }
 
+    /** Text the customer once per trip: some boxes are on the way, the rest follow (SMS kind "set_split", off by default). */
+    public static function textRestFollows(SetSplit $split, Deliverylog $trip, string $tripColumn = 'deliverylog_id', string $loadedColumn = 'is_loaded'): void
+    {
+        try {
+            if (! \App\Support\Sms\SmsSettings::on('set_split') || ! ($inv = $split->invoice)) {
+                return;
+            }
+            $key = substr(sha1('split'.$trip->id.$inv->set_key), 0, 40);
+            if (\App\Models\Sms\SmsMessage::where('kind', 'set_split')->where('receiver_key', $key)->exists()) {
+                return;
+            }
+            $ids = static::members($inv)->pluck('id');
+            $loaded = Tripinvoice::whereIn('invoice_id', $ids)->where($tripColumn, $trip->id)->where($loadedColumn, true)->count();
+            $behind = SetSplit::where('deliverylog_id', $trip->id)->whereIn('invoice_id', $ids)->with('invoice')->get()->pluck('invoice.invoice')->filter();
+            $lang = \App\Support\Sms\Templates::langFor($inv->receiver_province);
+            $text = \App\Support\Sms\Templates::render(\App\Support\Sms\Templates::get('set_split', $lang), [
+                'name' => \App\Support\Sms\SmsEvents::firstName($inv->receiver_name), 'box_count' => $loaded,
+                'boxes' => \App\Support\Sms\SmsEvents::codes($behind->all()), 'hub_phone' => \App\Support\Sms\SmsSettings::officePhone(),
+            ]);
+            \App\Support\Sms\SmsSender::send('set_split', $inv->receiver_mobile_no, Str::title((string) $inv->receiver_name), $text,
+                ['receiver_key' => $key, 'deliverylog_id' => $trip->id, 'invoice_ids' => $ids->all(), 'lang' => $lang]);
+        } catch (\Throwable $e) {
+            report($e);
+        }
+    }
+
     /**
      * Customers on a trip whose set is not complete on the truck, for the Done screen.
      *

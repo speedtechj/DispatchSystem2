@@ -373,6 +373,14 @@ class HubDesk
         if ($row->deliverylog) {
             $events->push(['at' => $row->deliverylog->eta, 'title' => 'Handed to your hub', 'detail' => 'Main trip '.$row->deliverylog->trip_number, 'tone' => null, 'dateOnly' => true]);
         }
+        $sea = \App\Support\Shipping\Shipments::ready() && $row->deliverylog_id ? \App\Models\Shipping\SeaShipment::where('deliverylog_id', $row->deliverylog_id)->first() : null;
+        if ($sea) {
+            foreach ((array) $sea->status_log as $e) {
+                if (in_array($e['status'] ?? '', ['sealed', 'sailed', 'arrived', 'received'], true)) {
+                    $events->push(['at' => $e['at'], 'title' => \App\Support\Shipping\Shipments::label($sea, $e['status']), 'detail' => 'Sea shipment '.$sea->code.($e['status'] === 'sailed' && $sea->vessel ? ' · '.$sea->vessel : ''), 'tone' => null]);
+                }
+            }
+        }
         if ($row->hubTrip) {
             $events->push(['at' => $row->hubTrip->departure_date, 'title' => 'Out for delivery', 'detail' => 'Trip '.$row->hubTrip->trip_number.($row->hubTrip->truck ? ' · truck '.$row->hubTrip->truck->plate_no : ''), 'tone' => null, 'dateOnly' => true]);
         }
@@ -391,7 +399,8 @@ class HubDesk
         return [
             'row' => $row,
             'box' => $box,
-            'status' => $row->is_delivered ? 'Delivered' : ($row->hubTrip ? ($row->is_loaded_hub ? 'Out for delivery' : 'On a trip, loading') : 'Waiting at your hub'),
+            'status' => $row->is_delivered ? 'Delivered' : ($row->hubTrip ? ($row->is_loaded_hub ? 'Out for delivery' : 'On a trip, loading')
+                : ($sea && \App\Support\Shipping\Shipments::stillAtSea($row) ? \App\Support\Shipping\Shipments::trackText($sea) : 'Waiting at your hub')),
             'events' => $events->sortByDesc(fn ($e) => $e['at'] ? Carbon::parse($e['at'])->timestamp : 0)->values(),
         ];
     }
