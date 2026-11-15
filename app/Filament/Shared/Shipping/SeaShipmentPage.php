@@ -62,7 +62,9 @@ abstract class SeaShipmentPage extends Page
     protected function shipment(): ?SeaShipment
     {
         $hub = Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId());
-        $q = Shipments::visible($hub)->when(static::$hubSide, fn ($q) => $q->where('logistichub_id', (int) Auth::user()?->logistichub_id));
+        $mine = (int) Auth::user()?->logistichub_id;
+        $q = Shipments::visible($hub)->when(static::$hubSide, fn ($q) => $q->where(fn ($q) => $q->where('logistichub_id', $mine)
+            ->when(Shipments::stopsReady(), fn ($q) => $q->orWhereIn('id', \App\Models\Shipping\SeaShipmentStop::where('logistichub_id', $mine)->select('sea_shipment_id')))));
 
         return $q->find($this->shipmentId);
     }
@@ -170,8 +172,57 @@ abstract class SeaShipmentPage extends Page
         $s = $this->shipment();
         abort_unless($s && in_array($s->status, ['sailed', 'arrived', 'picked_up'], true), 404);
         abort_unless(static::$hubSide || Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()) === null, 403);
-        $made = Shipments::finishReceiving($s);
-        Notification::make()->title("{$s->code} received")->body($made ? "{$made} missing ".str('box')->plural($made).': an Invoice Issue was opened for each.' : 'Every box arrived.')->success()->send();
+        $hubId = static::$hubSide ? (int) Auth::user()?->logistichub_id : null;
+        $stop = $hubId ? Shipments::stopFor($s, $hubId) : Shipments::currentStop($s);
+        abort_unless($stop && ! $stop->received_at && $this->isTurnOf($s, $stop), 403);
+        $made = Shipments::finishReceiving($s, null, (int) $stop->logistichub_id);
+        $next = Shipments::currentStop($s->fresh());
+        Notification::make()->title(($stop->hub?->hub_name ?? $s->code).' received'.($next ? ' · passed on to '.$next->hub?->hub_name : ''))
+            ->body($made ? "{$made} missing ".str('box')->plural($made).': an Invoice Issue was opened for each.' : 'Every box arrived.')->success()->send();
+    }
+
+    /** Every stop before this one is received (one container, more hubs). */
+    protected function isTurnOf(SeaShipment $s, \App\Models\Shipping\SeaShipmentStop $stop): bool
+    {
+        return Shipments::stops($s)->every(fn ($x) => $x->stop >= $stop->stop || $x->received_at);
+    }
+
+    /** While preparing: put another hub's trip in this container (it unloads after the others). */
+    public function addStop(int $tripId): void
+    {
+        abort_if(static::$hubSide, 403);
+        $s = $this->shipment();
+        $trip = Shipments::tripsFor(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()), true)->firstWhere('id', $tripId);
+        if (! $s || ! $trip) {
+            return;
+        }
+        if ($clash = Shipments::portClash([$s->trip, $trip])) {
+            Notification::make()->title('Different ports: '.implode(' and ', $clash))->body('One container goes to one port. Make another sea shipment for that trip.')->warning()->send();
+
+            return;
+        }
+        if (Shipments::addStop($s, $trip)) {
+            $this->changing = false;
+            Notification::make()->title('Trip '.$trip->trip_number.' ('.$trip->destination?->hub_name.') is now in this container')->success()->send();
+        }
+    }
+
+    public function removeStop(int $tripId): void
+    {
+        abort_if(static::$hubSide, 403);
+        $s = $this->shipment();
+        if ($s && Shipments::removeStop($s, $tripId)) {
+            Notification::make()->title('Trip taken out of this container')->body('The trip and its boxes stay as they are.')->success()->send();
+        }
+    }
+
+    public bool $adding = false;
+
+    public function openAdd(bool $open = true): void
+    {
+        $this->adding = $open && ! static::$hubSide;
+        $this->changing = false;
+        $this->changeSearch = '';
     }
 
     protected function getViewData(): array
@@ -188,13 +239,18 @@ abstract class SeaShipmentPage extends Page
             'blockers' => $to && $to !== 'received' ? Shipments::blockers($s, $to) : [],
             'counts' => Shipments::counts($s),
             'track' => Shipments::trackText($s),
-            'openSets' => $s->trip ? BoxSets::openOnTrip($s->trip) : [],
+            'openSets' => \App\Models\Deliverylog::whereIn('id', Shipments::tripIds($s))->get()->flatMap(fn ($t) => BoxSets::openOnTrip($t))->all(),
+            'stops' => $stops = Shipments::stops($s),
             'wrong' => WrongHubBox::with('invoice', 'correctHub')->where('sea_shipment_id', $s->id)->get(),
             'modes' => Shipments::MODES,
             'checks' => Shipments::PORT_CHECKS,
             'hubSide' => static::$hubSide,
             'canPress' => $to && $to !== 'received' && (! static::$hubSide || in_array($to, ['arrived', 'picked_up'], true)),
-            'canReceive' => in_array($s->status, ['sailed', 'arrived', 'picked_up'], true) && (static::$hubSide || Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()) === null),
+            'receiveStop' => $rs = in_array($s->status, ['sailed', 'arrived', 'picked_up'], true) && (static::$hubSide || Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()) === null)
+                ? (static::$hubSide ? Shipments::stopFor($s, (int) Auth::user()?->logistichub_id) : Shipments::currentStop($s)) : null,
+            'canReceive' => $rs && ! $rs->received_at && $this->isTurnOf($s, $rs),
+            'nextAfter' => $rs ? $stops->first(fn ($x) => $x->stop > $rs->stop && ! $x->received_at)?->hub?->hub_name : null,
+            'addTrips' => $this->adding ? Shipments::tripsFor(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()))->filter(fn ($t) => ! Shipments::portClash([$s->trip, $t])) : collect(),
             'whenOf' => fn ($st) => Shipments::when($s, $st),
             'changeTrips' => $this->changing ? Shipments::tripsFor(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()))
                 ->filter(fn ($t) => $this->changeSearch === '' || collect(preg_split('/\s+/', mb_strtolower(trim($this->changeSearch))))->filter()

@@ -250,3 +250,58 @@ it('lets the driver type the count at the port and take the receipt photo', func
         ->and($s->status)->toBe('at_port');
     expect(Shipments::counts($s)['port'])->toBe(3);
 });
+
+it('puts more hubs in one container: each hub receives only its own boxes, then passes it on', function () {
+    $this->cebu->forceFill(['by_sea' => true, 'port' => 'Port of Cebu'])->save();
+    $this->davao->forceFill(['by_sea' => true, 'port' => 'Port of Davao'])->save();
+    $bohol = Logistichub::create(['hub_code' => 'BOH', 'hub_name' => 'Bohol Hub', 'is_active' => true, 'is_company' => true, 'trip_counter' => 0, 'user_id' => $this->admin->id]);
+    $bohol->forceFill(['by_sea' => true, 'port' => 'Port of Cebu'])->save();
+    $mkTrip = fn ($hub) => Deliverylog::create(['truck_id' => Truck::value('id'), 'logistichub_id' => $this->admin->logistichub_id, 'assigned_to' => $hub->id, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
+    $tripB = $mkTrip($bohol);
+    $tripD = $mkTrip($this->davao);
+    $b6 = Invoice::where('invoice', 'SEA-5')->first()->replicate()->fill(['invoice' => 'SEA-6', 'receiver_name' => 'Jun Cruz', 'receiver_mobile_no' => '0917000', 'receiver_province' => 'Bohol', 'wh_is_assigned' => false, 'is_assigned' => false, 'set_key' => null, 'wh_section_id' => null]);
+    $b6->save();
+    app(TripAssignment::class)->addToDeliveryTrip($tripB, collect([$b6]));
+    Tripinvoice::where('deliverylog_id', $tripB->id)->update(['logistichub_id' => $bohol->id]);
+
+    // Different ports cannot share a container.
+    Livewire::test(AdminShipments::class)->call('pickTrip', $this->trip->id)->call('pickTrip', $tripD->id)
+        ->assertSee('Different ports')->call('create')->assertHasErrors('tripId');
+    expect(SeaShipment::count())->toBe(0);
+
+    Livewire::test(AdminShipments::class)->call('pickTrip', $this->trip->id)->call('pickTrip', $tripB->id)
+        ->assertSee('One container for 2 hubs')->assertSee('Make 1 shipment · 2 hubs')->call('create')->assertRedirect();
+    $s = SeaShipment::sole();
+    expect(Shipments::tripIds($s))->toBe([$this->trip->id, $tripB->id])
+        ->and(Shipments::loadZone($tripB->id))->toMatchArray(['zone' => 'front', 'stop' => 2])
+        ->and(Shipments::loadZone($this->trip->id))->toMatchArray(['zone' => 'back', 'stop' => 1])
+        ->and(Shipments::counts($s)['onTrip'])->toBe(5);
+
+    loadAll($this);
+    Tripinvoice::where('deliverylog_id', $tripB->id)->update(['is_loaded' => true]);
+    $s->update(['status' => 'sailed']);
+
+    // Cebu: only its own boxes; the Bohol box stays in the container.
+    Filament::setCurrentPanel(Filament::getPanel('scan'));
+    $this->actingAs($this->hubUser);
+    Livewire::test(ScanApp::class)->call('open', 'ship_receive')->call('pick', $s->id)
+        ->call('scan', 'SEA-6')->assertSet('status', 'warning')->assertSet('route.name', 'For Bohol Hub: leave it in the container')
+        ->call('dismiss')->call('scan', 'SEA-1')->assertSet('status', 'success')
+        ->call('finish')->assertSee('pass on to Bohol Hub')->call('finishReceiving');
+    $s->refresh();
+    expect($s->status)->toBe('sailed')
+        ->and(Shipments::currentStop($s)->logistichub_id)->toBe($bohol->id)
+        ->and(collect($s->status_log)->last()['status'])->toBe('passed')
+        ->and(Invoiceissue::where('invoice', 'SEA-6')->exists())->toBeFalse()
+        ->and(Invoiceissue::where('invoice', 'SEA-3')->exists())->toBeTrue();
+
+    // Bohol: its turn now.
+    $boholUser = $this->hubUser->replicate()->fill(['email' => 'bohol@example.com', 'logistichub_id' => $bohol->id]);
+    $boholUser->save();
+    $this->actingAs($boholUser);
+    Livewire::test(ScanApp::class)->call('open', 'ship_receive')->call('pick', $s->id)
+        ->call('scan', 'SEA-1')->assertSet('status', 'warning')->assertSet('message', fn ($m) => str_contains($m, 'already received at Cebu'))
+        ->call('dismiss')->call('scan', 'SEA-6')->assertSet('status', 'success')
+        ->call('finish')->call('finishReceiving');
+    expect($s->fresh()->status)->toBe('received');
+});

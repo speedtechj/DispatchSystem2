@@ -17,11 +17,12 @@ class BoxPhoto extends Model
         'wh_load' => 'Warehouse to warehouse: loading',
         'wh_unload' => 'Warehouse to warehouse: unloading',
         'return' => 'Returning boxes',
+        'hub_receive' => 'Receiving at a partner hub',
     ];
 
     public const SHORT = [
         'unload' => 'Unload', 'load' => 'Load', 'hub_load' => 'Hub load',
-        'wh_load' => 'WH transfer load', 'wh_unload' => 'WH transfer unload', 'return' => 'Return',
+        'wh_load' => 'WH transfer load', 'wh_unload' => 'WH transfer unload', 'return' => 'Return', 'hub_receive' => 'Hub receive',
     ];
 
     public const CONDITIONS = ['good' => 'Good', 'damaged' => 'Damaged', 'wet' => 'Wet', 'open' => 'Open'];

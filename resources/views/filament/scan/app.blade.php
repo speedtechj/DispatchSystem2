@@ -159,7 +159,7 @@
                     @if ($this->mode === 'count')<p class="ds-sa__msg">{{ $message }}</p>@endif
                     @if ($route)
                         <div @class(['ds-sx__tile', 'is-truck' => ($route['kind'] ?? '') === 'truck']) style="--sx: {{ $route['color'] ?? '#1d6fb8' }}">
-                            <small>{{ ($route['kind'] ?? '') === 'truck' ? 'Carry this box to' : 'Put this box in' }}</small>
+                            <small>{{ match ($route['kind'] ?? '') { 'truck' => 'Carry this box to', 'wrong' => 'Careful', default => 'Put this box in' } }}</small>
                             <strong>{{ ($route['kind'] ?? '') === 'truck' ? 'TRUCK' : $route['code'] }}</strong>
                             <span>{{ ($route['kind'] ?? '') === 'truck' ? $route['name'].(! empty($route['plate']) ? ' · '.$route['plate'] : '') : $route['name'] }}</span>
                             @if (($route['kind'] ?? '') === 'truck')<em>✓ Already loaded on trip {{ $route['trip'] }}. No need to scan it again.</em>@endif
@@ -184,7 +184,7 @@
                         </div>
                     @endif
                     @if ($spot)
-                        <div class="ds-ld__spot is-{{ $spot['zone'] }}"><strong>{{ \App\Models\Maps\TripStop::ZONES[$spot['zone']] ?? '' }}</strong><span>Stop {{ $spot['stop'] }} · {{ ['front' => 'deep inside, next to the cab', 'middle' => 'in the middle', 'back' => 'near the door'][$spot['zone']] ?? '' }}</span></div>
+                        <div class="ds-ld__spot is-{{ $spot['zone'] }}"><strong>{{ \App\Models\Maps\TripStop::ZONES[$spot['zone']] ?? '' }}</strong><span>{{ ! empty($spot['hub']) ? $spot['hub'].' (stop '.$spot['stop'].')' : 'Stop '.$spot['stop'] }} · {{ ['front' => 'deep inside, next to the cab', 'middle' => 'in the middle', 'back' => 'near the door'][$spot['zone']] ?? '' }}</span></div>
                     @endif
                     <div class="ds-sa__who">
                         <span>{{ mb_strtoupper(mb_substr($box->receiver_name ?? '?', 0, 2)) }}</span>
@@ -309,6 +309,25 @@
                         <small>No waiting boxes for these provinces.</small>
                     @endforelse
                     <small>Waiting boxes for the same provinces, oldest and priority first. Add one, then scan it onto the truck.</small>
+                </div>
+            @endif
+            @if ($receiveResult)
+                <div class="ds-sx__open">
+                    <strong>{{ $receiveResult['got'] }} of {{ $receiveResult['of'] }} boxes received</strong>
+                    @if (count($receiveResult['missing']))
+                        <span>{{ $receiveResult['of'] - $receiveResult['got'] }} not scanned:</span>
+                        @foreach ($receiveResult['missing'] as $rm)
+                            <span class="ds-sx__miss"><span>{{ $rm['code'] }} <small>{{ $rm['sub'] }}</small></span></span>
+                        @endforeach
+                        <small>Look in the truck once more. Found it? Keep scanning.</small>
+                    @else
+                        <span>✓ Every box arrived.</span>
+                    @endif
+                    @if ($receiveResult['finished'])
+                        <span>✓ Receiving finished.</span>
+                    @else
+                        <button type="button" class="ds-sa__secondary" wire:click="finishReceiving" wire:confirm="Finish receiving? Boxes not scanned get a Missing box issue each.">Finish receiving{{ ! empty($receiveResult['next']) ? ' · pass on to '.$receiveResult['next'] : '' }}</button>
+                    @endif
                 </div>
             @endif
             @if ($countResult)

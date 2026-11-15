@@ -14,7 +14,7 @@
                 @forelse ($groups as $isl => $rows)
                     <b class="ds-sp__group">{{ \App\Support\Shipping\Islands::ISLANDS[$isl] ?? $isl }}</b>
                     @foreach ($rows as $r)
-                        <button type="button" wire:click="pickTrip({{ $r['t']->id }})" @class(['ds-sp__pick', 'is-on' => $tripId === $r['t']->id]) wire:key="tp-{{ $r['t']->id }}">
+                        <button type="button" wire:click="pickTrip({{ $r['t']->id }})" @class(['ds-sp__pick', 'is-on' => in_array($r['t']->id, $this->picked, true)]) wire:key="tp-{{ $r['t']->id }}">
                             <i aria-hidden="true"></i>
                             <span><b>Trip {{ $r['t']->trip_number }} → {{ $r['t']->destination?->hub_name }}</b><small>{{ $r['sub'] }}</small></span>
                             <em>{{ $r['boxes'] }} {{ str('box')->plural($r['boxes']) }}</em>
@@ -31,13 +31,24 @@
             </section>
             <form wire:submit="create" class="ds-board__panel ds-sp__box">
                 <h3>New sea shipment</h3>
-                @if ($picked)
+                @if (count($pickedRows) > 1)
+                    <p class="ds-board__muted">One container for {{ count($pickedRows) }} hubs · {{ collect($pickedRows)->sum('boxes') }} boxes. The first unloads first (load it near the door).</p>
+                    @foreach ($pickedRows as $i => $pr)
+                        <span class="ds-sp__stop" wire:key="pr-{{ $pr['t']->id }}">
+                            <b class="ds-sp__stopn">{{ $i + 1 }}</b>
+                            <span><b>{{ $pr['t']->destination?->hub_name }}</b> · trip {{ $pr['t']->trip_number }}<small>{{ $pr['boxes'] }} boxes · {{ $pr['port'] ?: 'port not set' }} · {{ $i === 0 ? 'unloads first, near the door' : ($i === count($pickedRows) - 1 ? 'unloads last, deep inside' : 'in the middle') }}</small></span>
+                            @if ($i > 0)<button type="button" class="ds-fu__link" wire:click="moveFirst({{ $pr['t']->id }})">Unloads first</button>@endif
+                        </span>
+                    @endforeach
+                    @if ($clash)<p class="ds-sp__err">Different ports: {{ implode(' and ', $clash) }}. One container goes to one port: make a shipment for each.</p>@endif
+                @elseif ($pickedRow)
                     <dl class="ds-sp__dl">
-                        <dt>Goes to</dt><dd><b>{{ $picked['t']->destination?->hub_name }}</b></dd>
-                        <dt>Island</dt><dd>{{ \App\Support\Shipping\Islands::ISLANDS[$picked['island']] ?? '' }}</dd>
-                        <dt>Usual port</dt><dd>{{ $picked['port'] ?: '—' }}</dd>
-                        <dt>Boxes on the trip</dt><dd>{{ $picked['boxes'] }}</dd>
+                        <dt>Goes to</dt><dd><b>{{ $pickedRow['t']->destination?->hub_name }}</b></dd>
+                        <dt>Island</dt><dd>{{ \App\Support\Shipping\Islands::ISLANDS[$pickedRow['island']] ?? '' }}</dd>
+                        <dt>Usual port</dt><dd>{{ $pickedRow['port'] ?: '—' }}</dd>
+                        <dt>Boxes on the trip</dt><dd>{{ $pickedRow['boxes'] }}</dd>
                     </dl>
+                    <p class="ds-board__muted">More hubs in the same container? Tick their trips too.</p>
                 @else
                     <p class="ds-board__muted">Pick the trip to the port on the left.</p>
                 @endif
@@ -46,7 +57,7 @@
                     <label class="ds-sp__lbl"><span>Port check</span><select wire:model="portCheck">@foreach ($checks as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select></label>
                 @endif
                 @error('tripId')<p class="ds-sp__err">{{ $message }}</p>@enderror
-                <x-filament::button type="submit" :disabled="! $picked">Make shipment</x-filament::button>
+                <x-filament::button type="submit" :disabled="! $pickedRow || $clash">{{ count($pickedRows) > 1 ? 'Make 1 shipment · '.count($pickedRows).' hubs' : 'Make shipment' }}</x-filament::button>
                 <p class="ds-board__muted">Make the trip first in Delivery Log, as a normal trip to the partner hub, and put the boxes on it.</p>
             </form>
         </div>

@@ -20,10 +20,35 @@
                 <x-filament::button wire:click="advance" :color="$blockers ? 'gray' : 'primary'">Mark: {{ $nextLabel }}</x-filament::button>
             @endif
             @if ($canReceive)
-                <x-filament::button color="success" wire:click="finishReceiving" wire:confirm="Finish receiving? Boxes not scanned in get an Invoice Issue each.">Finish receiving</x-filament::button>
+                <x-filament::button color="success" wire:click="finishReceiving" wire:confirm="Finish receiving{{ $stops->count() > 1 ? ' at '.$receiveStop?->hub?->hub_name : '' }}? Boxes not scanned in get an Invoice Issue each.">Finish receiving{{ $stops->count() > 1 ? ' · '.$receiveStop?->hub?->hub_name : '' }}{{ $nextAfter ? ' · pass on to '.$nextAfter : '' }}</x-filament::button>
             @endif
         </span>
     </div>
+    @if ($stops->count() > 1 || ($s->status === 'preparing' && ! $hubSide))
+        <section class="ds-board__panel ds-sp__box">
+            <h3>{{ $stops->count() > 1 ? 'One container, '.$stops->count().' hubs' : 'Hubs in this container' }}</h3>
+            @foreach ($stops as $st)
+                <span class="ds-sp__stop" wire:key="st-{{ $st->deliverylog_id }}">
+                    <b class="ds-sp__stopn">{{ $st->stop }}</b>
+                    <span><b>{{ $st->hub?->hub_name }}</b> · trip {{ $st->trip?->trip_number }}
+                        <small>{{ $st->received_at ? 'Received '.$st->received_at->format('M j g:i A').($st->missing ? ' · '.$st->missing.' missing' : '') : ($stops->count() > 1 ? ($st->stop === 1 ? 'Unloads first · load near the door' : ($st->stop === $stops->count() ? 'Unloads last · load deep inside' : 'Load in the middle')) : 'Waiting') }}</small></span>
+                    @if ($s->status === 'preparing' && ! $hubSide && $st->stop > 1)
+                        <button type="button" class="ds-fu__link" wire:click="removeStop({{ $st->deliverylog_id }})" wire:confirm="Take trip {{ $st->trip?->trip_number }} out of this container? The trip and its boxes stay as they are.">Take out</button>
+                    @endif
+                </span>
+            @endforeach
+            @if ($s->status === 'preparing' && ! $hubSide)
+                <x-filament::button color="gray" size="sm" wire:click="openAdd({{ $adding ? 'false' : 'true' }})" icon="heroicon-o-plus">Add another hub's trip</x-filament::button>
+                @if ($adding)
+                    @forelse ($addTrips as $at)
+                        <button type="button" class="ds-sp__pick" wire:click="addStop({{ $at->id }})" wire:key="at-{{ $at->id }}"><i aria-hidden="true"></i><span><b>Trip {{ $at->trip_number }} → {{ $at->destination?->hub_name }}</b><small>{{ $at->truck?->plate_no ?? 'no truck yet' }} · same port</small></span><em>{{ $at->tripinvoices_count }} boxes</em></button>
+                    @empty
+                        <p class="ds-sp__none">No other open trip to a hub at the same port.</p>
+                    @endforelse
+                @endif
+            @endif
+        </section>
+    @endif
     @if ($s->status === 'preparing' && ! $hubSide)
         <section class="ds-board__panel ds-sp__box">
             <h3>Picked the wrong trip, or made it by mistake?</h3>

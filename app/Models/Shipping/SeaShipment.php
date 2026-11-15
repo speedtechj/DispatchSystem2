@@ -48,6 +48,12 @@ class SeaShipment extends Model
         return $this->hasMany(Tripinvoice::class, 'deliverylog_id', 'deliverylog_id');
     }
 
+    /** The hubs of this container in unloading order (one stop for a normal shipment). */
+    public function stops(): HasMany
+    {
+        return $this->hasMany(SeaShipmentStop::class)->orderBy('stop');
+    }
+
     public function cost(): float
     {
         return (float) $this->cost_freight + (float) $this->cost_trucking + (float) $this->cost_port + (float) $this->cost_other;

@@ -313,6 +313,22 @@ class ScanApp extends Page
         }
     }
 
+    /** Receive truck / Receive container, Done screen: boxes not scanned get a Missing box issue. */
+    public function finishReceiving(): void
+    {
+        $station = $this->station();
+        if (! $station || ! method_exists($station, 'finishReceiving')) {
+            return;
+        }
+        $made = $station->finishReceiving();
+        if ($made === null) {
+            return;
+        }
+        cache()->forget('scan-app.waiting.'.Auth::id());
+        Notification::make()->title('Received')->body($made ? $made.' missing '.str('box')->plural($made).': a Missing box issue was opened for each.' : 'Every box arrived.')->success()->send();
+        $this->home();
+    }
+
     /** Load truck, Done screen: why a box of a customer's set stays behind. */
     public function splitReason(int $invoiceId, string $reason): void
     {
@@ -451,6 +467,7 @@ class ScanApp extends Page
         $trucks = [];
         $openSets = [];
         $countResult = null;
+        $receiveResult = null;
         $topUp = null;
         if (in_array($this->screen, ['scan', 'done'], true) && $mode && $this->choice) {
             $station = $this->station();
@@ -461,6 +478,7 @@ class ScanApp extends Page
             $trucks = $this->mode === 'unload' && method_exists($station, 'truckStatus') ? $station->truckStatus() : [];
             $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
             $countResult = $this->screen === 'done' && method_exists($station, 'countResult') ? $station->countResult() : null;
+            $receiveResult = $this->screen === 'done' && method_exists($station, 'receiveResult') ? $station->receiveResult() : null;
             // Box sizes: space on the truck while loading (a big box takes more).
             if (in_array($this->mode, ['load', 'hub_load'], true) && BoxSizes::on() && ($trip = Deliverylog::with('truck')->find($this->choice))) {
                 $space = BoxSizes::tripSpace($trip, $this->mode === 'hub_load');
@@ -494,6 +512,7 @@ class ScanApp extends Page
             'trucks' => $trucks,
             'openSets' => $openSets,
             'countResult' => $countResult,
+            'receiveResult' => $receiveResult,
             'topUp' => $topUp,
             'noReason' => collect($openSets)->filter(fn ($o) => collect($o['missing'])->contains(fn ($m) => ! $m['reason']))->count(),
             'splitReasons' => \App\Models\Boxes\SetSplit::REASONS,

@@ -373,7 +373,7 @@ class HubDesk
         if ($row->deliverylog) {
             $events->push(['at' => $row->deliverylog->eta, 'title' => 'Handed to your hub', 'detail' => 'Main trip '.$row->deliverylog->trip_number, 'tone' => null, 'dateOnly' => true]);
         }
-        $sea = \App\Support\Shipping\Shipments::ready() && $row->deliverylog_id ? \App\Models\Shipping\SeaShipment::where('deliverylog_id', $row->deliverylog_id)->first() : null;
+        $sea = \App\Support\Shipping\Shipments::ready() && $row->deliverylog_id ? \App\Support\Shipping\Shipments::forTrip((int) $row->deliverylog_id) : null;
         if ($sea) {
             foreach ((array) $sea->status_log as $e) {
                 if (in_array($e['status'] ?? '', ['sealed', 'sailed', 'arrived', 'received'], true)) {

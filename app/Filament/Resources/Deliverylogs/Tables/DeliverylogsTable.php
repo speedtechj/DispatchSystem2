@@ -40,6 +40,20 @@ class DeliverylogsTable
 
                 TripBoardColumns::progress('delivery'),
 
+                // Partner hub by truck: "Received by Baguio · 2 missing" (Scan app · Receive truck).
+                TextColumn::make('hub_received')
+                    ->label('Hub received')
+                    ->badge()
+                    ->color(fn ($state) => str_contains((string) $state, 'missing') ? 'danger' : (str_contains((string) $state, 'Received') ? 'success' : 'warning'))
+                    ->visible(fn () => \App\Support\Shipping\TruckReceive::ready())
+                    ->getStateUsing(function ($record) {
+                        $r = \App\Models\Shipping\TruckReceipt::with('hub:id,hub_name')->where('deliverylog_id', $record->id)->get();
+
+                        return $r->isEmpty() ? null : $r->map(fn ($x) => $x->finished_at
+                            ? 'Received by '.($x->hub?->hub_name ?? 'hub').($x->missing ? ' · '.$x->missing.' missing' : '')
+                            : ($x->hub?->hub_name ?? 'Hub').' receiving…')->join(' / ');
+                    }),
+
                 TextColumn::make('truck_id')
                     ->label('Truck')
                     ->searchable(query: function ($query, $search) {

@@ -3945,3 +3945,9 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-pt__count button { height: 3.5rem; border-radius: 1rem; background: rgb(255 255 255 / .08); color: var(--sa-text); font-size: 1.6rem; }
 .ds-pt__count input { width: 100%; text-align: center; border: 0; background: transparent; color: var(--sa-text); font-size: 3.2rem; font-weight: 800; font-variant-numeric: tabular-nums; outline: none; }
 .ds-pt__hint { margin: 0; text-align: center; color: var(--sa-muted); font-size: 0.82rem; }
+
+/* Sea shipment: one container, more hubs */
+.ds-sp__stop { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.7rem; border-radius: 0.75rem; background: rgb(127 147 161 / .1); }
+.ds-sp__stop > span { flex: 1; display: flex; flex-direction: column; }
+.ds-sp__stop small { color: rgb(107 123 136); font-size: 0.78rem; }
+.ds-sp__stopn { width: 1.75rem; height: 1.75rem; flex: none; border-radius: 999px; background: #0e2433; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; }

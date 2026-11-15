@@ -59,22 +59,64 @@ abstract class SeaShipmentsPage extends Page
         return Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId());
     }
 
+    /** The trips ticked for this container, in unloading order (one per hub). */
+    public array $picked = [];
+
+    public function mount(): void
+    {
+        if ($this->tripId) {
+            $this->picked = [$this->tripId];
+        }
+    }
+
+    /** A link with ?trip= (or a single pick) starts the list with that trip. */
+    public function updatedTripId($value): void
+    {
+        $this->picked = $value ? [(int) $value] : [];
+    }
+
+    /** Tick or untick a trip. More trips = one container for more hubs. */
     public function pickTrip(int $id): void
     {
-        $this->tripId = $id;
+        $this->picked = in_array($id, $this->picked, true)
+            ? array_values(array_diff($this->picked, [$id]))
+            : [...$this->picked, $id];
+        $this->tripId = $this->picked[0] ?? null;
+    }
+
+    /** This hub unloads first. */
+    public function moveFirst(int $id): void
+    {
+        if (in_array($id, $this->picked, true)) {
+            $this->picked = [$id, ...array_values(array_diff($this->picked, [$id]))];
+            $this->tripId = $id;
+        }
+    }
+
+    protected function pickedTrips(): array
+    {
+        $trips = Shipments::tripsFor($this->hub(), true)->keyBy('id');
+
+        return collect($this->picked)->map(fn ($id) => $trips[$id] ?? null)->filter()->values()->all();
     }
 
     public function create(): void
     {
         abort_if(static::$incoming, 403);
-        $trip = Shipments::tripsFor($this->hub(), $this->allTrips)->firstWhere('id', $this->tripId);
-        if (! $trip) {
+        $trips = $this->pickedTrips();
+        if (! $trips) {
             $this->addError('tripId', 'Pick the trip to the port.');
 
             return;
         }
-        $s = Shipments::create($trip, $this->mode, $this->portCheck);
-        Notification::make()->title("Sea shipment {$s->code} made")->body('Load the trip as usual (Scan app → Load truck), then fill the van and seal.')->success()->send();
+        if ($clash = Shipments::portClash($trips)) {
+            $this->addError('tripId', 'Different ports: '.implode(' and ', $clash).'. One container goes to one port: make a shipment for each.');
+
+            return;
+        }
+        $s = Shipments::create($trips, $this->mode, $this->portCheck);
+        Notification::make()->title("Sea shipment {$s->code} made".(count($trips) > 1 ? ' · '.count($trips).' hubs' : ''))
+            ->body(count($trips) > 1 ? 'Load each trip as usual (Scan app → Load truck): the app says what goes deep inside and what goes near the door.' : 'Load the trip as usual (Scan app → Load truck), then fill the van and seal.')->success()->send();
         $this->redirect($this->detailUrl($s->id));
     }
 
@@ -90,7 +132,7 @@ abstract class SeaShipmentsPage extends Page
     protected function tripList(): array
     {
         if (static::$incoming) {
-            return ['groups' => collect(), 'tripCount' => 0, 'shownCount' => 0, 'hidden' => 0, 'picked' => null];
+            return ['groups' => collect(), 'tripCount' => 0, 'shownCount' => 0, 'hidden' => 0, 'pickedRow' => null, 'pickedRows' => [], 'clash' => []];
         }
         $all = Shipments::tripsFor($this->hub(), true);
         $trips = $this->allTrips ? $all : Shipments::tripsFor($this->hub());
@@ -109,13 +151,18 @@ abstract class SeaShipmentsPage extends Page
             'groups' => $rows->groupBy('island')->sortBy(fn ($g, $k) => array_search($k, ['visayas', 'mindanao', 'luzon'])),
             'tripCount' => $trips->count(), 'shownCount' => $rows->count(),
             'hidden' => $this->allTrips ? 0 : $all->count() - $trips->count(),
-            'picked' => $rows->firstWhere(fn ($r) => $r['t']->id === $this->tripId) ?? ($this->tripId ? $trips->map(fn ($t) => ['t' => $t, 'island' => $t->destination ? \App\Support\Shipping\Islands::islandOf($t->destination) : 'luzon', 'port' => $t->destination ? \App\Support\Shipping\Islands::port($t->destination) : null, 'boxes' => (int) $t->tripinvoices_count])->firstWhere(fn ($r) => $r['t']->id === $this->tripId) : null),
+            'pickedRows' => $pickedRows = collect($this->pickedTrips())->map(fn ($t) => ['t' => $t, 'island' => $t->destination ? \App\Support\Shipping\Islands::islandOf($t->destination) : 'luzon',
+                'port' => $t->destination ? \App\Support\Shipping\Islands::port($t->destination) : null, 'boxes' => (int) $t->tripinvoices_count])->all(),
+            'pickedRow' => $pickedRows[0] ?? null,
+            'clash' => Shipments::portClash($this->pickedTrips()),
         ];
     }
 
     protected function getViewData(): array
     {
-        $q = Shipments::visible($this->hub())->when(static::$incoming, fn ($q) => $q->where('logistichub_id', (int) Auth::user()?->logistichub_id));
+        $mine = (int) Auth::user()?->logistichub_id;
+        $q = Shipments::visible($this->hub())->when(static::$incoming, fn ($q) => $q->where(fn ($q) => $q->where('logistichub_id', $mine)
+            ->when(Shipments::stopsReady(), fn ($q) => $q->orWhereIn('id', \App\Models\Shipping\SeaShipmentStop::where('logistichub_id', $mine)->select('sea_shipment_id')))));
         $list = (clone $q)->when($this->show === 'open', fn ($q) => $q->where('status', '!=', 'received'))->latest('id')->limit(60)->get();
 
         return [

@@ -50,6 +50,17 @@ abstract class ShipmentScanStation extends Page
         return $this->shipments()->find($this->data['sea_shipment_id'] ?? null);
     }
 
+    /** Receive: the trips of this hub's stop. Port check: every trip in the container. */
+    protected function myTripIds(SeaShipment $s): array
+    {
+        if (static::$step !== 'received') {
+            return Shipments::tripIds($s);
+        }
+        $stop = Shipments::stopFor($s, (int) Auth::user()?->logistichub_id) ?? Shipments::currentStop($s);
+
+        return $stop ? [(int) $stop->deliverylog_id] : [];
+    }
+
     protected function handleScan(string $code): void
     {
         $this->setInfo = null;
@@ -60,10 +71,20 @@ abstract class ShipmentScanStation extends Page
 
             return;
         }
-        $row = Tripinvoice::with('invdata.whSection')->where('deliverylog_id', $s->deliverylog_id)->where('invoice', $code)->latest('id')->first();
+        $row = Tripinvoice::with('invdata.whSection')->whereIn('deliverylog_id', $this->myTripIds($s))->where('invoice', $code)->latest('id')->first();
         if (! $row) {
             $other = $this->invoicesMatching($code)->first();
-            $this->scanResult('danger', "{$code} is not in shipment {$s->code}.", $other);
+            // One container, more hubs: the box is for another stop.
+            $theirs = Tripinvoice::whereIn('deliverylog_id', Shipments::tripIds($s))->where('invoice', $code)->latest('id')->first();
+            $stop = $theirs ? Shipments::stopOf($s, (int) $theirs->deliverylog_id) : null;
+            if ($stop && $stop->received_at) {
+                $this->scanResult('warning', "{$code} was already received at ".($stop->hub?->hub_name ?? 'the hub before').'. Not counted again.', $other);
+            } elseif ($stop) {
+                $this->route = ['kind' => 'wrong', 'code' => '→', 'name' => 'For '.($stop->hub?->hub_name ?? 'the next hub').': leave it in the container', 'color' => '#7a4fb0', 'why' => 'Stop '.$stop->stop.'. Not counted, not missing.'];
+                $this->scanResult('warning', "{$code} is for ".($stop->hub?->hub_name ?? 'the next hub').': leave it in the container.', $other);
+            } else {
+                $this->scanResult('danger', "{$code} is not in shipment {$s->code}.", $other);
+            }
 
             return;
         }
@@ -101,8 +122,9 @@ abstract class ShipmentScanStation extends Page
         }
 
         return [
-            'loaded' => SeaShipmentScan::where('sea_shipment_id', $s->id)->where('step', static::$step)->count(),
-            'total' => Tripinvoice::where('deliverylog_id', $s->deliverylog_id)->where('is_loaded', true)->count(),
+            'loaded' => SeaShipmentScan::where('sea_shipment_id', $s->id)->where('step', static::$step)
+                ->whereIn('invoice_id', Tripinvoice::whereIn('deliverylog_id', $this->myTripIds($s))->select('invoice_id'))->count(),
+            'total' => Tripinvoice::whereIn('deliverylog_id', $this->myTripIds($s))->where('is_loaded', true)->count(),
         ];
     }
 
@@ -123,14 +145,43 @@ abstract class ShipmentScanStation extends Page
         return [];
     }
 
+    /** Receive container asks for the photo of the box at the partner hub (Box photo settings: Receiving at a partner hub). */
     public function photoStep(): ?string
     {
-        return null;
+        return static::$step === 'received' ? 'hub_receive' : null;
     }
 
     public function photoContext(): array
     {
-        return [];
+        $s = $this->selected();
+        $stop = $s ? (Shipments::stopFor($s, (int) Auth::user()?->logistichub_id) ?? Shipments::currentStop($s)) : null;
+
+        return ['deliverylog_id' => $stop?->deliverylog_id ?? $s?->deliverylog_id, 'logistichub_id' => $stop?->logistichub_id ?? $s?->logistichub_id];
+    }
+
+    /** Receive container, Done screen: received, missing, and Finish receiving. */
+    public function receiveResult(): ?array
+    {
+        $s = static::$step === 'received' ? $this->selected() : null;
+        if (! $s) {
+            return null;
+        }
+        $p = $this->progress();
+        $missing = Tripinvoice::whereIn('deliverylog_id', $this->myTripIds($s))->where('is_loaded', true)
+            ->whereNotIn('invoice_id', SeaShipmentScan::where('sea_shipment_id', $s->id)->where('step', 'received')->select('invoice_id'))->limit(30)->pluck('invoice');
+        $stop = Shipments::stopFor($s, (int) Auth::user()?->logistichub_id) ?? Shipments::currentStop($s);
+        $next = Shipments::stops($s)->first(fn ($x) => $stop && $x->stop > $stop->stop && ! $x->received_at);
+
+        return ['got' => $p['loaded'], 'of' => $p['total'], 'finished' => $s->status === 'received' || (bool) $stop?->received_at,
+            'next' => $next?->hub?->hub_name,
+            'missing' => $missing->map(fn ($code) => ['code' => $code, 'sub' => 'Not scanned off the container'])->all()];
+    }
+
+    public function finishReceiving(): ?int
+    {
+        $s = static::$step === 'received' ? $this->selected() : null;
+
+        return $s ? Shipments::finishReceiving($s, null, Shipments::stopFor($s, (int) Auth::user()?->logistichub_id) ? (int) Auth::user()?->logistichub_id : null) : null;
     }
 
     public function appChoices(): Collection

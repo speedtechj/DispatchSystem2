@@ -47,7 +47,7 @@ class ScanModes
             'co' => [
                 'hub_load' => ['label' => 'Hub load', 'sub' => "Onto your hub's own trucks", 'icon' => 'truck', 'field' => 'deliverylog_id', 'kind' => 'hub trip', 'ok' => 'Loaded on the hub truck', 'done' => 'Hub truck loaded', 'class' => HubLoadTruck::class],
                 'return' => $return + ['class' => HubReturnBoxesCompany::class, 'ok' => 'Back at your hub'],
-            ] + ($sea ? ['ship_receive' => $receive] : []),
+            ] + static::hubReceive($user, $sea, $receive),
             'adm' => [
                 'unload' => $unload + ['class' => AdminUnload::class],
                 'load' => $load + ['class' => AdminLoad::class],
@@ -55,6 +55,27 @@ class ScanModes
             ] + ($sea ? ['port' => $port] : []),
             default => [],
         };
+    }
+
+    /**
+     * Partner hub: Receive container for hubs reached by sea, Receive truck for hubs reached by truck
+     * (Settings · Hubs · island & sea). The other one shows only while something is arriving that way.
+     */
+    protected static function hubReceive(?User $user, bool $sea, array $receive): array
+    {
+        $hubId = (int) $user?->logistichub_id;
+        $bySea = \App\Support\Shipping\Islands::ready() && $hubId ? (bool) \App\Models\Logistichub::whereKey($hubId)->value('by_sea') : null;
+        $out = [];
+        if ($sea && ($bySea !== false || \App\Models\Shipping\SeaShipment::whereIn('status', ['sailed', 'arrived', 'picked_up'])->where(fn ($q) => $q->where('logistichub_id', $hubId)
+            ->when(\App\Support\Shipping\Shipments::stopsReady(), fn ($q) => $q->orWhereIn('id', \App\Models\Shipping\SeaShipmentStop::where('logistichub_id', $hubId)->whereNull('received_at')->select('sea_shipment_id'))))->exists())) {
+            $out['ship_receive'] = $receive;
+        }
+        if (\App\Support\Shipping\TruckReceive::ready() && ($bySea !== true || \App\Support\Shipping\TruckReceive::trips($hubId)->isNotEmpty())) {
+            $out['truck_receive'] = ['label' => 'Receive truck', 'sub' => 'Boxes from Manila arriving by truck', 'icon' => 'in', 'field' => 'deliverylog_id', 'kind' => 'truck',
+                'ok' => 'Received at your hub', 'done' => 'Truck received', 'class' => \App\Filament\Shared\Shipping\TruckReceiveStation::class];
+        }
+
+        return $out;
     }
 
     /** "Calgary Warehouse" or "Cebu Partner Hub" for the top of the app. */

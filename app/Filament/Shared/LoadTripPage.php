@@ -181,6 +181,10 @@ abstract class LoadTripPage extends Page
         app(TripAssignment::class)->markLoaded($tripinvoice, atHub: static::$atHub);
         $tripinvoice->forceFill(['loaded_by' => Auth::id(), 'loaded_at' => now()])->saveQuietly();
         $this->spot = TripSorter::zoneMap($trip)[$tripinvoice->id] ?? null;
+        // One container, more hubs: the hub that unloads last goes deep inside.
+        if (! $this->spot && ! static::$atHub && \App\Support\Shipping\Shipments::ready()) {
+            $this->spot = \App\Support\Shipping\Shipments::loadZone($trip->id);
+        }
         if ($tripinvoice->invdata) {
             $this->setInfo = BoxSets::onTrip($tripinvoice->invdata, $trip, $this->tripColumn(), $this->loadedColumn());
         }

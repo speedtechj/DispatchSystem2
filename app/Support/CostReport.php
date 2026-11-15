@@ -80,7 +80,7 @@ class CostReport
             $cost = 0.0;
             $n = 0;
             foreach ($list as $s) {
-                $loaded = Tripinvoice::where('deliverylog_id', $s->deliverylog_id)->where('is_loaded', true)->count();
+                $loaded = Tripinvoice::whereIn('deliverylog_id', \App\Support\Shipping\Shipments::tripIds($s))->where('is_loaded', true)->count();
                 if ($s->cost() > 0 && $loaded > 0) {
                     $cost += $s->cost();
                     $n += $loaded;

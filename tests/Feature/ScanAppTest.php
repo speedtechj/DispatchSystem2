@@ -49,7 +49,7 @@ it('lets warehouse, partner hub and office accounts in, but not drivers', functi
 
 it('gives each account type its own scans', function () {
     expect(array_keys(ScanModes::for(scanUser('warehouse@example.com'))))->toBe(['unload', 'load', 'wh_load', 'wh_unload', 'return', 'port', 'ret_receive'])
-        ->and(array_keys(ScanModes::for(scanUser('company@example.com'))))->toBe(['hub_load', 'return', 'ship_receive'])
+        ->and(array_keys(ScanModes::for(scanUser('company@example.com'))))->toBe(['hub_load', 'return', 'truck_receive'])
         ->and(array_keys(ScanModes::for(scanUser('admin@example.com'))))->toBe(['unload', 'load', 'return', 'port'])
         ->and(ScanModes::for(scanUser('driver@example.com')))->toBe([]);
 });

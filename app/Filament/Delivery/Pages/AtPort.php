@@ -68,7 +68,7 @@ class AtPort extends Page
     {
         $s = $this->shipment();
 
-        return $s ? Tripinvoice::where('deliverylog_id', $s->deliverylog_id)->where('is_loaded', true)->count() : 0;
+        return $s ? Tripinvoice::whereIn('deliverylog_id', \App\Support\Shipping\Shipments::tripIds($s))->where('is_loaded', true)->count() : 0;
     }
 
     public function mount(): void

@@ -749,6 +749,27 @@ class DefaultGuides
                 'related' => ['sea-shipments'], 'sort' => 46,
             ],
             [
+                'slug' => 'receive-truck', 'topic' => 'boxes', 'icon' => '📥', 'apps' => ['company', 'scan'],
+                'title_en' => 'Receive the truck from Manila', 'title_tl' => 'I-receive ang truck galing Manila',
+                'summary_en' => 'Partner hubs reached by truck scan every box in when the truck arrives. Boxes not scanned get a Missing box issue the same day.',
+                'summary_tl' => 'Ang partner hub na naaabot ng truck ay mag-i-scan ng bawat box pagdating ng truck. Ang hindi na-scan ay may Missing box issue sa araw ding iyon.',
+                'when_en' => 'Every truck from Manila that brings boxes to your hub. Sea shipments use Receive container instead.',
+                'when_tl' => 'Bawat truck galing Manila na may box para sa hub. Ang sea shipment ay sa Receive container.',
+                'steps' => [
+                    $s('Pick the truck', 'Scan app → Receive truck → pick the trip that arrived.', 'Piliin ang truck', 'Scan app → Receive truck → piliin ang trip na dumating.'),
+                    $s('Scan each box', 'Scan every box as it comes off. Take the photo if the app asks. Many phones can scan at once.', 'I-scan ang bawat box', 'I-scan ang bawat box pagbaba. Kumuha ng litrato kung hihingin. Puwedeng sabay-sabay ang maraming phone.'),
+                    $s('Finish receiving', 'Tap Done, check the boxes not scanned, then Finish receiving. Each missing box gets a Missing box issue.', 'Finish receiving', 'Pindutin ang Done, tingnan ang hindi na-scan, tapos Finish receiving. May Missing box issue ang bawat kulang.'),
+                ],
+                'result_en' => 'Manila sees "Received by your hub" on the trip, with the missing boxes.',
+                'result_tl' => 'Makikita ng Manila ang "Received by" sa trip, kasama ang mga kulang.',
+                'problems' => [
+                    $p('It says Not on this truck', 'The box is on another trip. Keep it apart and tell the office.', 'Sabi ay Not on this truck', 'Nasa ibang trip ang box. Ihiwalay at sabihan ang office.'),
+                    $p('It says Use Receive container', 'The box came on a sea shipment. Receive it with Receive container.', 'Sabi ay Use Receive container', 'Galing sa sea shipment ang box. I-receive sa Receive container.'),
+                ],
+                'pages' => [], 'links' => [],
+                'related' => ['sea-shipments'], 'sort' => 47,
+            ],
+            [
                 'slug' => 'side-menu', 'topic' => 'apps', 'icon' => '🧭', 'apps' => ['admin', 'warehouse', 'company'],
                 'title_en' => 'Find your way in the side menu', 'title_tl' => 'Paano hanapin ang page sa side menu',
                 'summary_en' => 'The menu is grouped by the work of the day. Some pages have a new, clearer name; nothing was removed.',
