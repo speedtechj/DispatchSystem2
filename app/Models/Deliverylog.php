@@ -22,6 +22,7 @@ class Deliverylog extends Model
             'taken_at' => 'datetime',
             'back_at' => 'datetime',
             'closed_at' => 'datetime',
+            'ready_at' => 'datetime',
         ];
     }
 
@@ -40,6 +41,19 @@ class Deliverylog extends Model
             }
 
             $trip->trip_number = $hub->hub_code.$hub->nextTripNumber();
+        });
+
+        // Next trip waiting: a truck still out keeps its trip; the new one waits for it to close.
+        static::saving(function (Deliverylog $trip): void {
+            if (! \App\Support\TripFlow::queueReady()) {
+                return;
+            }
+            if ($trip->isDirty('truck_id') && ! $trip->taken_at) {
+                $trip->waits_for = \App\Support\TripFlow::runningOn($trip->truck_id, $trip->id)?->id;
+            }
+            if ($trip->isDirty('is_lock')) {
+                $trip->ready_at = $trip->is_lock ? now() : null;
+            }
         });
 
         // Trip steps: the crew of the trip is copied from the truck team (and follows a truck change).

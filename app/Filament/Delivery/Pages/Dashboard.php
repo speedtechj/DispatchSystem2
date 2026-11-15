@@ -505,6 +505,7 @@ class Dashboard extends BaseDashboard
             'stage' => $stage,
             'canTake' => $canTake = $stage === 'ready' && \App\Support\TripFlow::canTake($trip->trip, Auth::user()),
             'stageCard' => $has && $stage ? $this->stageCard($stage, $trip->progress(), $canTake) : null,
+            'nextTrip' => $has && \App\Support\TripFlow::queueReady() ? \App\Support\TripFlow::nextAfter($trip->trip) : null,
             'closedTrip' => $closedTrip = ! $has && Auth::user() ? \App\Support\TripFlow::justClosedFor(Auth::user()) : null,
             'closedDelivered' => $closedTrip ? \App\Support\TripFlow::boxes($closedTrip)->where('is_delivered', true)->count() : 0,
             'progress' => $has ? $trip->progress() : null,

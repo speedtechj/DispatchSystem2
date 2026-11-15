@@ -3961,3 +3961,26 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-ts--loading, .ds-ts--back { background: #8a5a00; }
 .ds-ts--ready { background: #5b2f99; }
 .ds-ts--closed { background: #0e2433; }
+.ds-ts--next { background: #eef6ff; color: #1d5f99; }
+
+/* Today's crew board */
+.ds-cb { display: flex; flex-direction: column; gap: 1rem; }
+.ds-cb__warn { display: flex; flex-direction: column; gap: 0.4rem; }
+.ds-cb__warn span { padding: 0.55rem 0.8rem; border-radius: 0.75rem; font-size: 0.875rem; background: #fff4d6; color: #6b4e00; }
+.ds-cb__warn span.is-bad { background: #fde8e8; color: #8a1f1f; }
+.ds-cb__warn span.is-info { background: rgb(127 147 161 / .12); color: inherit; }
+.ds-cb__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; }
+.ds-cb__truck { display: flex; flex-direction: column; gap: 0.45rem; }
+.ds-cb__truck header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; font-size: 1.05rem; }
+.ds-cb__pill { padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; background: #e6f4ff; color: #1d5f99; }
+.ds-cb__pill.is-free, .ds-cb__pill.is-waiting { background: #e7ebef; color: #33424e; }
+.ds-cb__pill.is-loading, .ds-cb__pill.is-back { background: #fff0d1; color: #8a5a00; }
+.ds-cb__pill.is-ready { background: #efe6fb; color: #5b2f99; }
+.ds-cb__pill.is-road { background: #e6f6ef; color: #17895e; }
+.ds-cb__person { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 0.6rem; background: rgb(127 147 161 / .08); }
+.ds-cb__person > span { display: flex; flex-direction: column; }
+.ds-cb__person small, .ds-cb__note { color: rgb(107 123 136); font-size: 0.78rem; }
+.ds-cb__next { padding: 0.4rem 0.6rem; border-radius: 0.6rem; background: #eef6ff; color: #1d5f99; font-size: 0.8rem; }
+.ds-cb__none { color: #8a1f1f; font-size: 0.85rem; margin: 0; }
+.ds-cb__add { border-radius: 0.6rem; font-size: 0.85rem; padding: 0.35rem 0.5rem; background: transparent; border: 1px solid rgb(127 147 161 / .4); }
+.ds-cb__free { display: flex; flex-direction: column; gap: 0.45rem; }

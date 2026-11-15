@@ -749,6 +749,21 @@ class DefaultGuides
                 'related' => ['sea-shipments'], 'sort' => 46,
             ],
             [
+                'slug' => 'crew-board', 'topic' => 'trips', 'icon' => '👥', 'apps' => ['admin', 'warehouse', 'company'],
+                'title_en' => "Today's crew board and the next trip", 'title_tl' => 'Crew board ngayong araw at ang susunod na trip',
+                'summary_en' => 'See every truck with its crew, its trip and the next trip. Put people on trucks. Plan the next trip for a truck that is still out.',
+                'summary_tl' => 'Makikita ang bawat truck, ang crew, ang trip at ang susunod na trip. Ilagay ang tao sa truck. Magplano ng susunod na trip kahit nasa labas pa ang truck.',
+                'when_en' => 'Every morning, and when you plan tomorrow.', 'when_tl' => 'Tuwing umaga, at kapag nagpaplano para bukas.',
+                'steps' => [
+                    $s('Open the crew board', 'Trips → Crew board. Warnings are on top: trip ready but not taken, boxes not returned, crew without a truck.', 'Buksan ang crew board', 'Trips → Crew board. Nasa itaas ang mga babala: trip ready pero walang kumuha, box na hindi pa naibalik, crew na walang truck.'),
+                    $s('Put people on trucks', 'Add someone with "+ Add someone", take someone off with ✕. A truck without crew: Same as last trip.', 'Ilagay ang tao sa truck', 'Magdagdag gamit ang "+ Add someone", alisin gamit ang ✕. Truck na walang crew: Same as last trip.'),
+                    $s('Next trip waiting', 'Make a trip and pick a truck that is still out. The trip waits; the crew sees it as soon as the truck is free.', 'Susunod na trip', 'Gumawa ng trip at piliin ang truck na nasa labas pa. Maghihintay ang trip; makikita ito ng crew pagka-libre ng truck.'),
+                ],
+                'result_en' => 'No truck waits for the office, and nobody is forgotten.', 'result_tl' => 'Walang truck na naghihintay sa office, at walang naiiwan.',
+                'problems' => [], 'pages' => [], 'links' => [],
+                'related' => ['trip-steps'], 'sort' => 49,
+            ],
+            [
                 'slug' => 'trip-steps', 'topic' => 'trips', 'icon' => '🚚', 'apps' => ['admin', 'warehouse', 'company', 'delivery'],
                 'title_en' => 'A trip from plan to closed', 'title_tl' => 'Ang trip mula plano hanggang sarado',
                 'summary_en' => 'Planned → Loading → Ready → On the road → Back → Closed. Each trip keeps its own crew. The truck releases itself when every box is delivered or returned.',

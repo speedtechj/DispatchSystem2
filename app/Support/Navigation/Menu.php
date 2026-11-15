@@ -47,8 +47,9 @@ class Menu
 
             'Resources\\Deliverylogs\\DeliverylogResource' => ['Trips & delivery', 'Delivery trips', 1],
             'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Trips & delivery', 'Delivery invoices', 2],
-            'Pages\\TruckTracking' => ['Trips & delivery', null, 3],
-            'Pages\\TruckDay' => ['Trips & delivery', null, 4],
+            'Pages\\CrewBoard' => ['Trips & delivery', null, 3],
+            'Pages\\TruckTracking' => ['Trips & delivery', null, 4],
+            'Pages\\TruckDay' => ['Trips & delivery', null, 5],
 
             'Pages\\SeaShipments' => ['Sea & partner hubs', null, 1],
             'Pages\\WrongHub' => ['Sea & partner hubs', null, 2],
@@ -104,6 +105,7 @@ class Menu
 
             'Resources\\Deliverylogs\\DeliverylogResource' => ['Trips', 'Delivery trips', 1],
             'Resources\\Whdeliverylogs\\WhdeliverylogResource' => ['Trips', 'Transfers to other warehouses', 2],
+            'Pages\\CrewBoard' => ['Trips', null, 3],
             'Pages\\TruckTracking' => ['Trips', null, 3],
             'Pages\\TruckDay' => ['Trips', null, 4],
             'Pages\\Fuel' => ['Trips', null, 5],
@@ -139,6 +141,7 @@ class Menu
             'Pages\\ReturnBoxes' => ['Scan on this computer', 'Return boxes', 2],
 
             'Resources\\Trucks\\TruckResource' => ['Trucks & people', null, 1],
+            'Pages\\CrewBoard' => ['Trucks & people', null, 2],
             'Pages\\HubDrivers' => ['Trucks & people', null, 2],
             'Resources\\DriverResource' => ['Trucks & people', 'Crew', 3],
             'Pages\\TruckTracking' => ['Trucks & people', null, 4],

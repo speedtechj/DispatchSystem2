@@ -65,6 +65,13 @@
                             @endif
                         </div>
                 @endif
+                @if ($nextTrip)
+                    <div class="ds-ts ds-ts--next">
+                        <small>Next trip waiting for this truck</small>
+                        <strong>Trip {{ $nextTrip->trip_number }}</strong>
+                        <span>It shows here as soon as trip {{ $trip->trip_number }} is closed.</span>
+                    </div>
+                @endif
                 @if ($finished)
                     <div class="ds-dr__celebrate">
                         <span class="ds-sa__ring is-big"><svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="48" class="is-track"/><circle cx="55" cy="55" r="48" class="is-fill is-ok" style="stroke-dasharray: 302; stroke-dashoffset: 0"/></svg><span><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></i></span></span>

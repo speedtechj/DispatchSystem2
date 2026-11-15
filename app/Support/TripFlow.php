@@ -22,6 +22,7 @@ class TripFlow
 {
     /** key => [label, who moves it on, colour] */
     public const STAGES = [
+        'waiting' => ['Next trip · waits for the truck', 'Automatic', 'gray'],
         'planned' => ['Planned', 'Office', 'info'],
         'loading' => ['Loading', 'Warehouse', 'warning'],
         'ready' => ['Ready', 'Office locked it', 'primary'],
@@ -47,12 +48,71 @@ class TripFlow
         return $ready ??= Schema::hasTable('trip_crews') && Schema::hasColumn('deliverylogs', 'taken_at');
     }
 
+    public static function queueReady(): bool
+    {
+        static $ready;
+
+        return $ready ??= Schema::hasColumn('deliverylogs', 'waits_for');
+    }
+
+    // ------------------------------------------------------------------ next trip waiting
+
+    /** Trips not waiting for another trip that still runs (the trip they waited for may be closed by hand). */
+    public static function notWaiting($q)
+    {
+        return $q->where(fn ($q) => $q->whereNull('waits_for')
+            ->orWhereIn('waits_for', Deliverylog::query()->select('id')->where('is_active', false)));
+    }
+
+    /** The trip that still runs on this truck (another one than $except). */
+    public static function runningOn(?int $truckId, ?int $except = null): ?Deliverylog
+    {
+        return $truckId ? Deliverylog::where('truck_id', $truckId)->where('is_active', true)
+            ->when($except, fn ($q) => $q->whereKeyNot($except))
+            ->when(static::queueReady(), fn ($q) => static::notWaiting($q))->oldest('id')->first() : null;
+    }
+
+    /** This trip waits for the truck's current trip to close. */
+    public static function waitsFor(Deliverylog $trip): ?Deliverylog
+    {
+        if (! static::queueReady() || ! $trip->waits_for) {
+            return null;
+        }
+        $before = Deliverylog::find($trip->waits_for);
+
+        return $before && $before->is_active ? $before : null;
+    }
+
+    /** The next trip planned for the same truck, waiting for this one. */
+    public static function nextAfter(Deliverylog $trip): ?Deliverylog
+    {
+        return static::queueReady() ? Deliverylog::where('waits_for', $trip->id)->where('is_active', true)->oldest('id')->first() : null;
+    }
+
+    /** Truck list for a trip: free trucks, and trucks still out (the trip then waits for them). */
+    public static function truckOptions(?int $hubId, ?int $tripId = null): array
+    {
+        $trucks = \App\Models\Truck::query()->where('is_active', 1)->when($hubId, fn ($q) => $q->where('logistichub_id', $hubId))->orderBy('plate_no')->get();
+
+        return $trucks->mapWithKeys(function ($t) use ($tripId) {
+            $on = $t->is_assigned ? static::runningOn($t->id, $tripId) : null;
+            if ($t->is_assigned && ! $on && ! static::queueReady()) {
+                return [];
+            }
+
+            return [$t->id => $t->plate_no.($on ? ' · on '.$on->trip_number.' (this trip waits for it)' : '')];
+        })->all();
+    }
+
     // ------------------------------------------------------------------ steps
 
     public static function stage(Deliverylog $trip): string
     {
         if (! $trip->is_active) {
             return 'closed';
+        }
+        if (static::waitsFor($trip)) {
+            return 'waiting';
         }
         if (static::ready() && $trip->back_at) {
             return 'back';
@@ -133,6 +193,11 @@ class TripFlow
         app(TripAssignment::class)->releaseTruck($trip);
         if (static::ready()) {
             $trip->forceFill(['closed_at' => now(), 'release_reason' => $auto ? 'auto' : $reason])->saveQuietly();
+        }
+        // The next trip waiting for this truck starts now: the crew sees it right away.
+        if ($next = static::nextAfter($trip)) {
+            $next->forceFill(['waits_for' => null])->saveQuietly();
+            $trip->truck?->update(['is_assigned' => true]);
         }
     }
 
@@ -232,6 +297,7 @@ class TripFlow
     {
         if (static::ready()) {
             $trip = Deliverylog::with('truck')->where('is_active', true)
+                ->when(static::queueReady(), fn ($q) => static::notWaiting($q))
                 ->whereIn('id', TripCrew::where('user_id', $user->id)->select('deliverylog_id'))->latest('id')->first();
             if ($trip) {
                 return $trip;
@@ -241,7 +307,8 @@ class TripFlow
         if (! $truckId) {
             return null;
         }
-        $trip = Deliverylog::with('truck')->where('truck_id', $truckId)->where('is_active', true)->latest('id')->first();
+        $trip = Deliverylog::with('truck')->where('truck_id', $truckId)->where('is_active', true)
+            ->when(static::queueReady(), fn ($q) => static::notWaiting($q))->latest('id')->first();
         // Someone replaced this person on that trip: it is not theirs.
         if ($trip && static::ready() && TripCrew::where('deliverylog_id', $trip->id)->exists()
             && ! TripCrew::where('deliverylog_id', $trip->id)->where('user_id', $user->id)->exists()) {
@@ -260,5 +327,53 @@ class TripFlow
 
         return Deliverylog::with('truck')->where('is_active', false)->where('closed_at', '>=', now()->subHours(12))
             ->whereIn('id', TripCrew::where('user_id', $user->id)->select('deliverylog_id'))->latest('closed_at')->first();
+    }
+
+    // ------------------------------------------------------------------ warnings (crew board)
+
+    /** Crew people of the hub (null = all hubs). */
+    public static function crewPeople(int|false|null $hub): Collection
+    {
+        return User::with('workposition')->where('is_crew', true)
+            ->when(is_int($hub), fn ($q) => $q->where('logistichub_id', $hub))
+            ->when($hub === false, fn ($q) => $q->whereRaw('1 = 0'))
+            ->orderBy('first_name')->get();
+    }
+
+    /**
+     * What needs a look now: trips ready but not taken, trucks back with boxes not returned,
+     * trucks out very long, crew without a truck, trucks on a trip without crew.
+     *
+     * @return list<array{tone: string, text: string}>
+     */
+    public static function warnings(int|false|null $hub): array
+    {
+        if (! static::ready() || $hub === false) {
+            return [];
+        }
+        $out = [];
+        $trips = Deliverylog::with('truck:id,plate_no')->where('is_active', true)->whereNotNull('truck_id')
+            ->when(is_int($hub), fn ($q) => $q->where('logistichub_id', $hub))->get();
+        foreach ($trips as $t) {
+            $stage = static::stage($t);
+            if ($stage === 'ready' && $t->ready_at && $t->ready_at->lt(now()->subMinutes(30))) {
+                $out[] = ['tone' => 'warn', 'text' => 'Trip '.$t->trip_number.' is ready since '.$t->ready_at->format('g:i A').' · nobody took it yet.'];
+            }
+            if ($stage === 'back' && $t->back_at?->lt(now()->subHours(2)) && ($left = static::left($t)) > 0) {
+                $out[] = ['tone' => 'warn', 'text' => 'Truck '.$t->truck?->plate_no.' is back since '.$t->back_at->format('g:i A').' · '.$left.' '.str('box')->plural($left).' not returned yet (Return boxes).'];
+            }
+            if ($stage === 'road' && $t->taken_at?->lt(now()->subHours(14))) {
+                $out[] = ['tone' => 'warn', 'text' => 'Truck '.$t->truck?->plate_no.' is on trip '.$t->trip_number.' since '.$t->taken_at->format('M j g:i A').'. Still out?'];
+            }
+            if (in_array($stage, ['ready', 'road'], true) && ! TripCrew::where('deliverylog_id', $t->id)->exists()) {
+                $out[] = ['tone' => 'bad', 'text' => 'Trip '.$t->trip_number.' has no crew. Crew on this trip in the trip list.'];
+            }
+        }
+        $onTruck = Truckcrew::pluck('crew')->map(fn ($i) => (int) $i)->all();
+        foreach (static::crewPeople($hub)->reject(fn ($u) => in_array((int) $u->id, $onTruck, true)) as $u) {
+            $out[] = ['tone' => 'info', 'text' => $u->full_name.' has no truck.'];
+        }
+
+        return $out;
     }
 }

@@ -29,13 +29,8 @@ class DeliverylogForm
                 Select::make('truck_id')
                     // ->required()
                     ->label('Truck')
-                    ->options(
-                        Truck::query()
-                            ->where('is_assigned', 0)
-                            ->where('logistichub_id', '=', Auth::user()->logistichub_id)
-                            ->where('is_active', 1)
-                            ->pluck('plate_no', 'id')
-                    )
+                    ->options(fn ($record) => \App\Support\TripFlow::truckOptions(Auth::user()->logistichub_id, $record?->id))
+                    ->helperText('A truck still out can get its next trip now: the trip waits and the crew sees it as soon as the truck is free.')
                     ->getOptionLabelUsing(
                         fn($value): ?string =>
                         Truck::find($value)?->plate_no

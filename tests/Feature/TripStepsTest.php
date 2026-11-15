@@ -28,16 +28,25 @@ beforeEach(function () {
 
 it('copies the truck team onto a new trip, follows team changes until the trip leaves, and swaps for one trip only', function () {
     $trip = Deliverylog::create(['truck_id' => $this->trip->truck_id, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
+    // Truck A is still on the demo trip: the new trip is the next trip waiting.
     expect(TripFlow::crew($trip)->pluck('user_id')->all())->toBe([$this->driver->id])
-        ->and(TripFlow::stage($trip))->toBe('planned');
+        ->and(TripFlow::stage($trip))->toBe('waiting')
+        ->and(TripFlow::nextAfter($this->trip)?->id)->toBe($trip->id);
 
     // Mark is sick-cover for this trip only: the truck team stays the same.
     TripFlow::setCrew($trip, [$this->sub->id], 'sick');
     $row = TripCrew::where('deliverylog_id', $trip->id)->sole();
     expect($row->user_id)->toBe($this->sub->id)->and($row->replaces_user_id)->toBe($this->driver->id)->and($row->reason)->toBe('sick')
         ->and(Truckcrew::where('truck_id', $trip->truck_id)->pluck('crew')->all())->toBe([$this->driver->id])
+        ->and(TripFlow::tripFor($this->sub))->toBeNull()                    // waits for the truck
+        ->and(TripFlow::tripFor($this->driver)?->id)->toBe($this->trip->id);
+
+    // The demo trip closes: the next trip starts, Mark sees it.
+    TripFlow::release($this->trip, 'done');
+    expect(TripFlow::stage($trip->fresh()))->toBe('planned')
+        ->and($trip->fresh()->truck->is_assigned)->toBeTrue()
         ->and(TripFlow::tripFor($this->sub)?->id)->toBe($trip->id)
-        ->and(TripFlow::tripFor($this->driver)?->id)->toBe($this->trip->id); // Ramon still has the older trip of the truck
+        ->and(TripFlow::tripFor($this->driver))->toBeNull();
 });
 
 it('goes Ready → On the road → Back → Closed, and the truck releases itself', function () {
@@ -87,4 +96,20 @@ it('lets the office change the crew of a trip and release the truck with a reaso
 
     Livewire::test(ListDeliverylogs::class)->callTableAction('releasetruct', $this->trip, data: ['reason' => 'broke_down'])->assertHasNoTableActionErrors();
     expect($this->trip->fresh()->is_active)->toBeFalse()->and($this->trip->fresh()->release_reason)->toBe('broke_down');
+});
+
+it('shows today\'s crew board with the warnings, and puts people on trucks', function () {
+    $this->actingAs($this->admin);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $this->sub->update(['is_crew' => true]);
+    $this->trip->update(['is_lock' => true]);
+    $this->trip->forceFill(['ready_at' => now()->subHour()])->saveQuietly();
+
+    Livewire::test(\App\Filament\Pages\CrewBoard::class)
+        ->assertSee($this->trip->truck->plate_no)->assertSee($this->trip->trip_number.' · Ready')
+        ->assertSee('nobody took it yet')->assertSee('Mark '.$this->sub->last_name.' has no truck')
+        ->call('addCrew', $this->trip->truck_id, $this->sub->id)
+        ->assertDontSee('has no truck');
+    expect(Truckcrew::where('truck_id', $this->trip->truck_id)->pluck('crew')->sort()->values()->all())->toBe(collect([$this->driver->id, $this->sub->id])->sort()->values()->all())
+        ->and(TripFlow::crew($this->trip)->pluck('user_id')->all())->toContain($this->sub->id); // the trip did not leave yet: it follows
 });
