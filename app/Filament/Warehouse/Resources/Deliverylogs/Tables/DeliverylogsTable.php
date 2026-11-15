@@ -29,13 +29,15 @@ class DeliverylogsTable
     public static function configure(Table $table): Table
     {
         return $table
-            ->recordUrl(null)
+            ->recordUrl(fn ($record) => \App\Filament\Warehouse\Pages\Trip::urlFor($record))
             ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
             ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'delivery'))
             ->columns([
                 \App\Filament\Shared\Trips\TripActions::stageColumn(),
                 TextColumn::make('trip_number')
-                    ->searchable(),
+                    ->searchable()
+                    ->color('primary')->weight('bold')
+                    ->url(fn ($record) => \App\Filament\Warehouse\Pages\Trip::urlFor($record)),
 
                 TripBoardColumns::status('delivery'),
 

@@ -14,7 +14,7 @@
                 <header>
                     <b>{{ $r['truck']->plate_no }}</b>
                     @if ($r['trip'])
-                        <span class="ds-cb__pill is-{{ $r['stage'] }}">{{ $r['trip']->trip_number }} · {{ \App\Support\TripFlow::STAGES[$r['stage']][0] ?? '' }}</span>
+                        <a href="{{ $tripUrl($r['trip']) }}" class="ds-cb__pill is-{{ $r['stage'] }}">{{ $r['trip']->trip_number }} · {{ \App\Support\TripFlow::STAGES[$r['stage']][0] ?? '' }} ›</a>
                     @else
                         <span class="ds-cb__pill is-free">Free</span>
                     @endif
@@ -43,7 +43,7 @@
                     <small class="ds-cb__note">On trip {{ $r['trip']->trip_number }}: {{ $r['tripCrew']->map(fn ($c) => $c->user?->first_name.($c->replaces_user_id ? ' (instead of '.$c->replaces?->first_name.')' : ''))->join(', ') ?: 'nobody' }}</small>
                 @endif
                 @if ($r['next'])
-                    <small class="ds-cb__next">Next trip waiting: <b>{{ $r['next']->trip_number }}</b> · starts when {{ $r['trip']->trip_number }} closes</small>
+                    <small class="ds-cb__next">Next trip waiting: <a href="{{ $tripUrl($r['next']) }}"><b>{{ $r['next']->trip_number }}</b></a> · starts when {{ $r['trip']->trip_number }} closes</small>
                 @endif
             </section>
         @empty

@@ -129,3 +129,27 @@ it('plans more trips for one truck: they start one after the other', function ()
     TripFlow::release($second->fresh(), 'done');
     expect(TripFlow::tripFor($this->driver)?->id)->toBe($third->id)->and(TripFlow::stage($third->fresh()))->not->toBe('waiting');
 });
+
+it('shows one trip on one page: steps, crew, warnings, next trip, and the office buttons', function () {
+    $this->actingAs($this->admin);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $next = Deliverylog::create(['truck_id' => $this->trip->truck_id, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
+
+    $this->get(\App\Filament\Pages\Trip::getUrl(['trip' => $this->trip->id]))->assertOk()
+        ->assertSee('1 Planned')->assertSee('Leadman took the trip')->assertSee('Crew on this trip')
+        ->assertSee($this->driver->full_name)->assertSee('Next trip waiting for')->assertSee($next->trip_number);
+    $this->get(\App\Filament\Pages\Trip::getUrl(['trip' => $next->id]))->assertOk()
+        ->assertSee('is still on trip '.$this->trip->trip_number)->assertSee('Next trip · waits for the truck');
+
+    Livewire::withQueryParams(['trip' => $this->trip->id])->test(\App\Filament\Pages\Trip::class)
+        ->callAction('lock')->callAction('tripCrew', data: ['crew' => [$this->sub->id], 'reason' => 'sick'])
+        ->assertSee('instead of '.$this->driver->full_name);
+    expect($this->trip->fresh()->is_lock)->toBeTrue()->and(TripFlow::stage($this->trip->fresh()))->toBe('ready');
+
+    Livewire::withQueryParams(['trip' => $this->trip->id])->test(\App\Filament\Pages\Trip::class)
+        ->callAction('releasetruct', data: ['reason' => 'cancelled']);
+    expect($this->trip->fresh()->release_reason)->toBe('cancelled')->and(TripFlow::stage($next->fresh()))->toBe('planned');
+
+    // The trip list opens the page.
+    Livewire::test(ListDeliverylogs::class)->assertSee(\App\Filament\Pages\Trip::getUrl(['trip' => $next->id]), false);
+});

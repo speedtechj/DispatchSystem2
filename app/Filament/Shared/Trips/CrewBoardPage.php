@@ -101,7 +101,10 @@ class CrewBoardPage extends Page
         $trucks = Truck::where('is_active', 1)->when(is_int($hub), fn ($q) => $q->where('logistichub_id', $hub))->orderBy('plate_no')->get();
         $onTruck = $teams->flatten()->pluck('crew')->map(fn ($i) => (int) $i)->all();
 
+        $tripPage = str_replace('CrewBoard', 'Trip', static::class);
+
         return [
+            'tripUrl' => fn ($t) => class_exists($tripPage) ? $tripPage::urlFor($t) : null,
             'warnings' => TripFlow::warnings($hub),
             'rows' => $trucks->map(function (Truck $t) use ($teams, $people) {
                 $trip = TripFlow::runningOn($t->id);

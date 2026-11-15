@@ -28,7 +28,9 @@ class DeliverylogsTable
             ->columns([
                 \App\Filament\Shared\Trips\TripActions::stageColumn(),
                 TextColumn::make('trip_number')
-                    ->searchable(),
+                    ->searchable()
+                    ->color('primary')->weight('bold')
+                    ->url(fn ($record) => \App\Filament\Company\Pages\Trip::urlFor($record)),
                 TripBoardColumns::status('hub'),
                 TripBoardColumns::progress('hub'),
                 TextColumn::make('truck.plate_no')
