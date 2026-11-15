@@ -225,3 +225,28 @@ it('lists only trips to hubs reached by sea, searchable, and lets you change the
     expect(Shipments::remove($s2))->toBeFalse();
     Livewire::test(AdminShipmentPage::class, ['shipmentId' => $s2->id])->assertDontSee('Remove shipment');
 });
+
+it('lets the driver type the count at the port and take the receipt photo', function () {
+    \Illuminate\Support\Facades\Storage::fake('public');
+    loadAll($this);
+    $s = Shipments::create($this->trip, 'container', 'count');
+    $s->update(['status' => 'to_port', 'seal_no' => '1', 'shipping_line' => '2GO', 'port_from' => 'Manila North Harbor']);
+    Deliverylog::where('id', '!=', $this->trip->id)->update(['is_active' => false]);
+    $driver = User::where('email', 'driver@example.com')->firstOrFail();
+    \App\Models\Truckcrew::create(['truck_id' => $this->trip->truck_id, 'crew' => $driver->id, 'user_id' => $this->admin->id]);
+    $this->flushSession();
+    $this->actingAs($driver);
+    Filament::setCurrentPanel(Filament::getPanel('delivery'));
+
+    Livewire::test(\App\Filament\Delivery\Pages\Dashboard::class)->assertSee('At the port · '.$s->code);
+    Livewire::test(\App\Filament\Delivery\Pages\AtPort::class)
+        ->assertSee('Left the warehouse: 4 boxes')->call('start')->assertSet('count', '4')
+        ->call('bump', -1)->assertSee('1 box short')
+        ->call('toPhoto')->assertSet('step', 'photo')
+        ->set('upload', \Illuminate\Http\UploadedFile::fake()->image('slip.jpg', 800, 1200))->call('savePhoto')
+        ->assertSet('step', 'done')->assertSee('3 of 4 boxes');
+    $s->refresh();
+    expect($s->port_count)->toBe(3)->and($s->port_by)->toBe($driver->id)->and($s->port_receipt)->toStartWith('shipments/')
+        ->and($s->status)->toBe('at_port');
+    expect(Shipments::counts($s)['port'])->toBe(3);
+});

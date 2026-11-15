@@ -35,6 +35,9 @@
                 <span class="ds-sa__avatar is-green">{{ $initials }}</span>
             </header>
 
+            @if (\App\Support\Shipping\Shipments::ready() && ($portShip = \App\Support\Shipping\Shipments::forDriverPort($trip ?? null)))
+                <a href="{{ \App\Filament\Delivery\Pages\AtPort::getUrl() }}" class="ds-fd__home"><span aria-hidden="true">🚢</span><span><b>At the port · {{ $portShip->code }}</b><small>{{ $portShip->port_count !== null ? 'Counted: '.$portShip->port_count.' boxes · tap to change' : 'Type the forwarder count and take a photo of the receipt' }}</small></span><span class="ds-sa__chev">›</span></a>
+            @endif
             @if (\App\Support\Fuel\Fuel::ready())
                 <a href="{{ \App\Filament\Delivery\Pages\Fuel::getUrl() }}" class="ds-fd__home"><span aria-hidden="true">⛽</span><span><b>Add fuel</b><small>Photo of the receipt and the odometer</small></span><span class="ds-sa__chev">›</span></a>
             @endif

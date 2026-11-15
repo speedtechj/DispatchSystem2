@@ -185,6 +185,30 @@ class Shipments
 
     // ------------------------------------------------------------------ moving on
 
+    /** The sea shipment of the driver's trip, waiting for the count at the port (Count only). */
+    public static function forDriverPort(?\App\Models\Deliverylog $trip): ?SeaShipment
+    {
+        if (! $trip || ! static::ready()) {
+            return null;
+        }
+
+        return SeaShipment::with('hub:id,hub_name')->where('deliverylog_id', $trip->id)->where('port_check', 'count')
+            ->whereIn('status', ['preparing', 'sealed', 'to_port', 'at_port'])->first();
+    }
+
+    /** The driver typed the count at the port (and took the receipt photo). */
+    public static function driverPort(SeaShipment $s, int $count, ?string $receipt, ?float $lat, ?float $lng): void
+    {
+        $s->update(array_filter([
+            'port_count' => $count, 'port_receipt' => $receipt ?? $s->port_receipt, 'port_by' => Auth::id(), 'port_at' => now(),
+            'port_lat' => $lat, 'port_lng' => $lng,
+        ], fn ($v) => $v !== null));
+        // the truck is at the port: move the shipment along when it was on its way there
+        if ($s->status === 'to_port' && ! static::blockers($s->fresh(), 'at_port')) {
+            static::move($s->fresh(), 'at_port');
+        }
+    }
+
     /** What stops the shipment going to the next step (empty = can go). */
     public static function blockers(SeaShipment $s, ?string $to = null): array
     {
