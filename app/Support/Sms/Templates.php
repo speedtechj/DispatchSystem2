@@ -33,6 +33,11 @@ class Templates
             'tl' => 'Hi {name}, sinubukan naming i-deliver ang box {boxes} pero {reason}. Babalik kami sa {next_day}. Tumawag sa {hub_phone}.',
             'ceb' => 'Hi {name}, gisulayan namo i-deliver ang box {boxes} pero {reason}. Mobalik mi sa {next_day}. Tawag sa {hub_phone}.',
         ],
+        'out_for_delivery_hub' => [
+            'en' => 'Hi {name}, your {box_count} box(es) {boxes} are out for delivery today from {hub} with truck {truck}. Driver: {driver}. Questions: {hub_phone}.',
+            'tl' => 'Hi {name}, ang {box_count} box mo ({boxes}) ay ide-deliver ngayong araw mula sa {hub}, truck {truck}. Driver: {driver}. Tanong: {hub_phone}.',
+            'ceb' => 'Hi {name}, ang imong {box_count} ka box ({boxes}) i-deliver karong adlawa gikan sa {hub}, truck {truck}. Driver: {driver}. Pangutana: {hub_phone}.',
+        ],
         'hub_arrived' => [
             'en' => 'Hi {name}, your box {boxes} arrived at {hub} and will be delivered soon.',
             'tl' => 'Hi {name}, ang box mo ({boxes}) ay dumating na sa {hub} at ide-deliver na sa lalong madaling panahon.',

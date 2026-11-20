@@ -19,6 +19,7 @@ class SmsSettings
 
     public const KINDS = [
         'out_for_delivery' => ['Out for delivery', 'When the truck is loaded and the trip is on the road', true],
+        'out_for_delivery_hub' => ['Out for delivery from a hub', 'When a hub locks its own trip and the hub truck is on the road', true],
         'driver_next' => ['Driver is next', 'When the receiver is the next 1–2 stops', true],
         'delivered' => ['Delivered', 'When the last box of the receiver is delivered', true],
         'not_delivered' => ['Not delivered', 'When the driver marks it not delivered', true],

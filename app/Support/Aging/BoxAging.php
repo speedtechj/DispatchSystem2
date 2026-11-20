@@ -250,7 +250,7 @@ class BoxAging
     public static function reasons(Collection $rows): array
     {
         $action = [
-            'container' => 'Unload the container', 'waiting' => 'Plan trips with the AI trip helper', 'transfer' => 'Check the transfer trip',
+            'container' => 'Unload the container', 'waiting' => 'Plan the trips (Plan trips)', 'transfer' => 'Check the transfer trip',
             'hub' => 'Plan hub trips', 'truck' => 'Call the driver of the trip', 'failed' => 'Text the receivers (Risky deliveries)',
         ];
         $items = $rows->where('stageStatus', 'late')

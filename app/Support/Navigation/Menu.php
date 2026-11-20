@@ -77,6 +77,7 @@ class Menu
             'Resources\\Warehouses\\WarehouseResource' => ['Settings · places & routes', null, 1],
             'Pages\\WarehouseSections' => ['Settings · places & routes', null, 2],
             'Pages\\WarehouseCoverage' => ['Settings · places & routes', null, 2],
+            'Pages\\HubAreas' => ['Settings · places & routes', null, 2],
             'Resources\\Logistichubs\\LogistichubResource' => ['Settings · places & routes', 'Logistic hubs', 3],
             'Pages\\HubIslands' => ['Settings · places & routes', null, 4],
             'Resources\\RouteareaResource' => ['Settings · places & routes', 'Route areas', 5],
@@ -145,11 +146,13 @@ class Menu
             'Pages\\IncomingShipments' => ['Coming in', null, 1],
             'Pages\\IncomingBoxes' => ['Coming in', null, 2],
 
+            'Pages\\PlanTrips' => ['Delivery', null, 0],
             'Resources\\Deliverylogs\\DeliverylogResource' => ['Delivery', 'Delivery trips', 1],
             'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Delivery', 'Delivery invoices', 2],
             'Pages\\NotDelivered' => ['Delivery', null, 3],
             'Pages\\AddressesToCheck' => ['Delivery', null, 3],
             'Pages\\TrackBox' => ['Delivery', null, 4],
+            'Pages\\MyArea' => ['Settings & help', 'My area', 0],
 
             'Pages\\WrongHub' => ['Returns', null, 1],
 

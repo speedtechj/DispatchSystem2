@@ -61,8 +61,20 @@ abstract class TripsPage extends AiPage
         return 'The AI drafts trips from the boxes waiting for a trip and your free trucks. Nothing is created until you press Create.';
     }
 
+    /** Plan trips does this now (with the AI inside): the old page is out of the menu, and its address opens Plan trips. */
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
+
     public function mount(): void
     {
+        $plan = preg_replace('/Ai\\\\AiTrips$/', 'PlanTrips', static::class);
+        if (request()->routeIs('filament.*.pages.ai-trips') && $plan !== static::class && class_exists($plan) && $plan::canAccess()) {
+            $this->redirect($plan::getUrl());
+
+            return;
+        }
         $this->mode = TripPlanner::modesFor(Auth::user())[0];
         $this->date = now()->addDay()->toDateString();
     }

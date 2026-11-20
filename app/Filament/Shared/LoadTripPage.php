@@ -147,7 +147,8 @@ abstract class LoadTripPage extends Page
         // Trip planned by city: a waiting box of one of its cities joins the trip now.
         $cityTrip = ! static::$atHub && \App\Support\Trips\CityTrips::isCityTrip($trip);
         if (! $tripinvoice && $cityTrip) {
-            [$joined, $why] = \App\Support\Trips\CityTrips::join($trip, $code, $box ? $this->skips('topup_other', $trip->id, $box->id) : $this->forceLoad);
+            [$joined, $why] = \App\Support\Trips\CityTrips::join($trip, $code, $box ? $this->skips('topup_other', $trip->id, $box->id) : $this->forceLoad,
+                $box ? $this->skips('direct_hub', $trip->id, $box->id) : false);
             if ($joined) {
                 $tripinvoice = $joined;
             } elseif ($why === 'other-city') {
@@ -160,11 +161,34 @@ abstract class LoadTripPage extends Page
                 $this->scanResult('warning', "Other city: {$code} is for {$place}. Trip {$trip->trip_number} goes to {$this->wrongHub['trip']}.", $inv);
 
                 return;
+            } elseif (is_string($why) && str_starts_with($why, 'hub:')) {
+                // the box goes to a partner hub, or is ours while this trip goes to a hub
+                $inv = Invoice::where('invoice', $code)->latest('id')->first();
+                $hubId = (int) substr($why, 4);
+                $place = \Illuminate\Support\Str::title(trim($inv?->receiver_city.', '.$inv?->receiver_province, ', '));
+                $goes = $hubId ? \App\Support\Hubs\HubAreas::name($hubId) : 'our own trucks (direct to the customer)';
+                $this->early = null;
+                $this->wrongHub = ['kind' => 'hub', 'code' => $code, 'for' => $place, 'home' => $goes, 'section' => $inv?->whSection?->code ?? '—', 'color' => $inv?->whSection?->color,
+                    'trip' => $trip->trip_number];
+                $this->forceLoad = false;
+                $this->scanResult('warning', "Not for this trip: {$code} ({$place}) goes ".($hubId ? "to {$goes}" : 'with our own trucks').'.', $inv);
+
+                return;
             } elseif ($why) {
                 $this->scanResult('danger', $why, $this->invoicesMatching($code)->first());
 
                 return;
             }
+        }
+
+        if (! $tripinvoice && static::$atHub && $box && \App\Support\Hubs\HubAreas::ready()
+            && ($other = \App\Support\Hubs\HubAreas::hubOf($box)) && $other !== (int) Auth::user()?->logistichub_id) {
+            // a box of another hub's area came to this hub by mistake
+            $mine = \App\Support\Hubs\HubAreas::name((int) Auth::user()?->logistichub_id);
+            $place = \Illuminate\Support\Str::title(trim($box->receiver_city.', '.$box->receiver_province, ', '));
+            $this->scanResult('danger', "Not for {$mine}: {$code} is for ".\App\Support\Hubs\HubAreas::name($other)." ({$place}). Not loaded: put it aside and tell the office.", $box);
+
+            return;
         }
 
         if (! $tripinvoice) {

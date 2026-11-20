@@ -3,7 +3,11 @@
     <header class="ds-pt__top">
         <span class="ds-pt__title">
             <span class="ds-pt__h"><span class="ds-pt__logo" aria-hidden="true">✦</span><h1>Plan trips</h1></span>
-            <small>The AI makes trips by city: nearby cities of one province fill one truck. Boxes join when scanned onto the truck, so new containers are always included.</small>
+            @if ($atHub)
+                <small>{{ $hubName }}: direct to customers in your area only. Your trucks, your trip numbers. The boxes at your hub go on the trip when you press Create.</small>
+            @else
+                <small>The AI makes trips by city: nearby cities of one province fill one truck. Boxes join when scanned onto the truck, so new containers are always included.</small>
+            @endif
         </span>
         {{-- the day only matters when you press Create: switching it happens in the browser, no wait --}}
         <span class="ds-pt__days" x-data="{ day: $wire.entangle('day'), date: $wire.entangle('date') }">
@@ -16,6 +20,16 @@
         </span>
     </header>
 
+    @if ($hubsOn)
+        <nav class="ds-pt__tabs" role="tablist">
+            <button type="button" role="tab" wire:click="setTab('direct')" @class(['is-on' => $tab === 'direct']) aria-selected="{{ $tab === 'direct' ? 'true' : 'false' }}">Direct to customers <span>{{ $directBoxes }}</span></button>
+            <button type="button" role="tab" wire:click="setTab('hubs')" @class(['is-on' => $tab === 'hubs']) aria-selected="{{ $tab === 'hubs' ? 'true' : 'false' }}">To hubs <span>{{ count($hubPlan) }} {{ Str::plural('hub', count($hubPlan)) }} · {{ $hubBoxes }}</span></button>
+        </nav>
+    @endif
+
+    @if ($tab === 'hubs' && $hubsOn)
+        @include('filament.trips.plan-hubs')
+    @else
     <section class="ds-cb__card ds-pt__ask">
         <span class="ds-pt__spark" aria-hidden="true">✦</span>
         <span class="ds-pt__asktext">
@@ -33,7 +47,8 @@
 
     <div class="ds-pt__grid">
         <section class="ds-cb__card ds-pt__left">
-            <span class="ds-pt__lhead"><b>Waiting, by city</b><small>{{ number_format($waitTotal) }} boxes</small></span>
+            <span class="ds-pt__lhead"><b>{{ $atHub ? 'Arrived, by city' : 'Waiting, by city' }}</b><small>{{ number_format($waitTotal) }} boxes</small></span>
+            @if ($notMine)<span class="ds-pt__transfer is-bad"><span>{{ $notMine }} {{ Str::plural('box', $notMine) }} here {{ $notMine === 1 ? 'belongs' : 'belong' }} to another hub’s area: not planned. Tell the office.</span></span>@endif
             <small class="ds-pt__muted">Click a province to see its cities</small>
             <span class="ds-pt__provs" x-data="{ open: $wire.entangle('open') }">
             @forelse ($provinces as $p)
@@ -96,6 +111,9 @@
                         </span>
                     @endif
                     @if (! empty($t['topped']))<small class="ds-pt__ok">✓ {{ $t['topped'] }}</small>@elseif (! empty($t['noTop']))<small class="ds-pt__muted">No top-up · {{ $t['cap'] - $t['load'] }} space stays free</small>@endif
+                    @if ($t['on'])
+                        <button type="button" wire:click="toggleSms({{ $t['i'] }})" @disabled(! $smsOn) @class(['ds-pt__sms', 'is-on' => $smsOn && ($t['sms'] ?? true)])><i>{{ $smsOn && ($t['sms'] ?? true) ? '✓' : '' }}</i>Send SMS for this trip <small>· {{ ! $smsOn ? 'off for all trips in SMS settings' : (($t['sms'] ?? true) ? 'receivers get a text when it is locked' : 'no text for this trip only') }}</small></button>
+                    @endif
                     @if ($sets[$t['i']] ?? [])
                         <span class="ds-pt__sets">
                             <span class="ds-pt__lhead"><b>Kept together on this trip</b><small>customers with 2+ boxes</small></span>
@@ -109,7 +127,7 @@
                 <p class="ds-cb__card ds-cb__muted">Nothing to plan: every waiting city is already on a trip, or no boxes are waiting.</p>
             @endforelse
             <span class="ds-pt__sum">
-                <span><b>{{ $onTrips->count() }} {{ Str::plural('trip', $onTrips->count()) }} · about {{ $onTrips->sum('load') }} boxes</b><small>Trip numbers now · boxes join when scanned onto the truck · SMS to receivers when the trip is locked</small></span>
+                <span><b>{{ $onTrips->count() }} {{ Str::plural('trip', $onTrips->count()) }} · about {{ $onTrips->sum('load') }} boxes</b><small>{{ $atHub ? 'Trip numbers with your hub code · the boxes go on the trip when you press Create' : 'Trip numbers now · boxes join when scanned onto the truck' }} · @if ($smsOn)SMS to receivers when the trip is locked{{ ($noSms = $onTrips->filter(fn ($t) => ! ($t['sms'] ?? true))->count()) ? ', except '.$noSms.' '.Str::plural('trip', $noSms) : '' }}@else No SMS (off in @if ($smsUrl)<a href="{{ $smsUrl }}" class="ds-pt__smslink">SMS settings ›</a>@else SMS settings @endif)@endif</small></span>
                 @if ($changedAny && $needPlan === 'reason')
                     <select wire:model="planReason" class="ds-wc__sel" aria-label="Why did you change the AI plan?"><option value="">Why did you change the plan?</option>@foreach ($reasons as $r)<option value="{{ $r }}">{{ $r }}</option>@endforeach</select>
                 @endif
@@ -153,6 +171,7 @@
                     <span class="ds-pt__how"><b>{{ $n + 1 }}</b><span>{{ $h }}</span></span>
                 @endforeach
             </section>
+            @if (! $atHub)
             <section class="ds-cb__card ds-pt__card">
                 <span class="ds-pt__lhead"><b class="ds-pt__h3">Unloading now</b><small>{{ $unload['container'] ?? 'Nothing today' }}</small></span>
                 @foreach ($unload['rows'] as [$a, $b, $here])
@@ -160,7 +179,9 @@
                 @endforeach
                 <small class="ds-pt__muted">Boxes for a truck that is here go straight on it. The rest wait in their section.</small>
             </section>
+            @endif
         </aside>
     </div>
+    @endif
 </div>
 </x-filament-panels::page>

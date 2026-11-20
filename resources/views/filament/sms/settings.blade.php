@@ -42,6 +42,9 @@
                     <button type="button" class="ds-sms__kindtext" wire:click="edit('{{ $k }}')"><b>{{ $title }}</b><small>{{ $when }}</small></button>
                     <small>{{ ($enabled[$k] ?? false) ? number_format($counts[$k] ?? 0).' this month' : 'off' }}</small>
                 </div>
+                @if ($k === 'out_for_delivery')
+                    <small class="ds-sms__follow">Plan trips follows this switch: {{ ($enabled[$k] ?? false) ? '“SMS to receivers when the trip is locked”' : '“No SMS (off in SMS settings)”' }}. One trip only: “Send SMS for this trip” on its card.</small>
+                @endif
             @endforeach
         </section>
 

@@ -24,7 +24,13 @@ class SmsEvents
     /** Trip on the road: all boxes loaded, or the first box delivered. */
     public static function outForDelivery(Deliverylog $trip): int
     {
-        if (! SmsSettings::on('out_for_delivery') || TripSorter::isTransfer($trip)) {
+        if (TripSorter::isTransfer($trip) || ($trip->no_sms ?? false)) {
+            return 0;
+        }
+        // a hub's own trip has its own switch and text
+        $atHub = Tripinvoice::where('deliveryloghub_id', $trip->id)->exists();
+        $kind = $atHub && array_key_exists('out_for_delivery_hub', SmsSettings::KINDS) ? 'out_for_delivery_hub' : 'out_for_delivery';
+        if (! SmsSettings::on($kind)) {
             return 0;
         }
         // Trip planned by city: boxes keep joining while loading, so text only once the trip is locked.
@@ -42,7 +48,7 @@ class SmsEvents
         }
         $n = 0;
         foreach (Tracker::stopsLeft($trip) as $stop) {
-            $n += static::forStop('out_for_delivery', $trip, $stop) ? 1 : 0;
+            $n += static::forStop($kind, $trip, $stop) ? 1 : 0;
         }
 
         return $n;
@@ -148,7 +154,7 @@ class SmsEvents
             'truck' => (string) $trip->truck?->plate_no,
             'driver' => $driver ? Str::before((string) $driver->full_name, ' ') : '',
             'hub' => (string) $trip->destination?->hub_name,
-            'hub_phone' => SmsSettings::officePhone(),
+            'hub_phone' => $kind === 'out_for_delivery_hub' ? ((string) \App\Models\Logistichub::whereKey($trip->logistichub_id)->value('phone') ?: SmsSettings::officePhone()) : SmsSettings::officePhone(),
         ]);
 
         return SmsSender::send($kind, $stop->phone ?: $inv->receiver_mobile_no, $stop->name, $text, [

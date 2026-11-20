@@ -93,6 +93,7 @@ class TripPlanner
             $row = $q->selectRaw('count(*) as n, max(id) as m, max(updated_at) as u')->first();
             $extra = [
                 DeliveryAttempt::max('id'),
+                \App\Support\Hubs\HubAreas::version(),
                 \Illuminate\Support\Facades\Schema::hasTable('coverage_log') ? \Illuminate\Support\Facades\DB::table('coverage_log')->max('id') : 0,
             ];
 
@@ -133,9 +134,11 @@ class TripPlanner
         }
 
         $tried = DeliveryAttempt::whereIn('invoice_id', $boxes->map(fn ($b) => $b['inv']->id))->distinct()->pluck('invoice_id')->flip();
+        // the partner hub that delivers each receiver (null: the warehouse delivers direct)
+        $hubMap = \App\Support\Hubs\HubAreas::map();
         $clean = fn ($v) => Str::of((string) $v)->squish()->title()->toString();
 
-        return $boxes->groupBy(fn ($b) => static::receiverKey($b['inv']))->map(function (Collection $g, string $key) use ($tried, $clean) {
+        return $boxes->groupBy(fn ($b) => static::receiverKey($b['inv']))->map(function (Collection $g, string $key) use ($tried, $clean, $hubMap) {
             $first = $g->first()['inv'];
 
             return [
@@ -150,6 +153,7 @@ class TripPlanner
                 'mix' => $g->countBy(fn ($b) => BoxSizes::nameOfType($b['inv']->boxtype))->all(),
                 'prio' => $g->filter(fn ($b) => $b['inv']->is_priority)->count(),
                 'retry' => $g->filter(fn ($b) => isset($tried[$b['inv']->id]))->count(),
+                'hub' => $hubMap ? \App\Support\Hubs\HubAreas::hubOf($first, $hubMap) : null,
             ];
         });
     }

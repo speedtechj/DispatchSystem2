@@ -30,6 +30,9 @@
             @if (($wx = (property_exists($this, 'wrongHub') ? $this->wrongHub : null)) && ($wx['kind'] ?? null) === 'wh')
                 <div class="ds-ld__early is-full"><strong>Not for {{ $wx['trip'] }} · {{ $wx['code'] }} is for {{ $wx['for'] }}</strong><span>Delivered from {{ $wx['home'] }}: it stays here.</span><x-filament::button size="sm" color="gray" wire:click="loadAnyway">The office says load it</x-filament::button></div>
             @endif
+            @if (($wh2 = (property_exists($this, 'wrongHub') ? $this->wrongHub : null)) && ($wh2['kind'] ?? null) === 'hub')
+                <div class="ds-ld__early is-full"><strong>Not for this trip · {{ $wh2['code'] }} ({{ $wh2['for'] }})</strong><span>It goes {{ str_contains($wh2['home'], 'own trucks') ? 'with '.$wh2['home'] : 'to '.$wh2['home'] }}. Put it back{{ $wh2['section'] !== '—' ? ' in section '.$wh2['section'] : '' }}.</span><x-filament::button size="sm" color="gray" wire:click="loadAnyway">Deliver it on this trip anyway</x-filament::button></div>
+            @endif
             @if (property_exists($this, 'bypass') && $this->bypass)
                 <div class="ds-ld__bypass">
                     @if ($this->bypass['need'] === 'office')

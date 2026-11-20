@@ -50,6 +50,29 @@ class PlanTripsPage extends Page
     /** Reason for changing the AI plan (trip rules: Change the AI plan). */
     public string $planReason = '';
 
+    /** A partner hub plans its own trips (Partner hub panel): direct to customers of its area only. */
+    protected static bool $atHub = false;
+
+    /** Direct to customers, or To hubs. */
+    public string $tab = 'direct';
+
+    /** Cities of a hub's area delivered direct instead ("hubId|province|city"). */
+    public array $direct = [];
+
+    /** Waiting for a reason: deliver this hub city direct ("hubId|province|city"). */
+    public ?string $askDirect = null;
+
+    public array $hubPlan = [];
+
+    /** @var array<int, string> hub id => made|wait */
+    public array $hubState = [];
+
+    /** @var array<int, string> hub id => now|later (Trip 2 and more) */
+    public array $hubWhen = [];
+
+    /** @var array<int, string> hub id => message after Create */
+    public array $hubMade = [];
+
     public static function canAccess(): bool
     {
         $u = Auth::user();
@@ -67,7 +90,12 @@ class PlanTripsPage extends Page
 
     protected function city(): CityTrips
     {
-        return $this->cityMemo ??= new CityTrips(Auth::user());
+        if (! $this->cityMemo) {
+            $this->cityMemo = new CityTrips(Auth::user(), static::$atHub);
+            $this->cityMemo->direct = $this->direct;
+        }
+
+        return $this->cityMemo;
     }
 
     public function mount(): void
@@ -93,6 +121,95 @@ class PlanTripsPage extends Page
         $this->kept = $plan['kept'];
         $this->note = $plan['note'];
         $this->ai = $plan['ai'];
+        $this->replanHubs();
+    }
+
+    protected function replanHubs(): void
+    {
+        $used = collect($this->trips)->where('on', true)->pluck('truck_id')->filter()->values()->all();
+        $this->hubPlan = \App\Support\Hubs\HubAreas::ready() && ! static::$atHub ? json_decode(json_encode($this->city()->planHubs($used)), true) : [];
+        foreach ($this->hubPlan as $h) {
+            $this->hubWhen[$h['hub']] ??= collect($h['trips'])->contains('when', 'later') ? 'later' : 'now';
+        }
+    }
+
+    public function setTab(string $t): void
+    {
+        $this->tab = $t === 'hubs' ? 'hubs' : 'direct';
+    }
+
+    public function setWhen(int $hub, string $when): void
+    {
+        $this->hubWhen[$hub] = $when === 'later' ? 'later' : 'now';
+    }
+
+    public function waitHub(int $hub): void
+    {
+        $this->hubState[$hub] = 'wait';
+    }
+
+    public function makeHub(int $hub): void
+    {
+        $h = collect($this->hubPlan)->firstWhere('hub', $hub);
+        if (! $h) {
+            return;
+        }
+        $trips = ($this->hubWhen[$hub] ?? 'now') === 'later' ? array_slice($h['trips'], 0, 1) : $h['trips'];
+        try {
+            $made = $this->city()->createHub($hub, $trips, Carbon::parse($this->date ?: today()), $h['tip']);
+        } catch (\Throwable $e) {
+            report($e);
+            Notification::make()->title('Could not create the trip')->body($e->getMessage())->danger()->send();
+
+            return;
+        }
+        $nums = collect($made)->pluck('number')->join(' and ');
+        $later = count($h['trips']) - count($trips);
+        $this->hubState[$hub] = 'made';
+        $this->hubMade[$hub] = '✓ '.$nums.' to '.$h['name'].($later ? ' now · the rest shows again tomorrow' : ' · the hub sees '.(count($made) > 1 ? 'them' : 'it').' in Incoming boxes');
+        Notification::make()->title(count($made).' '.Str::plural('trip', count($made)).' to '.$h['name'].' created')->body($nums)->success()->send();
+    }
+
+    /** "Deliver direct instead": a hub city moves to the Direct tab (with a reason, per the trip rules). */
+    public function askDirectCity(int $hub, string $key): void
+    {
+        $need = \App\Support\Trips\TripRules::need('direct_hub', Auth::user());
+        if ($need === 'office') {
+            Notification::make()->title('Only the office can deliver a hub’s boxes direct')->warning()->send();
+
+            return;
+        }
+        $this->askDirect = $hub.'|'.$key;
+        if ($need === 'free') {
+            $this->directWith('');
+        }
+    }
+
+    public function directWith(string $reason): void
+    {
+        if (! $this->askDirect) {
+            return;
+        }
+        [$hub, $p, $c] = array_pad(explode('|', $this->askDirect, 3), 3, '');
+        \App\Support\Trips\TripRules::record('direct_hub', Auth::user(), $reason ?: null, ['note' => Str::title($c).', '.Str::title($p).': '.\App\Support\Hubs\HubAreas::name((int) $hub).' → direct']);
+        $this->direct[] = $this->askDirect;
+        $this->direct = array_values(array_unique($this->direct));
+        $this->askDirect = null;
+        $this->cityMemo = null;
+        $this->made = [];
+        $this->replan();
+    }
+
+    public function cancelDirect(): void
+    {
+        $this->askDirect = null;
+    }
+
+    public function toggleSms(int $i): void
+    {
+        if (isset($this->trips[$i])) {
+            $this->trips[$i]['sms'] = ! ($this->trips[$i]['sms'] ?? true);
+        }
     }
 
     public function setAsk(string $k): void
@@ -294,6 +411,14 @@ class PlanTripsPage extends Page
             'transferOut' => $out->map(fn ($n, $w) => ['n' => $n, 'name' => \App\Support\Warehouses\Coverage::name((int) $w)])->values(),
             'arriving' => $here && \App\Support\Warehouses\Coverage::active() ? \App\Support\Warehouses\Coverage::arriving($here) : 0,
             'trUrl' => static::class !== self::class && class_exists($trPage) ? $trPage::getUrl() : null,
+            'smsOn' => \App\Support\Sms\SmsSettings::on(static::$atHub ? 'out_for_delivery_hub' : 'out_for_delivery'),
+            'smsUrl' => class_exists(\App\Filament\Pages\SmsSettings::class) && Filament::getCurrentPanel()?->getId() === 'admin' ? \App\Filament\Pages\SmsSettings::getUrl() : null,
+            'hubsOn' => ! static::$atHub && \App\Support\Hubs\HubAreas::ready() && \App\Support\Hubs\HubAreas::hubs()->isNotEmpty(),
+            'atHub' => static::$atHub, 'notMine' => $c->notMine(),
+            'hubName' => static::$atHub ? \App\Models\Logistichub::whereKey(Auth::user()->logistichub_id)->value('hub_name') : null,
+            'hubBoxes' => collect($this->hubPlan)->sum('boxes'),
+            'directBoxes' => $places->reject(fn ($p) => $p['unclear'])->sum('boxes'),
+            'hubColors' => ['#1d6fb8', '#c97a00', '#17895e', '#7a4fd6', '#c2410c', '#0e7490'],
         ];
     }
 }

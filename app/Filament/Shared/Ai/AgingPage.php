@@ -156,7 +156,7 @@ abstract class AgingPage extends AiPage
             'places' => $places,
             'isHub' => (bool) $hub,
             'stageLabels' => BoxAging::STAGES,
-            'tripsUrl' => Str::of(Filament::getCurrentPanel()?->getUrl() ?? url('/'))->rtrim('/').'/ai-trips',
+            'tripsUrl' => Str::of(Filament::getCurrentPanel()?->getUrl() ?? url('/'))->rtrim('/').'/plan-trips',
         ];
     }
 }

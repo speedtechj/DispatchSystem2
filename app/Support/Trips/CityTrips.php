@@ -31,7 +31,8 @@ class CityTrips
 {
     public const DEFAULT_CAPACITY = 50;
 
-    public function __construct(public readonly User $user) {}
+    /** $atHub: a partner hub plans its own trips (boxes that arrived at the hub; added at Create). */
+    public function __construct(public readonly User $user, public readonly bool $atHub = false) {}
 
     public static function ready(): bool
     {
@@ -56,7 +57,7 @@ class CityTrips
 
     protected function planner(): TripPlanner
     {
-        return $this->plannerMemo ??= new TripPlanner($this->user, 'delivery');
+        return $this->plannerMemo ??= new TripPlanner($this->user, $this->atHub ? 'hub' : 'delivery');
     }
 
     /**
@@ -67,20 +68,193 @@ class CityTrips
         return $this->placesMemo ??= $this->freshPlaces();
     }
 
+    /** Cities of a hub's area delivered direct instead (keys "hubId|province|city"), set by Plan trips. */
+    public array $direct = [];
+
+    protected function isDirect(array $u): bool
+    {
+        if ($this->atHub) {
+            // at a hub: only the boxes of its own area (a box of another hub came by mistake)
+            return ! $u['hub'] || (int) $u['hub'] === (int) $this->user->logistichub_id;
+        }
+
+        return ! $u['hub'] || in_array($u['hub'].'|'.Str::lower($u['province']).'|'.Barangays::cityKey($u['city']), $this->direct, true);
+    }
+
+    /** Days a box has waited, per box id. */
+    protected ?Collection $sinceMemo = null;
+
+    protected function daysOf(array $u): int
+    {
+        if (! $this->sinceMemo) {
+            $ids = $this->planner()->units()->flatMap(fn ($x) => $x['ids']);
+            $this->sinceMemo = $ids->isEmpty() ? collect() : ($this->atHub
+                ? Tripinvoice::whereIn('id', $ids)->get(['id', 'created_at'])->mapWithKeys(fn ($t) => [$t->id => $t->created_at])
+                : Invoice::whereIn('id', $ids)->get(['id', 'verified_at', 'created_at'])->mapWithKeys(fn ($i) => [$i->id => $i->verified_at ?? $i->created_at]));
+        }
+
+        return (int) (collect($u['ids'])->map(fn ($id) => $this->sinceMemo[$id] ?? null)->filter()->map(fn ($d) => (int) floor(Carbon::parse($d)->diffInHours(now()) / 24))->max() ?? 0);
+    }
+
     protected function freshPlaces(): Collection
     {
-        $units = $this->planner()->units();
-        $ids = $units->flatMap(fn ($u) => $u['ids']);
-        $since = $ids->isEmpty() ? collect() : Invoice::whereIn('id', $ids)->get(['id', 'verified_at', 'created_at'])
-            ->mapWithKeys(fn ($i) => [$i->id => $i->verified_at ?? $i->created_at]);
-        $days = fn ($u) => collect($u['ids'])->map(fn ($id) => $since[$id] ?? null)->filter()->map(fn ($d) => (int) floor(Carbon::parse($d)->diffInHours(now()) / 24))->max() ?? 0;
+        // only the boxes the warehouse delivers direct; a hub's boxes are planned in "To hubs"
+        $units = $this->planner()->units()->map(fn ($u) => $u + ['hub' => null])->filter(fn ($u) => $this->isDirect($u));
+        $days = fn ($u) => $this->daysOf($u);
 
         return $units->groupBy(fn ($u) => Str::lower($u['province']).'|'.Barangays::cityKey($u['city']))->map(fn ($g, $k) => [
             'key' => $k, 'province' => $g->first()['province'], 'city' => $g->first()['city'],
             'boxes' => $g->sum('n'), 'space' => (int) ceil($g->sum('space')), 'receivers' => $g->count(), 'biggest' => (int) ceil($g->max('space')),
             'days' => (int) $g->map($days)->max(), 'prio' => $g->sum('prio'), 'retry' => $g->sum('retry'),
             'unclear' => $g->first()['city'] === 'No city',
+            'via' => $this->atHub ? [] : $g->pluck('hub')->filter()->unique()->values()->all(),
         ])->values();
+    }
+
+    /**
+     * Boxes a partner hub delivers, by hub and city.
+     *
+     * @return Collection<int, array{hub: int, name: string, boxes: int, space: int, days: int, prio: int, cities: Collection}>
+     */
+    public function hubPlaces(): Collection
+    {
+        if ($this->atHub) {
+            return collect();
+        }
+        $units = $this->planner()->units()->map(fn ($u) => $u + ['hub' => null])->reject(fn ($u) => $this->isDirect($u));
+        $names = \App\Models\Logistichub::whereIn('id', $units->pluck('hub')->unique())->pluck('hub_name', 'id');
+
+        return $units->groupBy('hub')->map(function ($g, $hub) use ($names) {
+            $cities = $g->groupBy(fn ($u) => Str::lower($u['province']).'|'.Barangays::cityKey($u['city']))->map(fn ($c, $k) => [
+                'key' => $k, 'province' => $c->first()['province'], 'city' => $c->first()['city'], 'boxes' => $c->sum('n'),
+                'space' => (int) ceil($c->sum('space')), 'days' => (int) $c->map(fn ($u) => $this->daysOf($u))->max(), 'prio' => $c->sum('prio') + $c->sum('retry'),
+            ])->sortBy(fn ($c) => [-$c['prio'], -$c['days'], -$c['boxes']])->values();
+
+            return ['hub' => (int) $hub, 'name' => (string) ($names[$hub] ?? 'Hub #'.$hub), 'boxes' => $cities->sum('boxes'), 'space' => $cities->sum('space'),
+                'days' => (int) $cities->max('days'), 'prio' => $cities->sum('prio'), 'cities' => $cities];
+        })->sortBy(fn ($h) => [-$h['prio'], -$h['days'], -$h['boxes']])->values();
+    }
+
+    /** Boxes for a hub still on the way (in containers not unloaded yet), for "wait for the next container". */
+    public function comingFor(int $hubId): int
+    {
+        $map = \App\Support\Hubs\HubAreas::map();
+        if (! in_array($hubId, $map, true)) {
+            return 0;
+        }
+
+        return Invoice::query()->where('is_verified', false)->where('is_delivered', false)->where('created_at', '>=', now()->subDays(60))->limit(3000)->get()
+            ->filter(fn ($i) => \App\Support\Hubs\HubAreas::hubOf($i, $map) === $hubId)->count();
+    }
+
+    /**
+     * Trips to the hubs: one trip per hub, or more when the boxes do not fit one truck.
+     * Whole cities go together (a city bigger than a truck goes on two trips: the truck-full check stops each truck).
+     *
+     * @param  array<int>  $usedTrucks  trucks already in the direct plan
+     * @return list<array>
+     */
+    public function planHubs(array $usedTrucks = []): array
+    {
+        $trucks = $this->trucks();
+        $free = $trucks->where('state', 'free')->reject(fn ($t) => in_array($t['id'], $usedTrucks, true))->values();
+        $busy = $trucks->where('state', 'busy')->values();
+        $fi = 0;
+        $out = [];
+        $open = $this->hubTripsOpen();
+        foreach ($this->hubPlaces() as $h) {
+            if (isset($open[$h['hub']])) {
+                // a trip to this hub is open: its boxes join it when scanned
+                $out[] = $h + ['trips' => [], 'coming' => 0, 'tip' => 'On '.implode(', ', $open[$h['hub']]).': boxes join when scanned onto the truck.', 'wait' => false, 'open' => $open[$h['hub']]];
+
+                continue;
+            }
+            $slot = $free[$fi] ?? null;
+            $cap = $slot['capacity'] ?? self::DEFAULT_CAPACITY;
+            // first fit: each city (most urgent first) goes on the first trip with room, so trucks fill up;
+            // a city bigger than a truck goes on more trips (the truck-full check stops each truck)
+            $parts = [];
+            foreach ($h['cities'] as $c) {
+                $left = $c['space'];
+                while ($left > 0) {
+                    $fit = null;
+                    foreach ($parts as $pi => $pt) {
+                        if ($cap - $pt['load'] >= min($left, $cap)) {
+                            $fit = $pi;
+                            break;
+                        }
+                    }
+                    if ($fit === null) {
+                        $parts[] = ['cities' => [], 'load' => 0];
+                        $fit = array_key_last($parts);
+                    }
+                    $take = min($left, $cap - $parts[$fit]['load']);
+                    $parts[$fit]['cities'][] = ['city' => $c['city'], 'key' => $c['key'], 'province' => $c['province'],
+                        'boxes' => $take === $c['space'] ? $c['boxes'] : (int) round($c['boxes'] * $take / max(1, $c['space'])), 'space' => $take];
+                    $parts[$fit]['load'] += $take;
+                    $left -= $take;
+                }
+            }
+            $trips = [];
+            foreach ($parts as $n => $pt) {
+                $t = $free[$fi] ?? null;
+                if ($t) {
+                    $fi++;
+                }
+                $trips[] = ['cities' => $pt['cities'], 'load' => $pt['load'], 'cap' => $t['capacity'] ?? $cap, 'truck_id' => $t['id'] ?? null, 'plate' => $t['plate'] ?? null,
+                    'when' => $t ? 'now' : 'later'];
+            }
+            $coming = $this->comingFor($h['hub']);
+            $small = $h['space'] < $cap * 0.3;
+            $tip = match (true) {
+                $small && $coming > 0 && $h['prio'] === 0 => 'Wait: only '.$h['boxes'].' boxes; '.$coming.' more are on the way. One trip instead of two.',
+                $small && $h['prio'] === 0 && $h['days'] < 3 => 'Small: only '.$h['boxes'].' boxes. Wait for more, or send if the hub needs them.',
+                count($trips) > 1 && collect($trips)->contains('when', 'later') => 'Not enough free trucks: Trip 1 now with the priority and oldest boxes, the rest '.($coming ? 'with the next container' : 'when a truck is free').'.',
+                count($trips) > 1 => count($trips).' trips: '.$h['boxes'].' boxes do not fit one truck. Priority and oldest on Trip 1.',
+                $h['prio'] > 0 => 'Send today: '.$h['prio'].' priority or tried-before '.Str::plural('box', $h['prio']).', oldest '.$h['days'].' '.Str::plural('day', $h['days']).'.',
+                default => 'Send: '.$h['boxes'].' boxes, oldest '.$h['days'].' '.Str::plural('day', $h['days']).'.',
+            };
+            if (! $free->count() && $busy->isNotEmpty()) {
+                $tip .= ' No free truck now: '.$busy->first()['plate'].' comes back'.($busy->first()['on'] ? ' from '.$busy->first()['on'] : '').'.';
+            }
+            $out[] = $h + ['trips' => $trips, 'coming' => $coming, 'tip' => $tip, 'wait' => $small && $h['prio'] === 0, 'open' => []];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Make trips to a hub. Boxes join when scanned onto the truck (only boxes of this hub's cities).
+     *
+     * @return list<array{id: int, number: string, truck: ?string}>
+     */
+    public function createHub(int $hubId, array $trips, Carbon $date, ?string $why = null): array
+    {
+        $made = [];
+        foreach ($trips as $t) {
+            if (empty($t['cities'])) {
+                continue;
+            }
+            $made[] = DB::transaction(function () use ($t, $date, $hubId, $why) {
+                $truck = ! empty($t['truck_id']) ? Truck::whereKey($t['truck_id'])->where('logistichub_id', $this->user->logistichub_id)->where('is_active', true)->lockForUpdate()->first() : null;
+                $trip = Deliverylog::create([
+                    'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
+                    'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $hubId, 'user_id' => $this->user->id,
+                    'plan_why' => Str::limit((string) $why, 295), 'plan_space' => (int) $t['load'],
+                ]);
+                foreach (collect($t['cities'])->unique('key') as $c) {
+                    TripCity::create(['deliverylog_id' => $trip->id, 'province' => $c['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'),
+                        'planned_boxes' => (int) $c['boxes'], 'hub_id' => $hubId]);
+                }
+                if ($truck && ! $truck->is_assigned) {
+                    $truck->update(['is_assigned' => true]);
+                }
+
+                return ['id' => $trip->id, 'number' => (string) $trip->trip_number, 'truck' => $truck?->plate_no];
+            });
+        }
+
+        return $made;
     }
 
     /**
@@ -94,7 +268,8 @@ class CityTrips
         $units = $this->planner()->units()->filter(fn ($u) => isset($keys[Str::lower($u['province']).'|'.Barangays::cityKey($u['city'])]) && $u['n'] >= 2);
         $out = [];
         foreach ($units as $u) {
-            $setKeys = Invoice::whereIn('id', $u['ids'])->pluck('set_key')->filter()->unique();
+            $invIds = $this->atHub ? Tripinvoice::whereIn('id', $u['ids'])->pluck('invoice_id') : $u['ids'];
+            $setKeys = Invoice::whereIn('id', $invIds)->pluck('set_key')->filter()->unique();
             $missing = $setKeys->isEmpty() ? 0 : Invoice::whereIn('set_key', $setKeys)->where('is_verified', false)->where('is_delivered', false)->count();
             $out[] = ['name' => $u['name'], 'city' => $u['city'], 'n' => $u['n'], 'missing' => $missing];
         }
@@ -108,17 +283,41 @@ class CityTrips
         return $this->coveredMemo ??= $this->freshCovered();
     }
 
+    /** At a hub: boxes of another hub's area that came here by mistake. */
+    public function notMine(): int
+    {
+        return $this->atHub ? $this->planner()->units()->filter(fn ($u) => ($u['hub'] ?? null) && (int) $u['hub'] !== (int) $this->user->logistichub_id)->sum('n') : 0;
+    }
+
     protected function freshCovered(): array
     {
-        if (! static::ready()) {
+        if (! static::ready() || $this->atHub) {
             return [];
         }
 
         return TripCity::query()->join('deliverylogs as d', 'd.id', '=', 'trip_cities.deliverylog_id')
             ->where('d.is_active', true)->where(fn ($q) => $q->where('d.is_lock', false)->orWhereNull('d.is_lock'))
             ->where('d.logistichub_id', $this->user->logistichub_id)
+            ->when(Schema::hasColumn('trip_cities', 'hub_id'), fn ($q) => $q->whereNull('trip_cities.hub_id'))
             ->get(['trip_cities.province', 'trip_cities.city_key', 'd.trip_number'])
             ->mapWithKeys(fn ($r) => [Str::lower((string) $r->province).'|'.$r->city_key => $r->trip_number])->all();
+    }
+
+    /**
+     * Open trips to each hub (not locked yet): hub id => trip numbers.
+     *
+     * @return array<int, list<string>>
+     */
+    public function hubTripsOpen(): array
+    {
+        if (! static::ready() || ! Schema::hasColumn('trip_cities', 'hub_id')) {
+            return [];
+        }
+
+        return TripCity::query()->join('deliverylogs as d', 'd.id', '=', 'trip_cities.deliverylog_id')
+            ->where('d.is_active', true)->where(fn ($q) => $q->where('d.is_lock', false)->orWhereNull('d.is_lock'))
+            ->where('d.logistichub_id', $this->user->logistichub_id)->whereNotNull('trip_cities.hub_id')->whereColumn('d.assigned_to', 'trip_cities.hub_id')
+            ->get(['trip_cities.hub_id', 'd.trip_number'])->groupBy('hub_id')->map(fn ($g) => $g->pluck('trip_number')->unique()->values()->all())->all();
     }
 
     /** Trucks of the hub: free, out on a trip, kept, or off. */
@@ -218,7 +417,7 @@ class CityTrips
                 $rest = collect();
                 foreach ($cities as $c) {
                     if (! $trip['cities'] && $c['space'] > $cap) {
-                        $trip['cities'][] = ['city' => $c['city'], 'key' => $c['key'], 'boxes' => $c['boxes'], 'space' => $c['space']];
+                        $trip['cities'][] = ['city' => $c['city'], 'key' => $c['key'], 'boxes' => $c['boxes'], 'space' => $c['space'], 'via' => $c['via'] ?? []];
                         $trip['load'] = $cap;
                         $trip['left'][] = $c['city'].' has '.$c['boxes'].' boxes: about '.max(0, $c['space'] - $cap).' wait for the next '.$prov['province'].' trip';
                         $trip['days'] = max($trip['days'], $c['days']);
@@ -226,7 +425,7 @@ class CityTrips
                         continue;
                     }
                     if ($trip['load'] + $c['space'] <= $cap) {
-                        $trip['cities'][] = ['city' => $c['city'], 'key' => $c['key'], 'boxes' => $c['boxes'], 'space' => $c['space']];
+                        $trip['cities'][] = ['city' => $c['city'], 'key' => $c['key'], 'boxes' => $c['boxes'], 'space' => $c['space'], 'via' => $c['via'] ?? []];
                         $trip['load'] += $c['space'];
                         $trip['days'] = max($trip['days'], $c['days']);
                     } else {
@@ -296,6 +495,9 @@ class CityTrips
      */
     public function create(array $trips, Carbon $date): array
     {
+        if ($this->atHub) {
+            return $this->createAtHub($trips, $date);
+        }
         $made = [];
         foreach ($trips as $t) {
             if (empty($t['on']) || empty($t['cities'])) {
@@ -307,9 +509,13 @@ class CityTrips
                     'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
                     'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $this->user->logistichub_id, 'user_id' => $this->user->id,
                     'plan_why' => Str::limit((string) ($t['why'] ?? ''), 295), 'plan_space' => (int) $t['load'],
-                ]);
+                ] + (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []));
                 foreach ($t['cities'] as $c) {
                     TripCity::create(['deliverylog_id' => $trip->id, 'province' => $t['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'), 'planned_boxes' => (int) $c['boxes']]);
+                    // a hub's boxes of this city delivered direct instead
+                    foreach ($c['via'] ?? [] as $hub) {
+                        TripCity::create(['deliverylog_id' => $trip->id, 'province' => $t['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'), 'planned_boxes' => 0, 'hub_id' => (int) $hub]);
+                    }
                 }
                 if ($truck && ! $truck->is_assigned) {
                     $truck->update(['is_assigned' => true]);
@@ -318,6 +524,44 @@ class CityTrips
                 return ['id' => $trip->id, 'number' => (string) $trip->trip_number, 'truck' => $truck?->plate_no];
             });
         }
+
+        return $made;
+    }
+
+    /** A hub's own trips: the boxes of the trip's cities that are at the hub go on it now. */
+    protected function createAtHub(array $trips, Carbon $date): array
+    {
+        $units = $this->planner()->units()->filter(fn ($u) => $this->isDirect($u));
+        $made = [];
+        foreach ($trips as $t) {
+            if (empty($t['on']) || empty($t['cities'])) {
+                continue;
+            }
+            $keys = collect($t['cities'])->pluck('key')->flip();
+            $ids = $units->filter(fn ($u) => isset($keys[Str::lower($u['province']).'|'.Barangays::cityKey($u['city'])]))->flatMap(fn ($u) => $u['ids'])->values();
+            if ($ids->isEmpty()) {
+                continue;
+            }
+            $made[] = DB::transaction(function () use ($t, $date, $ids) {
+                $truck = $t['truck_id'] ? Truck::whereKey($t['truck_id'])->where('logistichub_id', $this->user->logistichub_id)->where('is_active', true)->lockForUpdate()->first() : null;
+                $trip = Deliverylog::create([
+                    'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
+                    'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $this->user->logistichub_id, 'user_id' => $this->user->id,
+                    'plan_why' => Str::limit((string) ($t['why'] ?? ''), 295), 'plan_space' => (int) $t['load'],
+                ] + (Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []));
+                foreach ($t['cities'] as $c) {
+                    TripCity::create(['deliverylog_id' => $trip->id, 'province' => $t['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'), 'planned_boxes' => (int) $c['boxes']]);
+                }
+                app(TripAssignment::class)->addToHubTrip($trip, Tripinvoice::whereKey($ids)->get());
+                if ($truck && ! $truck->is_assigned) {
+                    $truck->update(['is_assigned' => true]);
+                }
+
+                return ['id' => $trip->id, 'number' => (string) $trip->trip_number, 'truck' => $truck?->plate_no];
+            });
+        }
+        $this->plannerMemo = null;
+        $this->placesMemo = null;
 
         return $made;
     }
@@ -355,7 +599,7 @@ class CityTrips
      *
      * @return array{0: ?Tripinvoice, 1: ?string} the box on the trip now, or why not
      */
-    public static function join(Deliverylog $trip, string $code, bool $force = false): array
+    public static function join(Deliverylog $trip, string $code, bool $force = false, bool $forceHub = false): array
     {
         if (! static::ready()) {
             return [null, null];
@@ -378,8 +622,19 @@ class CityTrips
             return [null, $code.' is not unloaded yet (not scanned at Unload container).'];
         }
         $key = Barangays::cityKey($inv->receiver_city);
-        $match = $cities->first(fn ($c) => $c->city_key === $key && (! $c->province || Str::lower(Str::squish($c->province)) === Str::lower(Str::squish((string) $inv->receiver_province))));
-        if (! $match && ! $force) {
+        // same city name in two provinces: the province must match too (a city saved without a province takes only boxes without one)
+        $sameCity = $cities->filter(fn ($c) => $c->city_key === $key && Str::lower(Str::squish((string) $c->province)) === Str::lower(Str::squish((string) $inv->receiver_province)));
+        $hasHub = Schema::hasColumn('trip_cities', 'hub_id');
+        $boxHub = $hasHub ? \App\Support\Hubs\HubAreas::hubOf($inv) : null;
+        $match = $hasHub ? $sameCity->first(fn ($c) => (int) $c->hub_id === (int) $boxHub) : $sameCity->first();
+        if (! $match && $hasHub && ! $forceHub) {
+            $toHubTrip = $cities->every(fn ($c) => $c->hub_id && $trip->assigned_to && (int) $trip->assigned_to !== (int) $trip->logistichub_id);
+            // a hub's box on our own trip, our box on a trip to a hub, or a box of another hub
+            if ($sameCity->isNotEmpty() || $boxHub || $toHubTrip) {
+                return [null, 'hub:'.(int) $boxHub];
+            }
+        }
+        if (! $match && ! $force && ! $forceHub) {
             return [null, 'other-city'];
         }
         $added = app(TripAssignment::class)->addToDeliveryTrip($trip, collect([$inv]));
@@ -393,6 +648,9 @@ class CityTrips
     /** Unloading now: today's unloaded boxes by province, and where they go. */
     public function unloadingNow(): array
     {
+        if ($this->atHub) {
+            return ['container' => null, 'rows' => []];
+        }
         $wh = $this->user->warehouse_id;
         $rows = Invoice::where('is_assigned', false)->where('is_delivered', false)->where('verified_at', '>=', today())
             ->when($wh && \Filament\Facades\Filament::getCurrentPanel()?->getId() === 'warehouse', fn ($q) => $q->where('warehouse_id', $wh))

@@ -25,6 +25,7 @@ class TripRules
         'wrong_hub' => ['Wrong hub or warehouse', 'Box for another partner hub or warehouse', 'office'],
         'change_plan' => ['Change the AI plan', 'Switch off a trip or change its truck before Create', 'reason'],
         'load_order' => ['Load out of order', 'Too early for its stop', 'off'],
+        'direct_hub' => ['Deliver direct instead of a hub', 'A hub’s boxes on our own trip, or the reverse', 'reason'],
     ];
 
     public const LEVELS = ['off' => 'Off', 'reason' => 'Anyone with a reason', 'office' => 'Office only'];
@@ -157,6 +158,7 @@ class TripRules
         return match ($wrongHub['kind'] ?? null) {
             'city' => 'topup_other',
             'full' => 'truck_full',
+            'hub' => 'direct_hub',
             default => 'wrong_hub',
         };
     }
