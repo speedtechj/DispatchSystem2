@@ -19,6 +19,7 @@ class TruckForm
             ->components([
                                 Group::make()
                     ->schema([
+                        \App\Filament\Shared\Trucks\OwnershipSection::make(),
                         Section::make('vehicles Information')
                             ->schema([
                                 TextInput::make('category')

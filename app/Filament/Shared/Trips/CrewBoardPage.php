@@ -93,22 +93,50 @@ class CrewBoardPage extends Page
         }
     }
 
+    /**
+     * Warnings grouped into a few small cards (closed until opened), so a busy day does not push the trucks down.
+     *
+     * @return list<array{key: string, tone: string, title: string, items: list<array>}>
+     */
+    protected function warningGroups(array $warnings, string $tripPage): array
+    {
+        $url = fn ($w) => isset($w['trip']) && class_exists($tripPage) ? $tripPage::urlFor($w['trip']) : null;
+        $defs = [
+            'nocrew' => ['bad', '👥', fn ($n) => $n.' '.str('trip')->plural($n).' '.($n === 1 ? 'has' : 'have').' no crew'],
+            'ready' => ['warn', '⏱', fn ($n) => $n.' '.str('trip')->plural($n).' ready, nobody took '.($n === 1 ? 'it' : 'them')],
+            'back' => ['warn', '↩', fn ($n) => $n.' '.str('truck')->plural($n).' back with boxes not returned'],
+            'road' => ['warn', '🚚', fn ($n) => $n.' '.str('truck')->plural($n).' out more than 14 hours'],
+            'inactive' => ['warn', '⛔', fn ($n) => $n.' inactive '.str('person')->plural($n).' still on a truck team'],
+        ];
+        $out = [];
+        foreach ($defs as $kind => [$tone, $icon, $title]) {
+            $items = array_values(array_filter($warnings, fn ($w) => ($w['kind'] ?? '') === $kind));
+            if ($items) {
+                $out[] = ['key' => $kind, 'tone' => $tone, 'icon' => $icon, 'title' => $title(count($items)), 'items' => array_map(fn ($w) => [
+                    'text' => $w['text'], 'url' => $url($w), 'truck' => $w['truck_id'] ?? null, 'user' => $w['user_id'] ?? null,
+                ], $items)];
+            }
+        }
+
+        return $out;
+    }
+
     protected function getViewData(): array
     {
         $hub = $this->hub();
         $people = TripFlow::crewPeople($hub);
-        $teams = Truckcrew::with('user.workposition')->get()->groupBy('truck_id');
-        $trucks = Truck::where('is_active', 1)->when(is_int($hub), fn ($q) => $q->where('logistichub_id', $hub))->orderBy('plate_no')->get();
-        $onTruck = $teams->flatten()->pluck('crew')->map(fn ($i) => (int) $i)->all();
+        $teams = Truckcrew::with('member.workposition')->get()->groupBy('truck_id');
+        $trucks = \App\Support\Rentals::usable(Truck::where('is_active', 1)->when(is_int($hub), fn ($q) => $q->where('logistichub_id', $hub)))->orderBy('plate_no')->get();
+        $onTruck = $teams->toBase()->only($trucks->modelKeys())->flatten()->pluck('crew')->map(fn ($i) => (int) $i)->all();
 
         $tripPage = str_replace('CrewBoard', 'Trip', static::class);
 
         return [
             'tripUrl' => fn ($t) => class_exists($tripPage) ? $tripPage::urlFor($t) : null,
-            'warnings' => TripFlow::warnings($hub),
+            'groups' => $this->warningGroups(TripFlow::warnings($hub), $tripPage),
             'rows' => $trucks->map(function (Truck $t) use ($teams, $people) {
                 $trip = TripFlow::runningOn($t->id);
-                $team = ($teams[$t->id] ?? collect())->filter(fn ($c) => $c->user)->values();
+                $team = ($teams[$t->id] ?? collect())->filter(fn ($c) => $c->member)->values();
                 $last = $team->isEmpty() ? Deliverylog::where('truck_id', $t->id)->whereIn('id', TripCrew::select('deliverylog_id'))->latest('id')->first() : null;
 
                 return [

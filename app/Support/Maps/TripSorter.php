@@ -87,7 +87,15 @@ class TripSorter
             return null;
         }
 
-        $boxes = static::boxes($trip)->with('invdata')->get()->filter(fn ($b) => $b->invdata);
+        $boxes = static::boxes($trip)->with(Barangays::ready() ? ['invdata.barangayFill'] : ['invdata'])->get()->filter(fn ($b) => $b->invdata);
+        // boxes with no barangay that were not filled in yet: try now (same receiver, map, driver GPS, AI)
+        if (Barangays::ready() && Barangays::on('fill')) {
+            $waiting = $boxes->map(fn ($b) => $b->invdata->barangayFill)->filter(fn ($f) => $f && $f->status === 'pending');
+            if ($waiting->isNotEmpty()) {
+                $waiting->each(fn ($f) => $f->setRelation('invoice', $boxes->first(fn ($b) => $b->invdata->id === $f->invoice_id)->invdata));
+                Barangays::work(0, 10, $waiting->values());
+            }
+        }
         $route = TripRoute::firstOrNew(['deliverylog_id' => $trip->id]);
         if ($unlock) {
             $route->locked = false;
@@ -101,7 +109,8 @@ class TripSorter
             return [
                 'key' => substr($key, 0, 40), 'inv' => $i, 'ids' => $g->pluck('id')->values()->all(), 'n' => $g->count(),
                 'prio' => $g->contains(fn ($b) => $b->invdata->is_priority),
-                'sortarea' => Str::lower(($areas[$i->routearea_id] ?? 'zzz').'|'.$i->receiver_province.'|'.$i->receiver_city.'|'.$i->receiver_barangay.'|'.$i->receiver_name),
+                'sortarea' => Str::lower(($areas[$i->routearea_id] ?? 'zzz').'|'.$i->receiver_province.'|'.$i->receiver_city.'|'.(Barangays::of($i) ?? '~').'|'.$i->receiver_name),
+                'brgy' => (string) Barangays::of($i),
                 'place' => Geocoder::place(static::address($i)),
             ];
         })->keyBy('key');
@@ -131,15 +140,15 @@ class TripSorter
                 TripStop::updateOrCreate(['deliverylog_id' => $trip->id, 'receiver_key' => $k], [
                     'stop_no' => $n + 1,
                     'name' => Str::title(Str::squish((string) $i->receiver_name)),
-                    'address' => $u['place']->clean ?: collect([$i->receiver_address, $i->receiver_barangay, $i->receiver_city])->filter()->map(fn ($v) => Str::title(Str::squish($v)))->join(', '),
-                    'barangay' => Str::title(Str::squish((string) $i->receiver_barangay)),
+                    'address' => $u['place']->clean ?: collect([$i->receiver_address, $u['brgy'], $i->receiver_city])->filter()->map(fn ($v) => Str::title(Str::squish($v)))->join(', '),
+                    'barangay' => Str::title(Str::squish($u['brgy'])),
                     'city' => Str::title(Str::squish((string) $i->receiver_city)),
                     'phone' => Str::limit((string) $i->receiver_mobile_no, 38, ''),
                     'lat' => $pin ? $u['place']->lat : null, 'lng' => $pin ? $u['place']->lng : null,
                     'exact' => $pin && $u['place']->exact,
                     'geo_place_id' => $u['place']->id,
                     'zone' => $zones[$n], 'boxes' => $u['n'], 'priority' => $u['prio'], 'box_ids' => $u['ids'],
-                ]);
+                ] + (Barangays::ready() ? ['barangay_note' => Barangays::note($i)] : []));
             }
         });
 
@@ -175,10 +184,10 @@ class TripSorter
         // stops without a pin go right after a stop in the same barangay, else the same city, else at the end
         foreach ($rest as $k => $u) {
             $at = null;
-            foreach (['receiver_barangay', 'receiver_city'] as $field) {
+            $val = fn ($unit, $field) => Str::lower(Str::squish((string) ($field === 'barangay' ? $unit['brgy'] : $unit['inv']->receiver_city)));
+            foreach (['barangay', 'city'] as $field) {
                 foreach ($order as $pos => $other) {
-                    if (Str::lower(Str::squish((string) $units[$other]['inv']->receiver_city)) === Str::lower(Str::squish((string) $u['inv']->receiver_city))
-                        && Str::lower(Str::squish((string) $units[$other]['inv']->{$field})) === Str::lower(Str::squish((string) $u['inv']->{$field}))) {
+                    if ($val($units[$other], 'city') === $val($u, 'city') && ($field === 'city' || ($val($u, 'barangay') !== '' && $val($units[$other], 'barangay') === $val($u, 'barangay')))) {
                         $at = $pos;
                     }
                 }

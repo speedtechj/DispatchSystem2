@@ -106,7 +106,7 @@ class DriverTrip
     public function areas(): Collection
     {
         return $this->remaining()
-            ->groupBy(fn (Tripinvoice $box) => Str::title((string) $box->invdata?->receiver_city).'|'.Str::title((string) $box->invdata?->receiver_barangay))
+            ->groupBy(fn (Tripinvoice $box) => Str::title((string) $box->invdata?->receiver_city).'|'.Str::title((string) \App\Support\Maps\Barangays::of($box->invdata)))
             ->map(function (Collection $boxes, string $key) {
                 [$city, $barangay] = explode('|', $key);
 
@@ -228,7 +228,7 @@ class DriverTrip
         return [
             'invoice' => $box->invoice,
             'name' => Str::title((string) $invoice?->receiver_name),
-            'address' => collect([$invoice?->receiver_address, $invoice?->receiver_barangay, $invoice?->receiver_city])
+            'address' => collect([$invoice?->receiver_address, \App\Support\Maps\Barangays::of($invoice), $invoice?->receiver_city])
                 ->filter()->map(fn ($part) => Str::title($part))->join(', '),
             'phone' => $phone,
             'tel' => $phone ? 'tel:'.preg_replace('/[^0-9+]/', '', $phone) : null,

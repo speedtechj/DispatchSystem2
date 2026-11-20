@@ -31,6 +31,13 @@ class Invoice extends Model
                 $invoice->set_key = \App\Support\Boxes\BoxSets::keyFor($invoice->receiver_name, $invoice->receiver_mobile_no, $invoice->receiver_city);
             }
         });
+        // no barangay on the manifest: queue it so the system fills it in (Addresses to check)
+        static::created(fn (Invoice $invoice) => \App\Support\Maps\Barangays::queue($invoice));
+    }
+
+    public function barangayFill()
+    {
+        return $this->hasOne(\App\Models\Maps\BarangayFill::class);
     }
 
     public function whSection()

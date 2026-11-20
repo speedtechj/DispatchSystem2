@@ -232,7 +232,7 @@ class ScanApp extends Page
 
     protected function clearResult(): void
     {
-        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub');
+        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass');
     }
 
     /** Called by the camera or the typed box number. */
@@ -241,12 +241,80 @@ class ScanApp extends Page
         $this->runScan($code);
     }
 
-    /** After "too early": load that box anyway. */
+    /** Trip rules: the reason buttons (or "Ask the office") after "load it anyway". */
+    public ?array $bypass = null;
+
+    /** A city top-up the crew said no to (trip id => true). */
+    public array $topUpSkipped = [];
+
+    protected function bypassCtx(string $code): array
+    {
+        $kind = in_array($this->mode, ['wh_load'], true) ? 'transfer' : 'delivery';
+        $model = $kind === 'transfer' ? \App\Models\Whdeliverylog::class : Deliverylog::class;
+
+        return ['kind' => $kind, 'trip_id' => $this->choice, 'trip_number' => $this->choice ? $model::whereKey($this->choice)->value('trip_number') : null,
+            'invoice_id' => Invoice::where('invoice', $code)->latest('id')->value('id'), 'box' => $code];
+    }
+
+    /** After "too early", "wrong hub", "other city" or "truck full": load that box anyway (with a reason, or ask the office). */
     public function loadAnyway(): void
     {
-        if ($code = $this->early['code'] ?? $this->wrongHub['code'] ?? null) {
-            $this->runScan($code, true);
+        $code = $this->early['code'] ?? $this->wrongHub['code'] ?? null;
+        if (! $code) {
+            return;
         }
+        $rule = \App\Support\Trips\TripRules::ruleOf($this->early, $this->wrongHub);
+        $ctx = $this->bypassCtx($code);
+        $need = \App\Support\Trips\TripRules::need($rule, Auth::user(), $ctx['trip_id'], $ctx['invoice_id']);
+        if ($need === 'free') {
+            $this->runScan($code, true);
+
+            return;
+        }
+        $this->bypass = ['rule' => $rule, 'code' => $code, 'need' => $need, 'title' => \App\Support\Trips\TripRules::RULES[$rule][0]];
+    }
+
+    public function bypassWith(string $reason): void
+    {
+        if (! $this->bypass || $this->bypass['need'] !== 'reason' || ! in_array($reason, \App\Support\Trips\TripRules::reasons(), true)) {
+            return;
+        }
+        $b = $this->bypass;
+        \App\Support\Trips\TripRules::record($b['rule'], Auth::user(), $reason, $this->bypassCtx($b['code']));
+        $this->bypass = null;
+        $this->runScan($b['code'], true);
+    }
+
+    public function askOffice(): void
+    {
+        if (! $this->bypass) {
+            return;
+        }
+        $b = $this->bypass;
+        \App\Support\Trips\TripRules::ask($b['rule'], Auth::user(), null, $this->bypassCtx($b['code']));
+        $this->clearResult();
+        $this->status = 'warning';
+        $this->message = "Asked the office about {$b['code']}. Keep it aside: when they approve, scan it again.";
+    }
+
+    public function cancelBypass(): void
+    {
+        $this->bypass = null;
+    }
+
+    /** City top-up at loading: add the suggested city to the trip. */
+    public function cityTopUpAdd(string $key): void
+    {
+        $station = $this->station();
+        if ($this->mode === 'load' && $station && method_exists($station, 'addTopUpCity')) {
+            $station->data['deliverylog_id'] = $this->choice;
+            $station->addTopUpCity($key);
+        }
+    }
+
+    public function cityTopUpSkip(): void
+    {
+        $this->topUpSkipped[(int) $this->choice] = true;
     }
 
     // ------------------------------------------------------------------ sections, truck waiting, sets
@@ -514,6 +582,9 @@ class ScanApp extends Page
             'countResult' => $countResult,
             'receiveResult' => $receiveResult,
             'topUp' => $topUp,
+            'cityTopUp' => $this->mode === 'load' && $this->choice && empty($this->topUpSkipped[(int) $this->choice]) && ($st = $this->station()) && method_exists($st, 'cityTopUp')
+                ? (function () use ($st) { $st->data['deliverylog_id'] = $this->choice; return $st->cityTopUp(); })() : null,
+            'bypassReasons' => \App\Support\Trips\TripRules::reasons(),
             'noReason' => collect($openSets)->filter(fn ($o) => collect($o['missing'])->contains(fn ($m) => ! $m['reason']))->count(),
             'splitReasons' => \App\Models\Boxes\SetSplit::REASONS,
             'box' => $box = ($this->invoiceId ? Invoice::find($this->invoiceId) : null),

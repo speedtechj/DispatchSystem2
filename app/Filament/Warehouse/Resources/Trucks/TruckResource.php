@@ -18,13 +18,16 @@ use UnitEnum;
 
 class TruckResource extends Resource
 {
+    /** The menu shows the new Trucks page (cards); this stays for Add and Edit. */
+    protected static bool $shouldRegisterNavigation = false;
+
     protected static ?string $model = Truck::class;
 
     protected static string | UnitEnum | null $navigationGroup = 'Truck Management';
 
    // protected static string|BackedEnum|null $navigationIcon = Heroicon::Truck;
 
-    protected static ?string $recordTitleAttribute = 'id';
+    protected static ?string $recordTitleAttribute = 'plate_no';
 
     public static function form(Schema $schema): Schema
     {

@@ -24,7 +24,14 @@ class SmsEvents
     /** Trip on the road: all boxes loaded, or the first box delivered. */
     public static function outForDelivery(Deliverylog $trip): int
     {
-        if (! SmsSettings::on('out_for_delivery') || TripSorter::isTransfer($trip) || ! TripSorter::ensure($trip, 0)) {
+        if (! SmsSettings::on('out_for_delivery') || TripSorter::isTransfer($trip)) {
+            return 0;
+        }
+        // Trip planned by city: boxes keep joining while loading, so text only once the trip is locked.
+        if (\App\Support\Trips\CityTrips::isCityTrip($trip) && ! $trip->is_lock && ! $trip->taken_at) {
+            return 0;
+        }
+        if (! TripSorter::ensure($trip, 0)) {
             return 0;
         }
         $boxes = TripSorter::boxes($trip);

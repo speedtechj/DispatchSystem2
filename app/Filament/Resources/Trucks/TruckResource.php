@@ -17,12 +17,15 @@ use Filament\Tables\Table;
 use UnitEnum;
 class TruckResource extends Resource
 {
+    /** The menu shows the new Trucks page (cards); this stays for Add and Edit. */
+    protected static bool $shouldRegisterNavigation = false;
+
     protected static ?string $model = Truck::class;
     protected static ?string $navigationLabel = 'Vehicles';
     protected static string | UnitEnum | null $navigationGroup = 'Settings';
    // protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
-    protected static ?string $recordTitleAttribute = 'id';
+    protected static ?string $recordTitleAttribute = 'plate_no';
 
     public static function form(Schema $schema): Schema
     {

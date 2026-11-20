@@ -149,6 +149,11 @@ class TripPage extends Page
             'next' => $next,
             'nextBoxes' => $next ? TripFlow::boxes($next)->count() : 0,
             'stageInfo' => TripFlow::STAGES[$stage],
+            'rental' => $trip->truck?->isRental() ? [
+                'company' => $trip->truck->rentalCompany?->name, 'driver' => $trip->rental_driver,
+                'cost' => $trip->rental_cost, 'rate' => $trip->rental_rate,
+                'perBox' => $trip->rental_cost && $total ? round($trip->rental_cost / $total) : null,
+            ] : null,
         ];
     }
 }

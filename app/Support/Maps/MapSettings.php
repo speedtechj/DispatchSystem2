@@ -80,7 +80,7 @@ class MapSettings
 
     public static function aiCleaning(): bool
     {
-        return Ai::enabled('addresses');
+        return Ai::enabled('addresses') && (bool) AppSetting::get('addr.clean', true);
     }
 
     public static function priorityFirst(): bool

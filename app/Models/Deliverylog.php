@@ -54,15 +54,24 @@ class Deliverylog extends Model
             if ($trip->isDirty('is_lock')) {
                 $trip->ready_at = $trip->is_lock ? now() : null;
             }
+            // Rental truck: the rental driver and the cost of the trip.
+            if ($trip->isDirty('truck_id') || $trip->isDirty('rental_km') || ($trip->truck_id && $trip->rental_rate === null && ! $trip->exists)) {
+                \App\Support\Rentals::fillTrip($trip);
+            }
         });
 
         // Trip steps: the crew of the trip is copied from the truck team (and follows a truck change).
         static::created(fn (Deliverylog $trip) => \App\Support\TripFlow::copyCrew($trip));
         static::updated(function (Deliverylog $trip): void {
             if ($trip->wasChanged('truck_id')) {
-                \App\Support\TripFlow::truckChanged($trip);
+                \App\Support\TripFlow::truckChanged($trip, (int) $trip->getOriginal('truck_id') ?: null);
             }
         });
+    }
+
+    public function cities()
+    {
+        return $this->hasMany(TripCity::class);
     }
 
     public function user(): BelongsTo

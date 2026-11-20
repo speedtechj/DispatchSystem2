@@ -175,6 +175,20 @@ abstract class UnloadContainerPage extends Page
         $section = Sections::forInvoice($invoice, $warehouseId);
         $this->setInfo = BoxSets::atUnload($invoice);
 
+        // Two warehouses: a box that another warehouse delivers goes to the transfer for it.
+        if ($home = \App\Support\Warehouses\Coverage::transferTo($invoice, $warehouseId)) {
+            $to = Sections::of($warehouseId)->first(fn ($s) => (int) $s->to_warehouse_id === $home);
+            if ($to) {
+                $section = $to;
+            } else {
+                $name = \App\Support\Warehouses\Coverage::name($home);
+                $invoice->forceFill(['wh_section_id' => null, 'sectioned_at' => now()])->save();
+                $this->route = ['kind' => 'transfer', 'code' => 'T', 'name' => 'Transfer → '.$name, 'color' => '#c97a00'];
+
+                return "{$code} verified · transfer to {$name}.";
+            }
+        }
+
         if (! $section) {
             return "{$code} verified.";
         }

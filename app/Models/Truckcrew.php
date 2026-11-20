@@ -17,8 +17,15 @@ class Truckcrew extends Model
     {
         return $this->belongsTo(Truck::class);
     }
+    /** Who added this person to the truck. */
     public function user() {
         return $this->belongsTo(User::class);
+    }
+
+    /** The crew member (leadman, driver or helper) on the truck. */
+    public function member()
+    {
+        return $this->belongsTo(User::class, 'crew');
     }
     
 }

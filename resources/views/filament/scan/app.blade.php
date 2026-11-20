@@ -148,7 +148,29 @@
                 @include('filament.partials.load-next', ['next' => $loadNext, 'dark' => true])
             @endif
 
-            @if ($status === 'success' && $box)
+            @if (! $status && ! $bypass && $cityTopUp)
+                <div class="ds-sx__citytop" wire:key="citytop-{{ $cityTopUp['key'] }}">
+                    <b>✦ Room for {{ $cityTopUp['room'] }} more boxes</b>
+                    <span>{{ $cityTopUp['same'] ? 'Same way' : 'Next province' }}: <b>{{ $cityTopUp['city'] }}, {{ $cityTopUp['province'] }}</b> · {{ $cityTopUp['boxes'] }} {{ Str::plural('box', $cityTopUp['boxes']) }}{{ $cityTopUp['days'] ? ', '.$cityTopUp['days'].' '.Str::plural('day', $cityTopUp['days']).' old' : '' }}.@if ($cityTopUp['section']) In section <b>{{ $cityTopUp['section'] }}</b>.@endif</span>
+                    <button type="button" class="ds-sa__primary" wire:click="cityTopUpAdd(@js($cityTopUp['key']))">Scan them now</button>
+                    <button type="button" class="ds-sa__secondary" wire:click="cityTopUpSkip">No thanks, lock the trip</button>
+                </div>
+            @endif
+
+            @if ($bypass)
+                <div class="ds-sa__sheet is-warn" wire:key="bypass-{{ $bypass['code'] }}">
+                    <span class="ds-sa__grab"></span>
+                    @if ($bypass['need'] === 'office')
+                        <p class="ds-sa__msg"><b>{{ $bypass['title'] }}: office only.</b> Ask the office to allow {{ $bypass['code'] }}. Keep the box aside until they answer.</p>
+                        <button type="button" class="ds-sa__primary" wire:click="askOffice">Ask the office</button>
+                    @else
+                        <span class="ds-sa__hit"><span><small class="ds-ld__kicker">{{ $bypass['title'] }} · load anyway</small><strong>{{ $bypass['code'] }}</strong></span></span>
+                        <p class="ds-sa__msg"><b>Why? (the office sees this)</b></p>
+                        <div class="ds-sx__reasons">@foreach ($bypassReasons as $r)<button type="button" wire:click="bypassWith(@js($r))">{{ $r }}</button>@endforeach</div>
+                    @endif
+                    <button type="button" class="ds-sa__secondary" wire:click="cancelBypass">Cancel</button>
+                </div>
+            @elseif ($status === 'success' && $box)
                 <div class="ds-sa__sheet is-ok" wire:key="ok-{{ $invoiceId }}-{{ $sessionScans }}">
                     <span class="ds-sa__grab"></span>
                     <div class="ds-sa__hit">
@@ -238,11 +260,25 @@
                     <span class="ds-sa__grab"></span>
                     <div class="ds-sa__hit is-shake">
                         <span class="ds-sa__mark is-bad">⛔</span>
-                        <span><small class="ds-ld__kicker">Wrong hub</small><strong>{{ $wrongHub['code'] }} is for {{ $wrongHub['for'] }}</strong></span>
+                        <span><small class="ds-ld__kicker">{{ ['city' => 'Other city', 'wh' => 'Not for '.($wrongHub['trip'] ?? ''), 'full' => 'Truck full'][$wrongHub['kind'] ?? ''] ?? 'Wrong hub' }}</small><strong>{{ ($wrongHub['kind'] ?? null) === 'full' ? $wrongHub['code'].' does not fit' : $wrongHub['code'].' is for '.$wrongHub['for'] }}</strong></span>
                     </div>
+                    @if (($wrongHub['kind'] ?? null) === 'full')
+                        <p class="ds-sa__msg">{{ $wrongHub['for'] }}. This box takes {{ $wrongHub['space'] }} space: it waits for the next {{ $wrongHub['province'] }} trip. Put it back{{ $wrongHub['section'] !== '—' ? ' in section '.$wrongHub['section'] : '' }}.</p>
+                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
+                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">It still fits · load anyway</button>
+                    @elseif (($wrongHub['kind'] ?? null) === 'wh')
+                        <p class="ds-sa__msg">{{ $wrongHub['for'] }} is delivered from {{ $wrongHub['home'] }}. Not loaded: it stays here{{ $wrongHub['section'] !== '—' ? ', section '.$wrongHub['section'] : '' }}.</p>
+                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
+                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">The office says load it</button>
+                    @elseif (($wrongHub['kind'] ?? null) === 'city')
+                        <p class="ds-sa__msg">This trip goes to {{ $wrongHub['trip'] }}. Not loaded. Put it back in section {{ $wrongHub['section'] }}; it goes on a trip to its own city.</p>
+                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
+                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">Add it to this trip anyway</button>
+                    @else
                     <p class="ds-sa__msg">This trip goes to {{ $wrongHub['trip'] }}. Not loaded. Put it back in section {{ $wrongHub['section'] }} and tell the office.</p>
                     <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
                     <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">The office says load it</button>
+                    @endif
                 </div>
             @elseif ($status === 'warning' && $early)
                 <div class="ds-sa__sheet is-warn" wire:key="early-{{ $sessionScans }}-{{ $early['code'] }}">

@@ -92,7 +92,9 @@ class TripFlow
     /** Truck list for a trip: free trucks, and trucks still out (the trip then waits for them). */
     public static function truckOptions(?int $hubId, ?int $tripId = null): array
     {
-        $trucks = \App\Models\Truck::query()->where('is_active', 1)->when($hubId, fn ($q) => $q->where('logistichub_id', $hubId))->orderBy('plate_no')->get();
+        // Own trucks, and rental trucks booked today (own first).
+        $trucks = \App\Support\Rentals::usable(\App\Models\Truck::query()->where('is_active', 1)->when($hubId, fn ($q) => $q->where('logistichub_id', $hubId)))
+            ->get()->sortBy(fn ($t) => [$t->isRental() ? 1 : 0, $t->plate_no])->values();
 
         return $trucks->mapWithKeys(function ($t) use ($tripId) {
             $on = $t->is_assigned ? static::runningOn($t->id, $tripId) : null;
@@ -100,7 +102,7 @@ class TripFlow
                 return [];
             }
 
-            return [$t->id => $t->plate_no.($on ? ' · on '.$on->trip_number.' (this trip waits for it)' : '')];
+            return [$t->id => $t->plate_no.($t->isRental() ? ' · rental, '.(\App\Support\Rentals::rateText($t) ?: 'booked today') : '').($on ? ' · on '.$on->trip_number.' (this trip waits for it)' : '')];
         })->all();
     }
 
@@ -211,26 +213,31 @@ class TripFlow
         if (! static::ready() || ! $trip->truck_id || TripCrew::where('deliverylog_id', $trip->id)->exists()) {
             return;
         }
-        $users = User::with('workposition')->whereIn('id', Truckcrew::where('truck_id', $trip->truck_id)->pluck('crew'))->get();
+        // Only active people: someone made inactive stays off new trips.
+        $users = User::with('workposition')->where('is_active', true)->whereIn('id', Truckcrew::where('truck_id', $trip->truck_id)->pluck('crew'))->get();
         foreach ($users as $u) {
             TripCrew::firstOrCreate(['deliverylog_id' => $trip->id, 'user_id' => $u->id], ['role' => $u->workposition?->position_description]);
         }
     }
 
     /** The truck changed before the trip left: take the new truck's team. */
-    public static function truckChanged(Deliverylog $trip): void
+    public static function truckChanged(Deliverylog $trip, ?int $oldTruckId = null): void
     {
         if (! static::ready() || $trip->taken_at) {
             return;
         }
-        TripCrew::where('deliverylog_id', $trip->id)->whereNull('replaces_user_id')->delete();
-        static::copyCrew($trip);
+        // The old truck's team leaves the trip; people the office picked by hand stay.
+        $oldTeam = $oldTruckId ? Truckcrew::where('truck_id', $oldTruckId)->pluck('crew') : collect();
+        TripCrew::where('deliverylog_id', $trip->id)->whereNull('replaces_user_id')->whereIn('user_id', $oldTeam)->delete();
+        if (! TripCrew::where('deliverylog_id', $trip->id)->exists()) {
+            static::copyCrew($trip);
+        }
     }
 
     /** Someone joined or left the truck team: update the trips of the truck that did not leave yet. */
     public static function teamChanged(int $truckId, int $userId, bool $joined): void
     {
-        if (! static::ready() || ! $truckId || ! $userId) {
+        if (! static::ready() || ! $truckId || ! $userId || ($joined && ! User::whereKey($userId)->where('is_active', true)->exists())) {
             return;
         }
         $trips = Deliverylog::where('truck_id', $truckId)->where('is_active', true)->whereNull('taken_at')->pluck('id');
@@ -336,7 +343,7 @@ class TripFlow
     /** Crew people of the hub (null = all hubs). */
     public static function crewPeople(int|false|null $hub): Collection
     {
-        return User::with('workposition')->where('is_crew', true)
+        return User::with('workposition')->where('is_crew', true)->where('is_active', true)
             ->when(is_int($hub), fn ($q) => $q->where('logistichub_id', $hub))
             ->when($hub === false, fn ($q) => $q->whereRaw('1 = 0'))
             ->orderBy('first_name')->get();
@@ -359,21 +366,27 @@ class TripFlow
         foreach ($trips as $t) {
             $stage = static::stage($t);
             if ($stage === 'ready' && $t->ready_at && $t->ready_at->lt(now()->subMinutes(30))) {
-                $out[] = ['tone' => 'warn', 'text' => 'Trip '.$t->trip_number.' is ready since '.$t->ready_at->format('g:i A').' · nobody took it yet.'];
+                $out[] = ['kind' => 'ready', 'trip' => $t, 'tone' => 'warn', 'text' => 'Trip '.$t->trip_number.' is ready since '.$t->ready_at->format('g:i A').' · nobody took it yet.'];
             }
             if ($stage === 'back' && $t->back_at?->lt(now()->subHours(2)) && ($left = static::left($t)) > 0) {
-                $out[] = ['tone' => 'warn', 'text' => 'Truck '.$t->truck?->plate_no.' is back since '.$t->back_at->format('g:i A').' · '.$left.' '.str('box')->plural($left).' not returned yet (Return boxes).'];
+                $out[] = ['kind' => 'back', 'trip' => $t, 'tone' => 'warn', 'text' => 'Truck '.$t->truck?->plate_no.' is back since '.$t->back_at->format('g:i A').' · '.$left.' '.str('box')->plural($left).' not returned yet (Return boxes).'];
             }
             if ($stage === 'road' && $t->taken_at?->lt(now()->subHours(14))) {
-                $out[] = ['tone' => 'warn', 'text' => 'Truck '.$t->truck?->plate_no.' is on trip '.$t->trip_number.' since '.$t->taken_at->format('M j g:i A').'. Still out?'];
+                $out[] = ['kind' => 'road', 'trip' => $t, 'tone' => 'warn', 'text' => 'Truck '.$t->truck?->plate_no.' is on trip '.$t->trip_number.' since '.$t->taken_at->format('M j g:i A').'. Still out?'];
             }
             if (in_array($stage, ['ready', 'road'], true) && ! TripCrew::where('deliverylog_id', $t->id)->exists()) {
-                $out[] = ['tone' => 'bad', 'text' => 'Trip '.$t->trip_number.' has no crew. Crew on this trip in the trip list.'];
+                $out[] = ['kind' => 'nocrew', 'trip' => $t, 'tone' => 'bad', 'text' => 'Trip '.$t->trip_number.' has no crew.'];
             }
         }
-        $onTruck = Truckcrew::pluck('crew')->map(fn ($i) => (int) $i)->all();
+        foreach (Truckcrew::with('member', 'truck')->whereHas('member', fn ($q) => $q->where('is_active', false))->get() as $c) {
+            if ($hub === null || (int) $c->truck?->logistichub_id === $hub) {
+                $out[] = ['kind' => 'inactive', 'truck_id' => $c->truck_id, 'user_id' => $c->crew, 'tone' => 'warn', 'text' => ($c->member?->full_name ?? 'Someone').' is inactive but still on the team of '.($c->truck?->plate_no ?? 'a truck').'.'];
+            }
+        }
+        // On the team of an active truck (a truck made inactive does not count).
+        $onTruck = Truckcrew::whereHas('truck', fn ($q) => $q->where('is_active', true))->pluck('crew')->map(fn ($i) => (int) $i)->all();
         foreach (static::crewPeople($hub)->reject(fn ($u) => in_array((int) $u->id, $onTruck, true)) as $u) {
-            $out[] = ['tone' => 'info', 'text' => $u->full_name.' has no truck.'];
+            $out[] = ['kind' => 'notruck', 'tone' => 'info', 'text' => $u->full_name.' has no truck.'];
         }
 
         return $out;

@@ -38,7 +38,7 @@ class TripActions
     {
         $hub = Auth::user()?->logistichub_id;
 
-        return User::with('workposition')->where('is_crew', true)
+        return User::with('workposition')->where('is_crew', true)->where('is_active', true)
             ->when(\Filament\Facades\Filament::getCurrentPanel()?->getId() === 'company' && $hub, fn ($q) => $q->where('logistichub_id', $hub))
             ->orderBy('first_name')->get()
             ->mapWithKeys(fn (User $u) => [$u->id => $u->full_name.($u->workposition ? ' · '.$u->workposition->position_description : '')])->all();
@@ -50,7 +50,7 @@ class TripActions
             ->label('Crew on this trip')
             ->icon(Heroicon::UserGroup)
             ->color('gray')
-            ->visible(fn (Deliverylog $record) => TripFlow::ready() && $record->is_active && $record->truck_id)
+            ->visible(fn (Deliverylog $record) => TripFlow::ready() && $record->is_active)
             ->modalHeading(fn (Deliverylog $record) => 'Crew on trip '.$record->trip_number)
             ->modalDescription('Copied from the truck team. Change it for this trip only: the truck team stays the same.')
             ->fillForm(fn (Deliverylog $record) => ['crew' => TripFlow::crew($record)->pluck('user_id')->all()])

@@ -5,6 +5,7 @@ namespace App\Filament\Shared;
 use App\Filament\Concerns\ScansInvoices;
 use App\Models\Deliverylog;
 use App\Models\Invoice;
+use Filament\Notifications\Notification;
 use App\Models\Tripinvoice;
 use App\Models\Boxes\SetSplit;
 use App\Models\User;
@@ -29,6 +30,7 @@ use Illuminate\Support\Facades\Auth;
 abstract class LoadTripPage extends Page
 {
     use ScansInvoices;
+    use \App\Filament\Concerns\BypassesTripRules;
 
     protected string $view = 'filament.pages.scanload';
 
@@ -129,6 +131,42 @@ abstract class LoadTripPage extends Page
             ->latest('id')
             ->first();
 
+        $this->bypass = null;
+        $box = $tripinvoice?->invdata ?? Invoice::where('invoice', $code)->where('is_delivered', false)->latest('id')->first();
+        // Truck full: the box does not fit in the truck's space (only for trucks with a space set).
+        if ($box && ! static::$atHub && ! $tripinvoice?->{$this->loadedColumn()} && ($full = \App\Support\Trips\TripSpace::overFull($trip, $box))
+            && ! $this->skips('truck_full', $trip->id, $box->id)) {
+            $this->early = null;
+            $this->wrongHub = ['kind' => 'full', 'code' => $code, 'for' => $full['used'].' of '.$full['cap'].' space used', 'section' => $box->whSection?->code ?? '—',
+                'color' => $box->whSection?->color, 'trip' => $trip->trip_number, 'space' => $full['space'], 'province' => $box->receiver_province];
+            $this->scanResult('warning', "Truck full: {$code} does not fit ({$full['used']} of {$full['cap']} space used).", $box);
+
+            return;
+        }
+
+        // Trip planned by city: a waiting box of one of its cities joins the trip now.
+        $cityTrip = ! static::$atHub && \App\Support\Trips\CityTrips::isCityTrip($trip);
+        if (! $tripinvoice && $cityTrip) {
+            [$joined, $why] = \App\Support\Trips\CityTrips::join($trip, $code, $box ? $this->skips('topup_other', $trip->id, $box->id) : $this->forceLoad);
+            if ($joined) {
+                $tripinvoice = $joined;
+            } elseif ($why === 'other-city') {
+                $inv = Invoice::where('invoice', $code)->latest('id')->first();
+                $place = \Illuminate\Support\Str::title(trim($inv?->receiver_city.', '.$inv?->receiver_province, ', '));
+                $this->early = null;
+                $this->wrongHub = ['kind' => 'city', 'code' => $code, 'for' => $place, 'section' => $inv?->whSection?->code ?? '—', 'color' => $inv?->whSection?->color,
+                    'trip' => \App\Models\TripCity::where('deliverylog_id', $trip->id)->pluck('city')->join(', ')];
+                $this->forceLoad = false;
+                $this->scanResult('warning', "Other city: {$code} is for {$place}. Trip {$trip->trip_number} goes to {$this->wrongHub['trip']}.", $inv);
+
+                return;
+            } elseif ($why) {
+                $this->scanResult('danger', $why, $this->invoicesMatching($code)->first());
+
+                return;
+            }
+        }
+
         if (! $tripinvoice) {
             $elsewhere = Tripinvoice::with(['deliverylog:id,trip_number', 'invdata'])
                 ->where('invoice', $code)
@@ -164,13 +202,13 @@ abstract class LoadTripPage extends Page
         $this->spot = null;
         $this->wrongHub = null;
         $this->setInfo = null;
-        if (! $this->forceLoad && ($wrong = $this->wrongHubFor($trip, $tripinvoice))) {
+        if (! $this->skips('wrong_hub', $trip->id, $tripinvoice->invoice_id) && ($wrong = $this->wrongHubFor($trip, $tripinvoice))) {
             $this->wrongHub = $wrong;
             $this->scanResult('warning', "Wrong hub: {$code} is for {$wrong['for']} (section {$wrong['section']}). This trip goes to {$wrong['trip']}.", $tripinvoice->invdata);
 
             return;
         }
-        if (! $this->forceLoad && ($early = LoadOrder::tooEarly($trip, $tripinvoice, static::$atHub))) {
+        if (! $this->skips('load_order', $trip->id, $tripinvoice->invoice_id) && ! $cityTrip && ($early = LoadOrder::tooEarly($trip, $tripinvoice, static::$atHub))) {
             $this->early = $early;
             $this->scanResult('warning', "Too early: {$code} is for stop {$early['stop']}".($early['place'] ? " ({$early['place']})" : '').'. It goes in later, nearer the door. Load stop '.$early['nextStop'].' first.', $tripinvoice->invdata);
 
@@ -205,6 +243,58 @@ abstract class LoadTripPage extends Page
             'trip' => $trip->destination?->hub_name ?? 'another hub'];
     }
 
+    /**
+     * Trip by city, every waiting box of its cities loaded, and room left: the best nearby city to top up with.
+     *
+     * @return array{room: int, key: string, city: string, province: string, boxes: int, days: int, section: ?string}|null
+     */
+    public function cityTopUp(): ?array
+    {
+        $trip = $this->selectedTrip();
+        if (! $trip || static::$atHub || $trip->is_lock || ! \App\Support\Trips\CityTrips::isCityTrip($trip)) {
+            return null;
+        }
+        $mine = \App\Models\TripCity::where('deliverylog_id', $trip->id)->get();
+        $keys = $mine->map(fn ($c) => \Illuminate\Support\Str::lower((string) $c->province).'|'.$c->city_key)->flip();
+        $ct = new \App\Support\Trips\CityTrips(Auth::user());
+        $places = $ct->places();
+        if ($places->contains(fn ($p) => isset($keys[$p['key']])) || ! Tripinvoice::where('deliverylog_id', $trip->id)->where('is_loaded', true)->exists()) {
+            return null; // still boxes of its own cities to load
+        }
+        $cap = \App\Support\Trips\TripSpace::capacity($trip) ?? \App\Support\TruckSpace::capacity($trip->truck);
+        $room = (int) floor($cap - \App\Support\Trips\TripSpace::used($trip));
+        if ($room < 5) {
+            return null;
+        }
+        $covered = $ct->covered();
+        $prov = \Illuminate\Support\Str::lower((string) $mine->first()?->province);
+        $best = $places->reject(fn ($p) => $p['unclear'] || isset($keys[$p['key']]) || isset($covered[$p['key']]) || $p['space'] > $room)
+            ->sortBy(fn ($p) => [\Illuminate\Support\Str::lower($p['province']) === $prov ? 0 : 1, -$p['days'], -$p['boxes']])->first();
+        if (! $best) {
+            return null;
+        }
+        $section = Invoice::where('is_verified', true)->where('is_assigned', false)->where('receiver_city', 'like', '%'.\Illuminate\Support\Str::before($best['city'], ' ').'%')
+            ->whereNotNull('wh_section_id')->with('whSection')->first()?->whSection?->code;
+
+        return ['room' => $room, 'key' => $best['key'], 'city' => $best['city'], 'province' => $best['province'], 'boxes' => $best['boxes'], 'days' => $best['days'], 'section' => $section,
+            'same' => \Illuminate\Support\Str::lower($best['province']) === $prov];
+    }
+
+    /** Add the suggested city: its boxes join when scanned. */
+    public function addTopUpCity(string $key): void
+    {
+        $trip = $this->selectedTrip();
+        $top = $this->cityTopUp();
+        if (! $trip || ! $top || $top['key'] !== $key) {
+            Notification::make()->title('That top-up is not possible any more.')->warning()->send();
+
+            return;
+        }
+        \App\Models\TripCity::create(['deliverylog_id' => $trip->id, 'province' => $top['province'], 'city' => $top['city'],
+            'city_key' => \Illuminate\Support\Str::after($key, '|'), 'planned_boxes' => $top['boxes']]);
+        Notification::make()->title($top['city'].' added to '.$trip->trip_number.': scan its '.$top['boxes'].' boxes'.($top['section'] ? ' (section '.$top['section'].')' : ''))->success()->send();
+    }
+
     /** Customers whose boxes are not all on the truck, for the Done screen. */
     public function openSets(): array
     {
@@ -223,6 +313,16 @@ abstract class LoadTripPage extends Page
         $ok = collect($this->openSets())->pluck('missing')->flatten(1)->contains('id', $invoiceId);
         if (! $ok) {
             return false;
+        }
+        $need = \App\Support\Trips\TripRules::need('split_set', Auth::user(), $trip->id, $invoiceId);
+        $ctx = ['trip_id' => $trip->id, 'trip_number' => $trip->trip_number, 'invoice_id' => $invoiceId, 'box' => Invoice::whereKey($invoiceId)->value('invoice'), 'data' => ['split' => $reason]];
+        if ($need === 'office') {
+            \App\Support\Trips\TripRules::ask('split_set', Auth::user(), SetSplit::REASONS[$reason], $ctx);
+
+            return true;
+        }
+        if ($need === 'reason' && ! SetSplit::where('invoice_id', $invoiceId)->where('deliverylog_id', $trip->id)->exists()) {
+            \App\Support\Trips\TripRules::record('split_set', Auth::user(), SetSplit::REASONS[$reason], $ctx);
         }
         $split = SetSplit::updateOrCreate(['invoice_id' => $invoiceId, 'deliverylog_id' => $trip->id],
             ['reason' => $reason, 'user_id' => Auth::id(), 'set_key' => Invoice::whereKey($invoiceId)->value('set_key')]);
@@ -247,15 +347,6 @@ abstract class LoadTripPage extends Page
         return $counts->sortDesc()->map(fn ($n, $uid) => ['name' => (int) $uid === Auth::id() ? 'You' : ($names[$uid] ?? '?'), 'n' => (int) $n, 'me' => (int) $uid === Auth::id()])->values()->all();
     }
 
-    /** After "too early" or "wrong hub": load that box anyway. */
-    public function loadAnyway(): void
-    {
-        if ($code = $this->early['code'] ?? $this->wrongHub['code'] ?? null) {
-            $this->forceLoad = true;
-            $this->scan($code);
-            $this->forceLoad = false;
-        }
-    }
 
     /** What to load next on the selected trip (null when the trip has no sorted stops). */
     public function loadNext(): ?array

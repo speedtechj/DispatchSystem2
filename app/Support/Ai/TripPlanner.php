@@ -87,6 +87,17 @@ class TripPlanner
                 $q->where('warehouse_id', $wh);
             }
             $boxes = $q->limit(3000)->get()->map(fn ($i) => ['id' => $i->id, 'inv' => $i]);
+            // Two warehouses: deliveries only of this warehouse's provinces (from boxes that are here);
+            // transfers only of boxes that another warehouse delivers.
+            $here = $this->warehouseOnly() ?? ($this->user->warehouse_id ?: null);
+            if ($here && $here > 0 && \App\Support\Warehouses\Coverage::active()) {
+                $boxes = $boxes->filter(function ($b) use ($here) {
+                    $home = \App\Support\Warehouses\Coverage::home($b['inv']);
+
+                    return $this->mode === 'transfer' ? $home && $home !== (int) $here
+                        : (int) $b['inv']->warehouse_id === (int) $here && (! $home || $home === (int) $here);
+                })->values();
+            }
         }
 
         $tried = DeliveryAttempt::whereIn('invoice_id', $boxes->map(fn ($b) => $b['inv']->id))->distinct()->pluck('invoice_id')->flip();
@@ -100,7 +111,7 @@ class TripPlanner
                 'name' => $clean($first->receiver_name),
                 'province' => $clean($first->receiver_province) ?: 'No province',
                 'city' => $clean($first->receiver_city) ?: 'No city',
-                'barangay' => $clean($first->receiver_barangay) ?: 'No barangay',
+                'barangay' => $clean(\App\Support\Maps\Barangays::of($first)) ?: 'No barangay',
                 'ids' => $g->pluck('id')->values()->all(),
                 'n' => $g->count(),
                 'space' => BoxSizes::half($g->sum(fn ($b) => BoxSizes::spaceOf($b['inv']->boxtype))),
@@ -130,8 +141,9 @@ class TripPlanner
     /** Free trucks of this hub (only trucks; drivers are not assigned). */
     public function trucks(): Collection
     {
-        return Truck::where('is_active', true)->where('is_assigned', false)
-            ->where('logistichub_id', $this->user->logistichub_id)->orderBy('plate_no')->get()
+        // Own trucks first; rental trucks only on days they are booked.
+        return \App\Support\Rentals::usable(Truck::where('is_active', true)->where('is_assigned', false)
+            ->where('logistichub_id', $this->user->logistichub_id))->get()->sortBy(fn ($t) => [$t->isRental() ? 1 : 0, $t->plate_no])->values()
             ->map(fn (Truck $t) => ['id' => $t->id, 'plate' => $t->plate_no, 'capacity' => \App\Support\TruckSpace::usable($t, self::DEFAULT_CAPACITY), 'set' => (bool) ($t->capacity ?: \App\Support\TruckSpace::fit($t)), 'kind' => $t->description ?: $t->category]);
     }
 
@@ -316,11 +328,22 @@ class TripPlanner
         ];
     }
 
+    /** Two warehouses: the warehouse most of the waiting transfer boxes belong to. */
+    protected function transferHome(): ?int
+    {
+        if (! \App\Support\Warehouses\Coverage::active()) {
+            return null;
+        }
+
+        return $this->units()->flatMap(fn ($u) => $u['ids'])->map(fn ($id) => \App\Support\Warehouses\Coverage::home(Invoice::find($id)))
+            ->filter()->countBy()->sortDesc()->keys()->first();
+    }
+
     public function defaultDest(): ?int
     {
         return match ($this->mode) {
             'delivery' => $this->user->logistichub_id,
-            'transfer' => $this->destinations()->first()['id'] ?? null,
+            'transfer' => $this->transferHome() ?? $this->destinations()->first()['id'] ?? null,
             default => null,
         };
     }

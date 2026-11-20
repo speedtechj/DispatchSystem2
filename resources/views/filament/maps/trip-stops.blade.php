@@ -58,6 +58,7 @@
                             <span class="ds-mp__who"><b>{{ $s->name }}</b> · {{ $s->barangay ? $s->barangay.', ' : '' }}{{ $s->city }}
                                 <span class="ds-mp__tags">
                                     @if ($s->priority)<em class="is-prio">priority</em>@endif
+                                    @if ($s->barangay_note ?? null)<em @class(['ds-mp__brgy', 'is-ai' => str_contains($s->barangay_note, 'not checked'), 'is-ok' => in_array($s->barangay_note, ['checked', 'Map', 'Same receiver', 'Driver GPS'], true)])>{{ $s->barangay_note === 'no barangay' ? 'no barangay · driver uses full address' : 'barangay: '.$s->barangay_note }}</em>@endif
                                     @if (! $s->hasPin())<em class="is-warn">no pin · barangay order</em>@elseif (! $s->exact)<em class="is-area">area only</em>@endif
                                 </span>
                             </span>

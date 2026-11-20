@@ -33,6 +33,7 @@
                         <b>{{ $title }}</b>
                         <small>{{ $text }}</small>
                         <em>{{ $who }}{{ $needsKey ? '' : ' · works without a key' }}</em>
+                        @if ($key === 'addresses' && class_exists(\App\Filament\Pages\AddressAi::class))<a href="{{ \App\Filament\Pages\AddressAi::getUrl() }}" class="ds-ad__more">Missing barangay, what it uses, try an address ›</a>@endif
                     </span>
                     <span class="ds-ai-set__use">
                         @php($u = $byFeature[$key] ?? null)

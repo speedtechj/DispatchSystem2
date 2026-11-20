@@ -61,6 +61,9 @@ class Geocoder
                 $looked++;
                 if ($hit) {
                     $place->fill(['lat' => $hit['lat'], 'lng' => $hit['lng'], 'exact' => $hit['exact'], 'status' => 'found', 'source' => $provider]);
+                    if (! empty($hit['barangay']) && \Illuminate\Support\Facades\Schema::hasColumn('geo_places', 'barangay')) {
+                        $place->barangay = Str::limit($hit['barangay'], 118, '');
+                    }
                 } else {
                     $place->fill(['status' => 'not_found', 'source' => $provider]);
                 }
@@ -98,6 +101,10 @@ class Geocoder
                 'lat' => (float) $hit['geometry']['location']['lat'], 'lng' => (float) $hit['geometry']['location']['lng'],
                 'exact' => in_array($hit['geometry']['location_type'] ?? '', ['ROOFTOP', 'RANGE_INTERPOLATED'], true) || ! ($hit['partial_match'] ?? false),
                 'label' => (string) ($hit['formatted_address'] ?? $text),
+                // the barangay as the map knows it (for Addresses to check)
+                'barangay' => collect(['sublocality_level_1', 'administrative_area_level_5', 'neighborhood', 'sublocality'])
+                    ->map(fn ($type) => collect($hit['address_components'] ?? [])->first(fn ($c) => in_array($type, $c['types'] ?? [], true))['long_name'] ?? null)
+                    ->filter()->first(),
             ];
         }
 
@@ -115,6 +122,7 @@ class Geocoder
                 'lat' => (float) $lat, 'lng' => (float) $lng,
                 'exact' => in_array($hit['properties']['layer'] ?? '', ['address', 'street', 'venue'], true),
                 'label' => (string) ($hit['properties']['label'] ?? $text),
+                'barangay' => $hit['properties']['neighbourhood'] ?? null,
             ];
         }
 

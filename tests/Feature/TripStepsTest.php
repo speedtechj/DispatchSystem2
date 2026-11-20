@@ -107,9 +107,9 @@ it('shows today\'s crew board with the warnings, and puts people on trucks', fun
 
     Livewire::test(\App\Filament\Pages\CrewBoard::class)
         ->assertSee($this->trip->truck->plate_no)->assertSee($this->trip->trip_number.' · Ready')
-        ->assertSee('nobody took it yet')->assertSee('Mark '.$this->sub->last_name.' has no truck')
+        ->assertSee('ready, nobody took it')->assertSeeInOrder(['Crew without a truck', $this->sub->full_name])
         ->call('addCrew', $this->trip->truck_id, $this->sub->id)
-        ->assertDontSee('has no truck');
+        ->assertSeeInOrder([$this->trip->truck->plate_no, $this->sub->full_name, 'Crew without a truck']);
     expect(Truckcrew::where('truck_id', $this->trip->truck_id)->pluck('crew')->sort()->values()->all())->toBe(collect([$this->driver->id, $this->sub->id])->sort()->values()->all())
         ->and(TripFlow::crew($this->trip)->pluck('user_id')->all())->toContain($this->sub->id); // the trip did not leave yet: it follows
 });
@@ -152,4 +152,41 @@ it('shows one trip on one page: steps, crew, warnings, next trip, and the office
 
     // The trip list opens the page.
     Livewire::test(ListDeliverylogs::class)->assertSee(\App\Filament\Pages\Trip::getUrl(['trip' => $next->id]), false);
+});
+
+it('lets the office pick the crew of a trip that has no truck yet, and keeps it when the truck is picked', function () {
+    $this->actingAs($this->admin);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $trip = Deliverylog::create(['truck_id' => null, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
+
+    Livewire::withQueryParams(['trip' => $trip->id])->test(\App\Filament\Pages\Trip::class)
+        ->assertSee('No truck and no crew yet')->assertActionVisible('tripCrew')
+        ->callAction('tripCrew', data: ['crew' => [$this->sub->id]]);
+    $trip->update(['truck_id' => \App\Models\Truck::where('id', '!=', $this->trip->truck_id)->value('id') ?? $this->trip->truck_id]);
+    expect(TripFlow::crew($trip->fresh())->pluck('user_id')->all())->toContain($this->sub->id);
+});
+
+it('leaves inactive people off trips and crew lists, and shows the crew member (not who added them) on the crew board', function () {
+    $this->actingAs($this->admin);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $this->sub->update(['is_crew' => true, 'is_active' => false]);
+    Truckcrew::create(['truck_id' => $this->trip->truck_id, 'crew' => $this->sub->id, 'user_id' => $this->admin->id]);
+
+    $trip = Deliverylog::create(['truck_id' => $this->trip->truck_id, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
+    expect(TripFlow::crew($trip)->pluck('user_id')->all())->toBe([$this->driver->id])
+        ->and(TripFlow::crewPeople(null)->pluck('id')->all())->not->toContain($this->sub->id);
+
+    Livewire::test(\App\Filament\Pages\CrewBoard::class)
+        ->assertSee($this->driver->full_name)->assertSee('1 inactive person still on a truck team')->assertSee('inactive but still on the team')
+        ->call('removeCrew', $this->trip->truck_id, $this->sub->id)->assertDontSee('inactive but still on the team');
+});
+
+it('counts people on an inactive truck as without a truck', function () {
+    $this->actingAs($this->admin);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $this->driver->update(['is_crew' => true]);
+    $this->trip->truck->update(['is_active' => false]);
+
+    Livewire::test(\App\Filament\Pages\CrewBoard::class)->assertSeeInOrder(['Crew without a truck', $this->driver->full_name])
+        ->assertDontSee($this->trip->truck->plate_no);
 });

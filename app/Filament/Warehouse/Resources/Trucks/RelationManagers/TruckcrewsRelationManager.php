@@ -34,6 +34,7 @@ class TruckcrewsRelationManager extends RelationManager
                     ->options(User::All()
                     ->where('is_assigned', false)
                     ->where('is_crew', true)
+                    ->where('is_active', true)
                     ->where('logistichub_id', Auth::user()->logistichub_id)
                     ->pluck('full_name', 'id'))
                     ->label('Crew')

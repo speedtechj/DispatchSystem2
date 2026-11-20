@@ -205,11 +205,19 @@ it('stops a box for another hub when loading, and lists customers missing boxes 
 
     $page = Livewire::test(ScanApp::class)->call('open', 'load')->call('pick', $trip->id)
         ->call('scan', 'S-101')->assertSet('status', 'warning')->assertSee('Wrong hub')->assertSee('is for Cebu hub')
-        ->call('loadAnyway')->assertSet('status', 'success')->assertSee('box 1 of 2')->assertSee('not on this trip');
+        // wrong hub is office only: the crew asks, the office approves, the next scan loads it
+        ->call('loadAnyway')->assertSee('office only')->call('askOffice')->assertSet('status', 'warning');
+    $ask = \App\Models\TripOverride::where('rule', 'wrong_hub')->sole();
+    expect($ask->status)->toBe('pending');
+    \App\Support\Trips\TripRules::decide($ask, true, null);
+    $page->call('dismiss')->call('scan', 'S-101')->assertSee('Too early')->call('loadAnyway')->assertSet('status', 'success')->assertSee('box 1 of 2')->assertSee('not on this trip');
     expect(\App\Models\Tripinvoice::where('invoice_id', $this->maria1->id)->value('loaded_by'))->toBe($this->user->id);
 
+    // splitting a customer is office only too: asked, then approved = the reason is saved
     $page->call('finish')->assertSee('missing boxes')->assertSee('Maria Santos')->assertSee('S-102')
         ->call('splitReason', $this->maria2->id, 'not_found');
+    expect(SetSplit::count())->toBe(0);
+    \App\Support\Trips\TripRules::decide(\App\Models\TripOverride::where('rule', 'split_set')->sole(), true, null);
     expect(SetSplit::sole())->reason->toBe('not_found')->deliverylog_id->toBe($trip->id);
 });
 

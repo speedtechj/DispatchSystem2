@@ -28,6 +28,20 @@ abstract class WarehouseTripScanPage extends Page
 
     abstract protected function tripOptionsQuery(): Builder;
 
+    use \App\Filament\Concerns\BypassesTripRules;
+
+    /** "Load it anyway" after "Not for this warehouse". */
+    public bool $forceLoad = false;
+
+    public ?array $wrongHub = null;
+
+    public ?array $early = null;
+
+    protected function tripKind(): string
+    {
+        return 'transfer';
+    }
+
     public function mount(): void
     {
         $this->form->fill();
@@ -90,6 +104,21 @@ abstract class WarehouseTripScanPage extends Page
 
             return;
         }
+
+        // Two warehouses: only boxes that the destination warehouse delivers go on its transfer.
+        $this->wrongHub = null;
+        $this->bypass = null;
+        if (! static::$unloading && ! $this->forceLoad && ! \App\Support\Trips\TripRules::isApproved('wrong_hub', $trip->id, $invoice->id)
+            && ($home = \App\Support\Warehouses\Coverage::home($invoice)) && (int) $home !== (int) $trip->warehouse_id) {
+            $dest = \App\Support\Warehouses\Coverage::name((int) $trip->warehouse_id);
+            $place = \Illuminate\Support\Str::title(trim($invoice->receiver_city.', '.$invoice->receiver_province, ', '));
+            $this->wrongHub = ['kind' => 'wh', 'code' => $code, 'for' => $place, 'section' => $invoice->whSection?->code ?? '—', 'color' => $invoice->whSection?->color,
+                'trip' => $dest, 'home' => \App\Support\Warehouses\Coverage::name($home)];
+            $this->scanResult('warning', "Not for {$dest}: {$code} is for {$place}, delivered from ".$this->wrongHub['home'].'.', $invoice);
+
+            return;
+        }
+        $this->forceLoad = false;
 
         if (static::$unloading && ! $row->is_loaded) {
             $this->scanResult('warning', "{$code} was never scanned onto the truck. Check with the loading warehouse.", $invoice);

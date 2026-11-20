@@ -224,6 +224,8 @@ class TripAssignment
         if ($pictures) {
             PhotoCheck::queueDelivery($tripinvoice, $pictures);
         }
+        // the driver's phone was at this receiver: their barangay and place are known for next time
+        \App\Support\Maps\Barangays::learnFromDelivery($tripinvoice->fresh());
     }
 
     /** How long a driver can undo their own delivery. After that only the office can. */

@@ -38,6 +38,15 @@ class AiWork extends Command
             $this->info("Photos checked: {$n}");
         }
 
+        // Missing barangay: queue boxes without one, then fill them in (same receiver, map, driver GPS, AI)
+        if (\App\Support\Maps\Barangays::ready() && \App\Support\Maps\Barangays::on('early')) {
+            \App\Support\Maps\Barangays::scan();
+            $b = \App\Support\Maps\Barangays::work(80, 30);
+            if ($b['done']) {
+                $this->info("Barangays filled in or sent to check: {$b['done']} (AI read {$b['ai']})");
+            }
+        }
+
         // Maps & routes: addresses still waiting to be found on the map
         $found = Geocoder::work(60);
         if ($found) {
