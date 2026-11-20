@@ -26,6 +26,7 @@ class TripRules
         'change_plan' => ['Change the AI plan', 'Switch off a trip or change its truck before Create', 'reason'],
         'load_order' => ['Load out of order', 'Too early for its stop', 'off'],
         'direct_hub' => ['Deliver direct instead of a hub', 'A hub’s boxes on our own trip, or the reverse', 'reason'],
+        'lock_ready' => ['Lock only when ready', 'All boxes loaded, truck here, lead man set', 'office'],
     ];
 
     public const LEVELS = ['off' => 'Off', 'reason' => 'Anyone with a reason', 'office' => 'Office only'];
@@ -132,6 +133,9 @@ class TripRules
     {
         $o->update(['status' => $yes ? 'approved' : 'refused', 'decided_by' => $by?->id, 'decided_at' => now()]);
         // an approved split is written as the reason the box stays behind
+        if ($yes && $o->rule === 'lock_ready' && $o->trip_id) {
+            \App\Models\Deliverylog::whereKey($o->trip_id)->first()?->update(['is_lock' => true]);
+        }
         if ($yes && $o->rule === 'split_set' && $o->invoice_id && $o->trip_id) {
             $key = $o->data['split'] ?? null;
             SetSplit::updateOrCreate(['invoice_id' => $o->invoice_id, 'deliverylog_id' => $o->trip_id],

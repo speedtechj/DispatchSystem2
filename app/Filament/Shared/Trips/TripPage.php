@@ -68,15 +68,35 @@ class TripPage extends Page
         }
 
         return [
+            // Lock the trip: only here, and only when ready (all boxes loaded, truck here, lead man set); see Trip rules
             Action::make('lock')
-                ->label('Lock trip · ready')
+                ->label(fn () => \App\Support\Trips\TripLock::isReady($trip) ? 'Lock trip' : 'Lock trip (not ready)')
+                ->color(fn () => \App\Support\Trips\TripLock::isReady($trip) ? 'primary' : 'gray')
                 ->icon(Heroicon::LockClosed)
                 ->visible(fn () => $trip->is_active && ! $trip->is_lock && in_array(TripFlow::stage($trip), ['planned', 'loading'], true))
                 ->requiresConfirmation()
-                ->modalDescription('The leadman sees "Trip ready" and takes the trip.')
-                ->action(function () use ($trip): void {
-                    $trip->update(['is_lock' => true]);
-                    Notification::make()->title('Trip '.$trip->trip_number.' is ready')->success()->send();
+                ->modalHeading('Lock trip '.$trip->trip_number)
+                ->modalDescription(function () use ($trip): string {
+                    if (\App\Support\Trips\TripLock::isReady($trip)) {
+                        return 'Every check is green. The leadman sees "Trip ready" and takes the trip; no more boxes join.';
+                    }
+                    $need = \App\Support\Trips\TripRules::need(\App\Support\Trips\TripLock::RULE, Auth::user());
+
+                    return 'Not ready: '.\App\Support\Trips\TripLock::missing($trip).'. '.match ($need) {
+                        'office' => 'Only the office can lock it now: this asks Admin or Super admin.',
+                        'reason' => 'Pick why you lock it anyway (saved in Overrides).',
+                        default => 'You can lock it anyway.',
+                    };
+                })
+                ->schema(fn () => ! \App\Support\Trips\TripLock::isReady($trip) && \App\Support\Trips\TripRules::need(\App\Support\Trips\TripLock::RULE, Auth::user()) === 'reason'
+                    ? [\Filament\Forms\Components\Select::make('reason')->label('Why')->options(array_combine(\App\Support\Trips\TripRules::reasons(), \App\Support\Trips\TripRules::reasons()))->required()]
+                    : [])
+                ->modalSubmitActionLabel(fn () => ! \App\Support\Trips\TripLock::isReady($trip) && \App\Support\Trips\TripRules::need(\App\Support\Trips\TripLock::RULE, Auth::user()) === 'office' ? 'Ask the office' : 'Lock trip')
+                ->action(function (array $data) use ($trip): void {
+                    $r = \App\Support\Trips\TripLock::lock($trip, Auth::user(), $data['reason'] ?? null);
+                    $r === 'office'
+                        ? Notification::make()->title('Asked the office to lock '.$trip->trip_number)->body('It locks when an admin approves (Overrides).')->warning()->send()
+                        : Notification::make()->title('Trip '.$trip->trip_number.' is locked')->body('The leadman sees "Trip ready".')->success()->send();
                 }),
             TripActions::crew()->record($trip),
             TripActions::release()->record($trip),
@@ -145,6 +165,8 @@ class TripPage extends Page
             },
             'took' => $trip->taken_at ? ($taker?->first_name ?? 'Crew').' · '.$trip->taken_at->format('g:i A').($trip->taken_boxes !== null ? ' · '.$trip->taken_boxes.' boxes' : '') : null,
             'crew' => TripFlow::crew($trip),
+            'lockChecks' => $trip->is_active && ! $trip->is_lock && in_array($stage, ['planned', 'loading'], true) ? \App\Support\Trips\TripLock::checks($trip) : null,
+            'autoLock' => \App\Support\Trips\TripLock::autoOnTake(),
             'warnings' => $warnings,
             'next' => $next,
             'nextBoxes' => $next ? TripFlow::boxes($next)->count() : 0,

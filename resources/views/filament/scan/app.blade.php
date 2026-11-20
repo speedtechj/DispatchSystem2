@@ -153,7 +153,7 @@
                     <b>✦ Room for {{ $cityTopUp['room'] }} more boxes</b>
                     <span>{{ $cityTopUp['same'] ? 'Same way' : 'Next province' }}: <b>{{ $cityTopUp['city'] }}, {{ $cityTopUp['province'] }}</b> · {{ $cityTopUp['boxes'] }} {{ Str::plural('box', $cityTopUp['boxes']) }}{{ $cityTopUp['days'] ? ', '.$cityTopUp['days'].' '.Str::plural('day', $cityTopUp['days']).' old' : '' }}.@if ($cityTopUp['section']) In section <b>{{ $cityTopUp['section'] }}</b>.@endif</span>
                     <button type="button" class="ds-sa__primary" wire:click="cityTopUpAdd(@js($cityTopUp['key']))">Scan them now</button>
-                    <button type="button" class="ds-sa__secondary" wire:click="cityTopUpSkip">No thanks, lock the trip</button>
+                    <button type="button" class="ds-sa__secondary" wire:click="cityTopUpSkip">No thanks</button>
                 </div>
             @endif
 

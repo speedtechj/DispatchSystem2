@@ -142,7 +142,7 @@ it('shows one trip on one page: steps, crew, warnings, next trip, and the office
         ->assertSee('is still on trip '.$this->trip->trip_number)->assertSee('Next trip · waits for the truck');
 
     Livewire::withQueryParams(['trip' => $this->trip->id])->test(\App\Filament\Pages\Trip::class)
-        ->callAction('lock')->callAction('tripCrew', data: ['crew' => [$this->sub->id], 'reason' => 'sick'])
+        ->callAction('lock', data: ['reason' => 'Customer called'])->callAction('tripCrew', data: ['crew' => [$this->sub->id], 'reason' => 'sick'])
         ->assertSee('instead of '.$this->driver->full_name);
     expect($this->trip->fresh()->is_lock)->toBeTrue()->and(TripFlow::stage($this->trip->fresh()))->toBe('ready');
 

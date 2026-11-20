@@ -63,16 +63,12 @@ class TripBoard extends Widget
         return $this->resource::getUrl('edit', ['record' => $tripId]);
     }
 
-    public function lockTrip(int $tripId): void
+    /** The Trip page of this panel (where a trip is locked), or the edit page. */
+    public function tripPageUrl(int $tripId): string
     {
-        $trip = $this->board()->find($tripId);
+        $page = collect(\Filament\Facades\Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => is_subclass_of($p, \App\Filament\Shared\Trips\TripPage::class));
 
-        if (! $trip || ! $this->canLock()) {
-            return;
-        }
-
-        $trip->update(['is_lock' => true]);
-        Notification::make()->title("Trip {$trip->trip_number} locked")->success()->send();
+        return $page ? $page::getUrl(['trip' => $tripId]) : $this->tripUrl($tripId);
     }
 
     public function releaseTruck(int $tripId): void

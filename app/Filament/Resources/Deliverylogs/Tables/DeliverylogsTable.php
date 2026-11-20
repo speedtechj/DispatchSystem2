@@ -240,9 +240,9 @@ class DeliverylogsTable
                         ->icon(function ($record) {
                             return $record->is_lock ? Heroicon::LockOpen : Heroicon::LockClosed;
                         })
+                        // locking is on the Trip page (when ready); here a super admin can only unlock
                         ->hidden(function ($record) {
-                            //  dd(Auth::user()->hasRole('super_admin'));
-                            return Auth::user()->hasRole('super_admin') ? false : true;
+                            return ! $record->is_lock || ! Auth::user()->hasRole('super_admin');
                         })
                         ->action(function ($record) {
                             $record->update([

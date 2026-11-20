@@ -21,6 +21,11 @@
                 <form wire:submit="addReason" class="ds-wc__form"><input type="text" wire:model="newReason" class="ds-te__input" placeholder="+ Add a reason"><button type="submit" class="ds-te__btn">Add</button></form>
             </section>
             <section class="ds-cb__card ds-ad__card">
+                <b class="ds-ad__h">Lock the trip</b>
+                <span class="ds-hs__switch"><span>Lock by itself when the lead man takes the trip</span><button type="button" role="switch" aria-checked="{{ $autoLock ? 'true' : 'false' }}" wire:click="toggleAutoLock" @class(['ds-hs__sw', 'is-on' => $autoLock])><i></i></button></span>
+                <span class="ds-te__hint">The office locks a trip on the Trip page. With this on, the trip also locks when the lead man taps “I take the trip” in the Driver app, if every check is green: all boxes loaded, truck here, lead man set.</span>
+            </section>
+            <section class="ds-cb__card ds-ad__card">
                 <b class="ds-ad__h">Who is “the office”</b>
                 <span class="ds-te__hint">Users who are <b>Admin</b> or <b>Super admin</b>. They get each request in the bell and approve it with one click in Overrides.</span>
             </section>

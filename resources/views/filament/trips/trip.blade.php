@@ -37,6 +37,16 @@
         @if ($rental)
             <span class="ds-tp__person"><i>R</i><span><b>{{ $rental['driver'] ?: 'Rental driver' }}</b><small>Rental driver · written on the trip for the records · our leadman rides along with the driver app</small></span></span>
         @endif
+        @if ($lockChecks)
+            @php($allOk = collect($lockChecks)->every('ok'))
+            <div @class(['ds-tp__lock', 'is-ok' => $allOk])>
+                <span class="ds-tp__lockhead"><b>🔒 Lock the trip</b><small>Only here, on the Trip page · the button at the top right</small></span>
+                @foreach ($lockChecks as $c)
+                    <span @class(['ds-tp__check', 'is-ok' => $c['ok']])><i>{{ $c['ok'] ? '✓' : '!' }}</i><span><b>{{ $c['title'] }}</b><small>{{ $c['sub'] }}</small></span></span>
+                @endforeach
+                <small>{{ $allOk ? 'All green: lock it now.' : 'Not ready yet.' }}{{ $autoLock ? ' It also locks by itself when the lead man takes the trip with every check green.' : '' }}</small>
+            </div>
+        @endif
         @foreach ($warnings as $w)
             <p @class(['ds-tp__warn', 'is-'.$w['tone']])>{{ $w['text'] }}</p>
         @endforeach

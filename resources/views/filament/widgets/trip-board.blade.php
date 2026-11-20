@@ -42,11 +42,10 @@
                                     wire:confirm="Release the truck and close trip {{ $item['trip']->trip_number }}?">
                                     Release truck
                                 </x-filament::button>
-                            @elseif ($item['action'] === 'lock' && $this->canLock())
-                                <x-filament::button size="sm" icon="heroicon-m-lock-closed"
-                                    wire:click="lockTrip({{ $item['trip']->id }})"
-                                    wire:confirm="Lock trip {{ $item['trip']->trip_number }}? Its boxes can no longer be changed.">
-                                    Lock trip
+                            @elseif ($item['action'] === 'lock')
+                                {{-- the trip is locked only on the Trip page, when ready --}}
+                                <x-filament::button size="sm" color="gray" outlined tag="a" icon="heroicon-m-lock-closed" :href="$this->tripPageUrl($item['trip']->id)">
+                                    Open to lock
                                 </x-filament::button>
                             @else
                                 <x-filament::button size="sm" color="gray" outlined tag="a" :href="$this->tripUrl($item['trip']->id)">

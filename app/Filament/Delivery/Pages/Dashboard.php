@@ -358,6 +358,15 @@ class Dashboard extends BaseDashboard
         if (! $trip || ! \App\Support\TripFlow::canTake($trip, Auth::user())) {
             return;
         }
+        // not locked yet: it locks by itself when every check is green (Trip rules); otherwise the office locks it
+        if (! $trip->is_lock) {
+            if (! \App\Support\Trips\TripLock::autoOnTake() || ! \App\Support\Trips\TripLock::isReady($trip)) {
+                Notification::make()->title('Trip not ready')->body('Not ready: '.\App\Support\Trips\TripLock::missing($trip).'. Call the office.')->warning()->send();
+
+                return;
+            }
+            \App\Support\Trips\TripLock::lock($trip, Auth::user());
+        }
         \App\Support\TripFlow::take($trip, Auth::user());
         Notification::make()->title('Trip '.$trip->trip_number.' is yours · '.$trip->fresh()->taken_boxes.' boxes')->body('Drive safe. Customers see you are on the way.')->success()->send();
     }
@@ -376,11 +385,13 @@ class Dashboard extends BaseDashboard
     }
 
     /** The card at the top of Today for the trip step (none while on the road). */
-    protected function stageCard(string $stage, array $p, bool $canTake): ?array
+    protected function stageCard(string $stage, array $p, bool $canTake, string $missing = ''): ?array
     {
         return [
             'planned' => ['Your next trip', 'Planned. You will see the boxes when the truck is loaded.'],
-            'loading' => ['Being loaded', $p['total'].' boxes on the trip so far. Wait for “Trip ready”.'],
+            'loading' => $canTake
+                ? ['Trip ready', 'Every box is loaded, the truck and crew are set. Tap when you take the trip: it locks by itself and you confirm '.$p['total'].' boxes.']
+                : ['Being loaded', $p['total'].' boxes on the trip so far.'.($missing ? ' Not ready: '.$missing.'.' : '').' Wait for “Trip ready”.'],
             'ready' => ['Trip ready', 'Check the truck. '.($canTake ? 'Tap when you take the trip: you confirm '.$p['total'].' boxes.' : 'The leadman takes the trip.')],
             'back' => ['Back at the hub', $p['left'] ? $p['left'].' not delivered: give them to the hub, they are scanned back with Return boxes. Then the trip closes by itself.' : 'The trip closes by itself.'],
         ][$stage] ?? null;
@@ -503,8 +514,9 @@ class Dashboard extends BaseDashboard
         return [
             'trip' => $trip->trip,
             'stage' => $stage,
-            'canTake' => $canTake = $stage === 'ready' && \App\Support\TripFlow::canTake($trip->trip, Auth::user()),
-            'stageCard' => $has && $stage ? $this->stageCard($stage, $trip->progress(), $canTake) : null,
+            'canTake' => $canTake = ($stage === 'ready' || ($stage === 'loading' && (\App\Support\Trips\TripLock::autoOnTake() && \App\Support\Trips\TripLock::isReady($trip->trip))))
+                && \App\Support\TripFlow::canTake($trip->trip, Auth::user()),
+            'stageCard' => $has && $stage ? $this->stageCard($stage, $trip->progress(), $canTake, $stage === 'loading' ? \App\Support\Trips\TripLock::missing($trip->trip) : '') : null,
             'nextTrip' => $has && \App\Support\TripFlow::queueReady() ? \App\Support\TripFlow::nextAfter($trip->trip) : null,
             'closedTrip' => $closedTrip = ! $has && Auth::user() ? \App\Support\TripFlow::justClosedFor(Auth::user()) : null,
             'closedDelivered' => $closedTrip ? \App\Support\TripFlow::boxes($closedTrip)->where('is_delivered', true)->count() : 0,

@@ -4648,3 +4648,12 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-ha__add .ds-te__btn { justify-self: start; }
 .ds-wc__towns .ds-wc__chips { justify-content: flex-start; }
 .ds-ph__truck.is-none { background: #eef1f4; color: #6b7b88; }
+.ds-tp__lock { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 14px; background: #f6f8fa; }
+.ds-tp__lock.is-ok { background: #eefaf4; box-shadow: inset 0 0 0 1px #bfe6d4; }
+.ds-tp__lockhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.ds-tp__lockhead small, .ds-tp__lock > small { color: #6b7b88; font-size: 12px; }
+.ds-tp__check { display: flex; gap: 10px; align-items: center; font-size: 14px; }
+.ds-tp__check i { width: 22px; height: 22px; border-radius: 50%; background: #fde8e8; color: #8a1f1f; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 12px; font-weight: 900; flex: none; }
+.ds-tp__check.is-ok i { background: #e6f6ef; color: #17895e; }
+.ds-tp__check > span { display: flex; flex-direction: column; }
+.ds-tp__check small { color: #6b7b88; font-size: 12px; }

@@ -35,6 +35,11 @@ class TripRulesPage extends Page
         TripRules::setLevel($rule, $level);
     }
 
+    public function toggleAutoLock(): void
+    {
+        \App\Support\Trips\TripLock::setAutoOnTake(! \App\Support\Trips\TripLock::autoOnTake());
+    }
+
     public function addReason(): void
     {
         if (trim($this->newReason) !== '') {
@@ -54,7 +59,7 @@ class TripRulesPage extends Page
     {
         return [
             'rules' => collect(TripRules::RULES)->map(fn ($r, $k) => ['key' => $k, 'title' => $r[0], 'sub' => $r[1], 'level' => TripRules::level($k)]),
-            'levels' => TripRules::LEVELS, 'reasons' => TripRules::reasons(),
+            'levels' => TripRules::LEVELS, 'reasons' => TripRules::reasons(), 'autoLock' => \App\Support\Trips\TripLock::autoOnTake(),
         ];
     }
 }
