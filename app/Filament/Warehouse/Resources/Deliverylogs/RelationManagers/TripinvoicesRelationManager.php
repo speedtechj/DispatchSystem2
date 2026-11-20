@@ -64,6 +64,8 @@ class TripinvoicesRelationManager extends RelationManager
     {
         return $table
             ->modifyQueryUsing(fn (Builder $query) => $query->withCount(['deliveryAttempts', 'deliveryReversals'])->with([...DeliveryAttemptColumns::eagerLoad(), 'invdata.consolidator:id,code,company_name', 'invdata.routearea', 'invdata.container', 'invoiceissue.boxissue', 'deliverylog']))
+            // speed: the group checkbox uses the boxes on this page (no query per receiver)
+            ->selectCurrentPageOnly()
             ->defaultGroup('invdata.receiver_name')
             ->groups([
                 Group::make('invdata.receiver_name')
@@ -137,8 +139,7 @@ class TripinvoicesRelationManager extends RelationManager
                     //        ->toggleable(isToggledHiddenByDefault: true)
                     ->label('Barangay'),
                 TextColumn::make('invdata.boxtype')
-                    ->label('Box Type')
-                    ->summarize(Count::make()->label('Total')),
+                    ->label('Box Type'),
                 // TextColumn::make('invoice.routearea.description')
                 //     ->label('Route Area'),
                 IconColumn::make('is_loaded')

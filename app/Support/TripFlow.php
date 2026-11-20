@@ -3,8 +3,9 @@
 namespace App\Support;
 
 use App\Models\Deliverylog;
-use App\Models\Tripinvoice;
 use App\Models\TripCrew;
+use App\Models\Tripinvoice;
+use App\Models\Truck;
 use App\Models\Truckcrew;
 use App\Models\User;
 use App\Services\TripAssignment;
@@ -72,13 +73,27 @@ class TripFlow
             ->when(static::queueReady(), fn ($q) => static::notWaiting($q))->oldest('id')->first() : null;
     }
 
+    /** Trips loaded once for a whole list (speed): [app id, id => trip]. Set by known(). */
+    protected static array $known = [null, [], []];
+
+    /** Remember these trips' "waits for" trips for this request, so stage() needs no query per row. */
+    public static function known(iterable $trips): void
+    {
+        $ids = collect($trips)->pluck('waits_for')->filter()->unique()->values()->all();
+        $tripIds = collect($trips)->pluck('id')->all();
+        static::$known = [spl_object_id(app()), $ids && static::queueReady() ? Deliverylog::whereIn('id', $ids)->get()->keyBy('id')->all() : [],
+            // trip id => has a loaded box (for stage(): loading)
+            array_fill_keys(Tripinvoice::whereIn('deliverylog_id', $tripIds)->where('is_loaded', true)->distinct()->pluck('deliverylog_id')->all(), true) + array_fill_keys($tripIds, false)];
+    }
+
     /** This trip waits for the truck's current trip to close. */
     public static function waitsFor(Deliverylog $trip): ?Deliverylog
     {
         if (! static::queueReady() || ! $trip->waits_for) {
             return null;
         }
-        $before = Deliverylog::find($trip->waits_for);
+        $before = static::$known[0] === spl_object_id(app()) && isset(static::$known[1][$trip->waits_for])
+            ? static::$known[1][$trip->waits_for] : Deliverylog::find($trip->waits_for);
 
         return $before && $before->is_active ? $before : null;
     }
@@ -93,7 +108,7 @@ class TripFlow
     public static function truckOptions(?int $hubId, ?int $tripId = null): array
     {
         // Own trucks, and rental trucks booked today (own first).
-        $trucks = \App\Support\Rentals::usable(\App\Models\Truck::query()->where('is_active', 1)->when($hubId, fn ($q) => $q->where('logistichub_id', $hubId)))
+        $trucks = Rentals::usable(Truck::query()->where('is_active', 1)->when($hubId, fn ($q) => $q->where('logistichub_id', $hubId)))
             ->get()->sortBy(fn ($t) => [$t->isRental() ? 1 : 0, $t->plate_no])->values();
 
         return $trucks->mapWithKeys(function ($t) use ($tripId) {
@@ -102,7 +117,7 @@ class TripFlow
                 return [];
             }
 
-            return [$t->id => $t->plate_no.($t->isRental() ? ' · rental, '.(\App\Support\Rentals::rateText($t) ?: 'booked today') : '').($on ? ' · on '.$on->trip_number.' (this trip waits for it)' : '')];
+            return [$t->id => $t->plate_no.($t->isRental() ? ' · rental, '.(Rentals::rateText($t) ?: 'booked today') : '').($on ? ' · on '.$on->trip_number.' (this trip waits for it)' : '')];
         })->all();
     }
 
@@ -125,7 +140,8 @@ class TripFlow
         if ($trip->is_lock) {
             return 'ready';
         }
-        if ($trip->is_current || Tripinvoice::where('deliverylog_id', $trip->id)->where('is_loaded', true)->exists()) {
+        $known = static::$known[0] === spl_object_id(app()) && array_key_exists($trip->id, static::$known[2]) ? static::$known[2][$trip->id] : null;
+        if ($trip->is_current || ($known ?? Tripinvoice::where('deliverylog_id', $trip->id)->where('is_loaded', true)->exists())) {
             return 'loading';
         }
 

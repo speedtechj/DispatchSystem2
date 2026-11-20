@@ -14,7 +14,9 @@ use Filament\Forms\Components\ToggleButtons;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Tables\Columns\ViewColumn;
 use Filament\Tables\Filters\Filter;
+use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -34,6 +36,47 @@ class TripList
         'manual' => ['✎ By hand', 'manual'],
     ];
 
+    /** Rows loaded once for the whole page by prime(): trip id => cities, cities from boxes, crew. */
+    protected static array $primed = ['app' => null, 'cities' => [], 'boxCities' => [], 'crew' => []];
+
+    protected static function primed(string $kind, int $id)
+    {
+        return static::$primed['app'] === spl_object_id(app()) ? (static::$primed[$kind][$id] ?? null) : null;
+    }
+
+    /** Load what every row needs in a few queries instead of several per trip (speed). */
+    public static function prime(iterable $trips): void
+    {
+        $trips = collect($trips instanceof Paginator ? $trips->items() : $trips)->filter(fn ($t) => $t instanceof Model);
+        if ($trips->isEmpty()) {
+            return;
+        }
+        (new Collection($trips->all()))->loadMissing(['truck', 'user', 'destination']);
+        $ids = $trips->pluck('id')->all();
+        TripFlow::known($trips);
+        static::$primed = ['app' => spl_object_id(app()), 'cities' => [], 'boxCities' => [], 'crew' => []];
+        $cities = TripCity::whereIn('deliverylog_id', $ids)->get()->groupBy('deliverylog_id');
+        $crew = TripCrew::with('user.workposition')->whereIn('deliverylog_id', $ids)->get()->groupBy('deliverylog_id');
+        $noCities = array_values(array_diff($ids, $cities->keys()->all()));
+        $box = collect();
+        if ($noCities) {
+            $sel = fn (string $col) => DB::table('tripinvoices')->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
+                ->whereIn('tripinvoices.'.$col, $noCities)->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
+                ->select('tripinvoices.'.$col.' as trip', 'invoices.receiver_province as province', 'invoices.receiver_city as city')->distinct()->get();
+            $box = $sel('deliverylog_id')->concat($sel('deliveryloghub_id'))->groupBy('trip');
+        }
+        foreach ($ids as $id) {
+            static::$primed['cities'][$id] = $cities->get($id, collect());
+            static::$primed['crew'][$id] = $crew->get($id, collect());
+            static::$primed['boxCities'][$id] = $box->get($id, collect())->unique(fn ($r) => $r->province.'|'.$r->city)->take(6)->values();
+        }
+    }
+
+    protected static function citiesOf(Model $trip)
+    {
+        return static::primed('cities', $trip->id) ?? TripCity::where('deliverylog_id', $trip->id)->get();
+    }
+
     protected static function hasMade(): bool
     {
         static $has = null;
@@ -49,7 +92,7 @@ class TripList
             return $m;
         }
 
-        return TripCity::where('deliverylog_id', $trip->id)->exists() ? 'plan' : 'manual';
+        return static::citiesOf($trip)->isNotEmpty() ? 'plan' : 'manual';
     }
 
     public static function isHubTrip(Model $trip): bool
@@ -60,9 +103,9 @@ class TripList
     /** @return array{to: string, cities: string, dot: string} */
     public static function goes(Model $trip): array
     {
-        $cities = TripCity::where('deliverylog_id', $trip->id)->get();
+        $cities = static::citiesOf($trip);
         if ($cities->isEmpty()) {
-            $rows = DB::table('tripinvoices')->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
+            $rows = static::primed('boxCities', $trip->id) ?? DB::table('tripinvoices')->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
                 ->where(fn ($q) => $q->where('tripinvoices.deliverylog_id', $trip->id)->orWhere('tripinvoices.deliveryloghub_id', $trip->id))
                 ->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
                 ->select('invoices.receiver_province as province', 'invoices.receiver_city as city')->distinct()->limit(6)->get();
@@ -84,7 +127,7 @@ class TripList
 
     public static function crew(Model $trip)
     {
-        return TripCrew::with('user.workposition')->where('deliverylog_id', $trip->id)->get()->sortBy(fn ($c) => TripFlow::isLead($c) ? 0 : 1)->values();
+        return (static::primed('crew', $trip->id) ?? TripCrew::with('user.workposition')->where('deliverylog_id', $trip->id)->get())->sortBy(fn ($c) => TripFlow::isLead($c) ? 0 : 1)->values();
     }
 
     /** @return array{label: string, tone: string, when: string} */

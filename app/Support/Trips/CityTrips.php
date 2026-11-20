@@ -4,19 +4,23 @@ namespace App\Support\Trips;
 
 use App\Models\Deliverylog;
 use App\Models\Invoice;
-use App\Models\Truck;
+use App\Models\Logistichub;
 use App\Models\TripCity;
 use App\Models\Tripinvoice;
+use App\Models\Truck;
+use App\Models\Truckcrew;
 use App\Models\User;
 use App\Services\TripAssignment;
 use App\Support\Ai\Ai;
 use App\Support\Ai\AiUnavailable;
 use App\Support\Ai\TripPlanner;
-use App\Support\BoxSizes;
+use App\Support\Hubs\HubAreas;
 use App\Support\Maps\Barangays;
 use App\Support\Rentals;
 use App\Support\TripFlow;
 use App\Support\TruckSpace;
+use App\Support\Warehouses\Coverage;
+use Filament\Facades\Filament;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -141,7 +145,7 @@ class CityTrips
             return collect();
         }
         $units = $this->planner()->units()->map(fn ($u) => $u + ['hub' => null])->reject(fn ($u) => $this->isDirect($u));
-        $names = \App\Models\Logistichub::whereIn('id', $units->pluck('hub')->unique())->pluck('hub_name', 'id');
+        $names = Logistichub::whereIn('id', $units->pluck('hub')->unique())->pluck('hub_name', 'id');
 
         return $units->groupBy('hub')->map(function ($g, $hub) use ($names) {
             $cities = $g->groupBy(fn ($u) => Str::lower($u['province']).'|'.Barangays::cityKey($u['city']))->map(fn ($c, $k) => [
@@ -157,13 +161,13 @@ class CityTrips
     /** Boxes for a hub still on the way (in containers not unloaded yet), for "wait for the next container". */
     public function comingFor(int $hubId): int
     {
-        $map = \App\Support\Hubs\HubAreas::map();
+        $map = HubAreas::map();
         if (! in_array($hubId, $map, true)) {
             return 0;
         }
 
         return Invoice::query()->where('is_verified', false)->where('is_delivered', false)->where('created_at', '>=', now()->subDays(60))->limit(3000)->get()
-            ->filter(fn ($i) => \App\Support\Hubs\HubAreas::hubOf($i, $map) === $hubId)->count();
+            ->filter(fn ($i) => HubAreas::hubOf($i, $map) === $hubId)->count();
     }
 
     /**
@@ -349,8 +353,10 @@ class CityTrips
     {
         $all = Truck::where('logistichub_id', $this->user->logistichub_id)->orderBy('plate_no')->get();
         $usable = Rentals::usable(Truck::where('logistichub_id', $this->user->logistichub_id)->where('is_active', true))->pluck('id')->flip();
+        // speed: every truck's crew in one query
+        $crews = Truckcrew::with('member')->whereIn('truck_id', $all->pluck('id'))->get()->groupBy('truck_id');
 
-        return $all->map(function (Truck $t) use ($usable) {
+        return $all->map(function (Truck $t) use ($usable, $crews) {
             $on = $t->is_assigned ? TripFlow::runningOn($t->id) : null;
             $state = match (true) {
                 ! $t->is_active => 'off',
@@ -360,7 +366,7 @@ class CityTrips
                 default => 'free',
             };
             $sub = match ($state) {
-                'free' => collect(\App\Models\Truckcrew::with('member')->where('truck_id', $t->id)->get())->map(fn ($c) => $c->member?->first_name)->filter()->join(' · ') ?: 'No crew yet',
+                'free' => collect($crews->get($t->id, []))->map(fn ($c) => $c->member?->first_name)->filter()->join(' · ') ?: 'No crew yet',
                 'busy' => $on ? 'On '.$on->trip_number.' · '.TripFlow::label($on) : 'On a trip',
                 default => $t->is_active ? 'Rental, not booked today' : 'Inactive',
             };
@@ -368,7 +374,9 @@ class CityTrips
             $stage = $on ? TripFlow::stage($on) : null;
 
             return ['id' => $t->id, 'plate' => $t->plate_no, 'state' => $state, 'sub' => $sub,
-                'label' => match (true) { $state === 'free' => 'Free now', $state === 'off' => 'Off', $stage === 'road' => 'Out', $stage === 'back' => 'Coming back', default => 'On a trip' }, 'on' => $on?->trip_number, 'onId' => $on?->id,
+                'label' => match (true) {
+                    $state === 'free' => 'Free now', $state === 'off' => 'Off', $stage === 'road' => 'Out', $stage === 'back' => 'Coming back', default => 'On a trip'
+                }, 'on' => $on?->trip_number, 'onId' => $on?->id,
                 'capacity' => TruckSpace::usable($t, self::DEFAULT_CAPACITY), 'rental' => $t->isRental()];
         })->sortBy(fn ($t) => [['free' => 0, 'busy' => 1, 'off' => 2][$t['state']], $t['rental'] ? 1 : 0, $t['plate']])->values();
     }
@@ -443,7 +451,7 @@ class CityTrips
 
                         continue;
                     }
-                    if ($trip['load'] + $c['space'] <= $cap) {
+                    if ($cap >= $trip['load'] + $c['space']) {
                         $trip['cities'][] = ['city' => $c['city'], 'key' => $c['key'], 'boxes' => $c['boxes'], 'space' => $c['space'], 'via' => $c['via'] ?? []];
                         $trip['load'] += $c['space'];
                         $trip['days'] = max($trip['days'], $c['days']);
@@ -528,7 +536,7 @@ class CityTrips
                     'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
                     'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $this->user->logistichub_id, 'user_id' => $this->user->id,
                     'plan_why' => Str::limit((string) ($t['why'] ?? ''), 295), 'plan_space' => (int) $t['load'],
-                ] + (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []) + $this->madeFields($t));
+                ] + (Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []) + $this->madeFields($t));
                 foreach ($t['cities'] as $c) {
                     TripCity::create(['deliverylog_id' => $trip->id, 'province' => $t['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'), 'planned_boxes' => (int) $c['boxes']]);
                     // a hub's boxes of this city delivered direct instead
@@ -644,7 +652,7 @@ class CityTrips
         // same city name in two provinces: the province must match too (a city saved without a province takes only boxes without one)
         $sameCity = $cities->filter(fn ($c) => $c->city_key === $key && Str::lower(Str::squish((string) $c->province)) === Str::lower(Str::squish((string) $inv->receiver_province)));
         $hasHub = Schema::hasColumn('trip_cities', 'hub_id');
-        $boxHub = $hasHub ? \App\Support\Hubs\HubAreas::hubOf($inv) : null;
+        $boxHub = $hasHub ? HubAreas::hubOf($inv) : null;
         $match = $hasHub ? $sameCity->first(fn ($c) => (int) $c->hub_id === (int) $boxHub) : $sameCity->first();
         if (! $match && $hasHub && ! $forceHub) {
             $toHubTrip = $cities->every(fn ($c) => $c->hub_id && $trip->assigned_to && (int) $trip->assigned_to !== (int) $trip->logistichub_id);
@@ -672,7 +680,7 @@ class CityTrips
         }
         $wh = $this->user->warehouse_id;
         $rows = Invoice::where('is_assigned', false)->where('is_delivered', false)->where('verified_at', '>=', today())
-            ->when($wh && \Filament\Facades\Filament::getCurrentPanel()?->getId() === 'warehouse', fn ($q) => $q->where('warehouse_id', $wh))
+            ->when($wh && Filament::getCurrentPanel()?->getId() === 'warehouse', fn ($q) => $q->where('warehouse_id', $wh))
             ->with('container:id,container_no')->get(['id', 'container_id', 'receiver_province', 'receiver_city', 'wh_section_id', 'warehouse_id']);
         if ($rows->isEmpty()) {
             return ['container' => null, 'rows' => []];
@@ -686,8 +694,8 @@ class CityTrips
         $here = $this->user->warehouse_id;
         foreach ($byProv->take(2) as $prov => $g) {
             $plate = $g->map(fn ($r) => $loading[Str::lower(Str::squish((string) $r->receiver_province)).'|'.Barangays::cityKey($r->receiver_city)] ?? null)->filter()->first();
-            $to = $here ? \App\Support\Warehouses\Coverage::transferTo($g->first(), $here) : null;
-            $out[] = [$prov.' · '.$g->count().' '.Str::plural('box', $g->count()), $to ? 'Transfer → '.\App\Support\Warehouses\Coverage::name($to) : ($plate ? $plate.' is here → straight on' : 'Sections'), (bool) $plate];
+            $to = $here ? Coverage::transferTo($g->first(), $here) : null;
+            $out[] = [$prov.' · '.$g->count().' '.Str::plural('box', $g->count()), $to ? 'Transfer → '.Coverage::name($to) : ($plate ? $plate.' is here → straight on' : 'Sections'), (bool) $plate];
         }
         if ($byProv->count() > 2) {
             $n = $byProv->slice(2)->sum(fn ($g) => $g->count());

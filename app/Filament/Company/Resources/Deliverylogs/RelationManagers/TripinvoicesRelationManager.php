@@ -58,8 +58,10 @@ class TripinvoicesRelationManager extends RelationManager
     public function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->withCount(['deliveryAttempts', 'deliveryReversals'])->with(DeliveryAttemptColumns::eagerLoad()))
+            ->modifyQueryUsing(fn (Builder $query) => $query->withCount(['deliveryAttempts', 'deliveryReversals'])->with([...DeliveryAttemptColumns::eagerLoad(), 'deliverylog', 'hubTrip', 'invdata.consolidator:id,code,company_name', 'invdata.routearea']))
             //  ->poll('5s')
+            // speed: the group checkbox uses the boxes on this page (no query per receiver)
+            ->selectCurrentPageOnly()
             ->defaultGroup('invdata.receiver_name')
             ->groups([
                 Group::make('invdata.receiver_name')
@@ -98,7 +100,7 @@ class TripinvoicesRelationManager extends RelationManager
                 TextColumn::make('deliveryloghub_id')
                     ->label('Trip Number')
                     ->getStateUsing(function ($record) {
-                        return Deliverylog::find($record->deliveryloghub_id)->trip_number;
+                        return $record->hubTrip?->trip_number; // eager-loaded (was one query per box)
                     })
                     ->searchable(),
                 TextColumn::make('invdata.invoice')
@@ -124,8 +126,7 @@ class TripinvoicesRelationManager extends RelationManager
                 TextColumn::make('invdata.receiver_barangay')
                     ->label('Barangay'),
                 TextColumn::make('invdata.boxtype')
-                    ->label('Box Type')
-                    ->summarize(Count::make()->label('Total')),
+                    ->label('Box Type'),
                 TextColumn::make('invdata.routearea.description')
                     ->label('Route Area'),
                 IconColumn::make('is_loaded_hub')

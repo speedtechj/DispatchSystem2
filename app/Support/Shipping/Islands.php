@@ -47,6 +47,17 @@ class Islands
     /** @return array{island: string, from: string} */
     public static function suggest(Logistichub $hub): array
     {
+        // speed: asked for every trip row; one answer per hub per request
+        static $memo = [null, []];
+        if ($memo[0] !== spl_object_id(app())) {
+            $memo = [spl_object_id(app()), []];
+        }
+
+        return $memo[1][$hub->id.'|'.$hub->hub_name] ??= static::suggestNow($hub);
+    }
+
+    protected static function suggestNow(Logistichub $hub): array
+    {
         if (Sections::ready()) {
             $prov = WhSection::where('logistichub_id', $hub->id)->get()->flatMap(fn ($s) => (array) $s->provinces)->filter();
             if ($prov->isNotEmpty()) {
