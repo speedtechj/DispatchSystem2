@@ -3,9 +3,10 @@
 namespace App\Filament\Company\Resources\Deliverylogs\RelationManagers;
 
 use App\Filament\Actions\BulkPrintReceipts;
+use App\Filament\Company\Pages\Routeinvoice;
 use App\Filament\Exports\TripinvoiceExporter;
-use App\Filament\Pages\Routeinvoice;
 use App\Filament\Tables\DeliveryAttemptColumns;
+use App\Filament\Tables\TripBoxes;
 use App\Filament\Tables\TruckSpotColumn;
 use App\Models\Consolidator;
 use App\Models\Deliverylog;
@@ -35,6 +36,14 @@ use Illuminate\Database\Eloquent\Model;
 class TripinvoicesRelationManager extends RelationManager
 {
     protected static string $relationship = 'tripinvoices';
+
+    protected static ?string $title = TripBoxes::TITLE;
+
+    /** All / Loaded / Not loaded / Delivered / Problems (board 44b). */
+    public function getTabs(): array
+    {
+        return TripBoxes::tabs('is_loaded_hub', fn () => Tripinvoice::query()->where('deliveryloghub_id', $this->ownerRecord->id));
+    }
 
     public function form(Schema $schema): Schema
     {
@@ -155,6 +164,7 @@ class TripinvoicesRelationManager extends RelationManager
             ])->deferFilters(false)
             ->headerActions([
                 Action::make('Assign Invoice')
+                    ->label('+ Assign invoice')->color('warning')
                     ->url(fn ($livewire) => Routeinvoice::getUrl(['ownerRecord' => $livewire->ownerRecord->getKey()])),
                 ExportAction::make()
                     ->label('Export')
@@ -199,6 +209,8 @@ class TripinvoicesRelationManager extends RelationManager
             ], position: RecordActionsPosition::BeforeColumns)
             ->toolbarActions([
                 BulkPrintReceipts::make(),
+                TripBoxes::priority(true),
+                TripBoxes::priority(false),
                 BulkActionGroup::make([
                     BulkAction::make('delete')
                         ->label('Remove ')

@@ -3,18 +3,26 @@
 namespace App\Filament\Company\Resources\Deliverylogs\Pages;
 
 use App\Filament\Company\Resources\Deliverylogs\DeliverylogResource;
+use App\Filament\Shared\Trips\EditsTrip;
 use Filament\Actions\DeleteAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
 
 class EditDeliverylog extends EditRecord
 {
+    use EditsTrip;
+
+    protected function isHubTrip(): bool
+    {
+        return true;
+    }
+
     protected static string $resource = DeliverylogResource::class;
 
-    protected function getHeaderActions(): array
+    protected function extraHeaderActions(): array
     {
         return [
-            DeleteAction::make()
+            DeleteAction::make()->label('Delete trip')
                 ->before(function (DeleteAction $action): void {
                     $trip = $this->record;
 
@@ -31,10 +39,8 @@ class EditDeliverylog extends EditRecord
         ];
     }
 
-    public function getTitle(): string
+    protected function getRedirectUrl(): string
     {
-
-        return 'Edit'.' '.$this->record->trip_number;
-
+        return $this->getResource()::getUrl('index');
     }
 }

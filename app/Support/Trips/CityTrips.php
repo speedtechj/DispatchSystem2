@@ -68,6 +68,25 @@ class CityTrips
         return $this->placesMemo ??= $this->freshPlaces();
     }
 
+    /** How these trips are made (Delivery trips › Made by): ['ai' => bool, 'instruction' => what was typed, 'reason' => why the plan was changed]. */
+    public array $made = [];
+
+    /** made_by / made_note of one planned trip. */
+    protected function madeFields(array $t, string $default = 'plan'): array
+    {
+        if (! Schema::hasColumn('deliverylogs', 'made_by')) {
+            return [];
+        }
+        if (! empty($t['changed'])) {
+            return ['made_by' => 'changed', 'made_note' => Str::limit(trim(($t['changedNote'] ?? 'changed').(! empty($this->made['reason']) ? '. Reason: '.$this->made['reason'] : '')), 295, '')];
+        }
+        if (! empty($this->made['ai']) && filled($this->made['instruction'] ?? null)) {
+            return ['made_by' => 'ai', 'made_note' => Str::limit((string) $this->made['instruction'], 295, '')];
+        }
+
+        return ['made_by' => $default, 'made_note' => null];
+    }
+
     /** Cities of a hub's area delivered direct instead (keys "hubId|province|city"), set by Plan trips. */
     public array $direct = [];
 
@@ -241,7 +260,7 @@ class CityTrips
                     'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
                     'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $hubId, 'user_id' => $this->user->id,
                     'plan_why' => Str::limit((string) $why, 295), 'plan_space' => (int) $t['load'],
-                ]);
+                ] + $this->madeFields([]));
                 foreach (collect($t['cities'])->unique('key') as $c) {
                     TripCity::create(['deliverylog_id' => $trip->id, 'province' => $c['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'),
                         'planned_boxes' => (int) $c['boxes'], 'hub_id' => $hubId]);
@@ -509,7 +528,7 @@ class CityTrips
                     'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
                     'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $this->user->logistichub_id, 'user_id' => $this->user->id,
                     'plan_why' => Str::limit((string) ($t['why'] ?? ''), 295), 'plan_space' => (int) $t['load'],
-                ] + (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []));
+                ] + (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []) + $this->madeFields($t));
                 foreach ($t['cities'] as $c) {
                     TripCity::create(['deliverylog_id' => $trip->id, 'province' => $t['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'), 'planned_boxes' => (int) $c['boxes']]);
                     // a hub's boxes of this city delivered direct instead
@@ -548,7 +567,7 @@ class CityTrips
                     'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
                     'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $this->user->logistichub_id, 'user_id' => $this->user->id,
                     'plan_why' => Str::limit((string) ($t['why'] ?? ''), 295), 'plan_space' => (int) $t['load'],
-                ] + (Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []));
+                ] + (Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []) + $this->madeFields($t));
                 foreach ($t['cities'] as $c) {
                     TripCity::create(['deliverylog_id' => $trip->id, 'province' => $t['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'), 'planned_boxes' => (int) $c['boxes']]);
                 }

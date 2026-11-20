@@ -421,7 +421,7 @@ class TripPlanner
                         'logistichub_id' => $this->user->logistichub_id,
                         'assigned_to' => $this->mode === 'hub' ? $this->user->logistichub_id : ($t['dest'] ?: $this->user->logistichub_id),
                         'user_id' => $this->user->id,
-                    ]);
+                    ] + (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'made_by') ? ['made_by' => 'plan', 'made_note' => 'Old AI trip helper'] : []));
                     $truck->update(['is_assigned' => true]);
                     $added = $this->mode === 'hub'
                         ? $service->addToHubTrip($trip, Tripinvoice::whereKey($ids)->get())

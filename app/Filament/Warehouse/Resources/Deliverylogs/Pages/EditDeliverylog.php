@@ -2,6 +2,7 @@
 
 namespace App\Filament\Warehouse\Resources\Deliverylogs\Pages;
 
+use App\Filament\Shared\Trips\EditsTrip;
 use App\Filament\Warehouse\Resources\Deliverylogs\DeliverylogResource;
 use App\Models\Tripinvoice;
 use App\Services\TripAssignment;
@@ -10,15 +11,12 @@ use Illuminate\Support\Facades\DB;
 
 class EditDeliverylog extends EditRecord
 {
+    use EditsTrip;
+
     protected static string $resource = DeliverylogResource::class;
 
     /** Truck on the trip before this save, so we only swap when it actually changed. */
     protected ?int $previousTruckId = null;
-
-    public function getTitle(): string
-    {
-        return 'Trip '.$this->record->trip_number;
-    }
 
     protected function getRedirectUrl(): string
     {

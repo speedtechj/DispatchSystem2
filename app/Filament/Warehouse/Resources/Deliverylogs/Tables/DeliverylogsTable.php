@@ -2,11 +2,20 @@
 
 namespace App\Filament\Warehouse\Resources\Deliverylogs\Tables;
 
+use App\Filament\Shared\Trips\TripActions;
 use App\Filament\Tables\TripBoardColumns;
-use App\Filament\Warehouse\Pages\TripStops;
+use App\Filament\Tables\TripList;
+use App\Filament\Warehouse\Pages\SeaShipments;
 use App\Filament\Warehouse\Pages\TripFuel;
+use App\Filament\Warehouse\Pages\TripStops;
 use App\Models\Deliverylog;
 use App\Models\Logistichub;
+use App\Models\Shipping\SeaShipment;
+use App\Models\Shipping\TruckReceipt;
+use App\Support\Fuel\Fuel;
+use App\Support\Shipping\Islands;
+use App\Support\Shipping\Shipments;
+use App\Support\Shipping\TruckReceive;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\BulkActionGroup;
@@ -17,6 +26,7 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Columns\ToggleColumn;
+use Filament\Tables\Enums\FiltersLayout;
 use Filament\Tables\Enums\RecordActionsPosition;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
@@ -29,19 +39,32 @@ class DeliverylogsTable
     public static function configure(Table $table): Table
     {
         return $table
-            ->recordUrl(fn ($record) => \App\Filament\Warehouse\Pages\Trip::urlFor($record))
+            // board 42: one clear row per trip; click a trip for its details on the side
+            ->recordUrl(null)
+            ->recordAction('details')
+            ->defaultSort('created_at', 'desc')
             ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
             ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'delivery'))
-            ->columns([
-                \App\Filament\Shared\Trips\TripActions::stageColumn(),
-                TextColumn::make('trip_number')
-                    ->searchable()
-                    ->color('primary')->weight('bold')
-                    ->url(fn ($record) => \App\Filament\Warehouse\Pages\Trip::urlFor($record)),
+            ->columns([...TripList::columns(), ...collect([
+                TripActions::stageColumn(),
 
                 TripBoardColumns::status('delivery'),
 
                 TripBoardColumns::progress('delivery'),
+
+                // Partner hub by truck: "Received by Baguio · 2 missing" (Scan app · Receive truck).
+                TextColumn::make('hub_received')
+                    ->label('Hub received')
+                    ->badge()
+                    ->color(fn ($state) => str_contains((string) $state, 'missing') ? 'danger' : (str_contains((string) $state, 'Received') ? 'success' : 'warning'))
+                    ->visible(fn () => TruckReceive::ready())
+                    ->getStateUsing(function ($record) {
+                        $r = TruckReceipt::with('hub:id,hub_name')->where('deliverylog_id', $record->id)->get();
+
+                        return $r->isEmpty() ? null : $r->map(fn ($x) => $x->finished_at
+                            ? 'Received by '.($x->hub?->hub_name ?? 'hub').($x->missing ? ' · '.$x->missing.' missing' : '')
+                            : ($x->hub?->hub_name ?? 'Hub').' receiving…')->join(' / ');
+                    }),
 
                 TextColumn::make('truck_id')
                     ->label('Truck')
@@ -172,27 +195,17 @@ class DeliverylogsTable
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
-            ])
+            ])->map(fn ($c) => $c->toggleable(isToggledHiddenByDefault: true))->all()])
             ->filters([
+                ...TripList::filters(),
                 TripBoardColumns::filter('delivery'),
-                SelectFilter::make('is_lock')
-                    ->label('Is Locked')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ]),
-                SelectFilter::make('is_active')
-                    ->label('Is Active')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ])->default(1),
                 SelectFilter::make('assigned_to')
-                    ->label('Going To')
+                    ->label('Which hub')
                     ->options(Logistichub::query()->pluck('hub_name', 'id'))
                     ->searchable()
                     ->preload(),
             ])->deferFilters(false)
+            ->filtersLayout(FiltersLayout::AboveContent)->filtersFormColumns(5)
             ->recordActions([
                 Action::make('stops')
                     ->label('Stops & loading')
@@ -206,15 +219,15 @@ class DeliverylogsTable
                     ->button()
                     ->color('info')
                     ->tooltip(fn ($record) => ($record->destination?->hub_name ?? 'This hub').' is reached by sea')
-                    ->visible(fn ($record): bool => \App\Support\Shipping\Shipments::ready() && $record->is_active && $record->destination?->is_company
-                        && \App\Support\Shipping\Islands::bySea($record->destination) && ! \App\Models\Shipping\SeaShipment::where('deliverylog_id', $record->id)->exists())
-                    ->url(fn ($record): string => \App\Filament\Warehouse\Pages\SeaShipments::getUrl(['trip' => $record->id])),
+                    ->visible(fn ($record): bool => Shipments::ready() && $record->is_active && $record->destination?->is_company
+                        && Islands::bySea($record->destination) && ! SeaShipment::where('deliverylog_id', $record->id)->exists())
+                    ->url(fn ($record): string => SeaShipments::getUrl(['trip' => $record->id])),
                 Action::make('fuel')
                     ->label('Fuel')
                     ->icon('heroicon-o-beaker')
                     ->button()
                     ->color('gray')
-                    ->visible(fn (): bool => \App\Support\Fuel\Fuel::ready())
+                    ->visible(fn (): bool => Fuel::ready())
                     ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
                 ActionGroup::make([
                     Action::make('locktrip')
@@ -226,10 +239,9 @@ class DeliverylogsTable
                         ->icon(function ($record) {
                             return $record->is_lock ? Heroicon::LockOpen : Heroicon::LockClosed;
                         })
+                        // locking is on the Trip page (when ready); here a super admin can only unlock
                         ->hidden(function ($record) {
-                            //  dd(Auth::user()->hasRole('super_admin'));
-                            //  dd(Auth::user()->is_admin);
-                            return Auth::user()->is_admin ? false : true;
+                            return ! $record->is_lock || ! Auth::user()->is_admin;
                         })
                         ->action(function ($record) {
                             $record->update([
@@ -241,8 +253,8 @@ class DeliverylogsTable
                                 ->success()
                                 ->send();
                         }),
-                    \App\Filament\Shared\Trips\TripActions::release(),
-                    \App\Filament\Shared\Trips\TripActions::crew(),
+                    TripActions::release(),
+                    TripActions::crew(),
                     EditAction::make()
                         ->label('Edit')
                         ->icon(Heroicon::PencilSquare)
@@ -251,13 +263,13 @@ class DeliverylogsTable
                         }),
 
                 ]),
-            ], position: RecordActionsPosition::BeforeColumns)
+                TripList::details(),
+            ], position: RecordActionsPosition::AfterColumns)
             ->toolbarActions([
                 BulkActionGroup::make([
                     //    DeleteBulkAction::make(),
 
                 ]),
             ]);
-
     }
 }

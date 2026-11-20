@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Dispatch System — Part 22b: hubs, To hubs trips, hub Plan trips, SMS and AI settings
+# Dispatch System — Part 22d: Delivery trips redesign, made by
 # Only the files changed in this step; the rest of your project is left as it is.
 #
 #   cd ~/Desktop/Project/DispatchSystem
-#   bash ~/Desktop/Project/part22b-hubs.sh
+#   bash ~/Desktop/Project/part22d-delivery-trips.sh
 
 set -euo pipefail
 [ -f artisan ] || { echo "Run this from inside your DispatchSystem project folder (the one with 'artisan')."; exit 1; }
@@ -14,1318 +14,415 @@ BACKUP="../DispatchSystem-backup-$STAMP.tar.gz"
 echo "▶ Backing up the project to $BACKUP"
 tar -czf "$BACKUP" --exclude=vendor --exclude=node_modules --exclude=storage/logs .
 
-echo "▶ Writing 34 files"
+echo "▶ Writing 18 files"
 
-# ---------------------------------------------------------------- app/Filament/Company/Pages/MyArea.php
-mkdir -p 'app/Filament/Company/Pages'
-cat > 'app/Filament/Company/Pages/MyArea.php' <<'DISPATCH_FILE_END_0'
+# ---------------------------------------------------------------- app/Filament/Company/Resources/Deliverylogs/Pages/CreateDeliverylog.php
+mkdir -p 'app/Filament/Company/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Company/Resources/Deliverylogs/Pages/CreateDeliverylog.php' <<'DISPATCH_FILE_END_0'
 <?php
 
-namespace App\Filament\Company\Pages;
+namespace App\Filament\Company\Resources\Deliverylogs\Pages;
 
-use App\Filament\Shared\Hubs\MyAreaPage;
+use Illuminate\Support\Facades\Auth;
+use Filament\Resources\Pages\CreateRecord;
+use App\Filament\Company\Resources\Deliverylogs\DeliverylogResource;
 
-class MyArea extends MyAreaPage {}
+class CreateDeliverylog extends CreateRecord
+{
+    protected static string $resource = DeliverylogResource::class;
+    protected function mutateFormDataBeforeCreate(array $data): array
+    {
+        $data['logistichub_id'] = Auth::user()->logistichub_id;
+        $data['user_id'] = Auth::id();
+        if (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'made_by')) {
+            $data['made_by'] = 'manual'; // made by hand (Delivery trips › New trip)
+        }
+        $data['assigned_to'] = Auth::user()->logistichub_id;
+
+        return $data;
+
+    }
+    // protected function getRedirectUrl(): string
+    // {
+    //     return $this->getResource()::getUrl('index');
+    // }
+}
 DISPATCH_FILE_END_0
 
-# ---------------------------------------------------------------- app/Filament/Company/Pages/PlanTrips.php
-mkdir -p 'app/Filament/Company/Pages'
-cat > 'app/Filament/Company/Pages/PlanTrips.php' <<'DISPATCH_FILE_END_1'
+# ---------------------------------------------------------------- app/Filament/Resources/Deliverylogs/Pages/CreateDeliverylog.php
+mkdir -p 'app/Filament/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Resources/Deliverylogs/Pages/CreateDeliverylog.php' <<'DISPATCH_FILE_END_1'
 <?php
 
-namespace App\Filament\Company\Pages;
+namespace App\Filament\Resources\Deliverylogs\Pages;
 
-use App\Filament\Shared\Trips\PlanTripsPage;
+use App\Models\Truck;
+use Illuminate\Support\Facades\Auth;
+use Filament\Resources\Pages\CreateRecord;
+use App\Filament\Resources\Deliverylogs\DeliverylogResource;
 
-class PlanTrips extends PlanTripsPage
+class CreateDeliverylog extends CreateRecord
 {
-    protected static bool $atHub = true;
+    protected static string $resource = DeliverylogResource::class;
+    protected function mutateFormDataBeforeCreate(array $data): array
+    {
+        $data['logistichub_id'] = Auth::user()->logistichub_id;
+        $data['user_id'] = Auth::id();
+        if (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'made_by')) {
+            $data['made_by'] = 'manual'; // made by hand (Delivery trips › New trip)
+        }
+
+        return $data;
+
+    }
+    protected function afterCreate(): void
+    {
+        $newtruckid = $this->data['truck_id'];
+
+        Truck::where('id', $newtruckid)->update([
+            'is_assigned' => 1,
+        ]);
+    }
+    // protected function getRedirectUrl(): string
+    // {
+    //     return $this->getResource()::getUrl('index');
+    // }
 }
 DISPATCH_FILE_END_1
 
-# ---------------------------------------------------------------- app/Filament/Pages/HubAreas.php
-mkdir -p 'app/Filament/Pages'
-cat > 'app/Filament/Pages/HubAreas.php' <<'DISPATCH_FILE_END_2'
+# ---------------------------------------------------------------- app/Filament/Resources/Deliverylogs/Pages/ListDeliverylogs.php
+mkdir -p 'app/Filament/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Resources/Deliverylogs/Pages/ListDeliverylogs.php' <<'DISPATCH_FILE_END_2'
 <?php
 
-namespace App\Filament\Pages;
+namespace App\Filament\Resources\Deliverylogs\Pages;
 
-use App\Filament\Shared\Hubs\HubAreasPage;
+use App\Filament\Resources\Deliverylogs\DeliverylogResource;
+use App\Filament\Shared\Widgets\TripBoard;
+use Filament\Actions\CreateAction;
+use Filament\Notifications\Notification;
+use Filament\Resources\Pages\ListRecords;
+use Illuminate\Support\Str;
 
-class HubAreas extends HubAreasPage {}
+class ListDeliverylogs extends ListRecords
+{
+    protected static string $resource = DeliverylogResource::class;
+
+    protected function getHeaderActions(): array
+    {
+        return [
+            \Filament\Actions\Action::make('plan')->label('✦ Plan trips')->url(fn () => \App\Filament\Pages\PlanTrips::getUrl()),
+            CreateAction::make()->label('+ New trip by hand')->color('gray'),
+        ];
+    }
+
+    public function getTitle(): string
+    {
+        return 'Delivery trips';
+    }
+
+    public function getSubheading(): ?string
+    {
+        return 'Every trip, who made it and how far it is. Click a trip for the details.';
+    }
+
+    public function getBreadcrumbs(): array
+    {
+        return [];
+    }
+
+    public function getTabs(): array
+    {
+        return \App\Filament\Tables\TripList::tabs(\App\Models\Deliverylog::query()->where('deliverylogs.logistichub_id', \Illuminate\Support\Facades\Auth::user()->logistichub_id));
+    }
+
+    protected function getHeaderWidgets(): array
+    {
+        return [
+            TripBoard::make(['kind' => 'delivery', 'resource' => DeliverylogResource::class]),
+        ];
+    }
+
+    public function getWidgetData(): array
+    {
+        return ['activeCard' => data_get($this->tableFilters, 'board.value')];
+    }
+}
 DISPATCH_FILE_END_2
 
-# ---------------------------------------------------------------- app/Filament/Pages/HubSetup.php
-mkdir -p 'app/Filament/Pages'
-cat > 'app/Filament/Pages/HubSetup.php' <<'DISPATCH_FILE_END_3'
+# ---------------------------------------------------------------- app/Filament/Resources/Deliverylogs/Tables/DeliverylogsTable.php
+mkdir -p 'app/Filament/Resources/Deliverylogs/Tables'
+cat > 'app/Filament/Resources/Deliverylogs/Tables/DeliverylogsTable.php' <<'DISPATCH_FILE_END_3'
 <?php
 
-namespace App\Filament\Pages;
-
-use App\Filament\Shared\Hubs\HubSetupPage;
-
-class HubSetup extends HubSetupPage {}
-DISPATCH_FILE_END_3
-
-# ---------------------------------------------------------------- app/Filament/Shared/Ai/AgingPage.php
-mkdir -p 'app/Filament/Shared/Ai'
-cat > 'app/Filament/Shared/Ai/AgingPage.php' <<'DISPATCH_FILE_END_4'
-<?php
-
-namespace App\Filament\Shared\Ai;
-
-use App\Support\Aging\AgingAdvice;
-use App\Support\Aging\BoxAging;
-use App\Support\Ai\AiScope;
-use BackedEnum;
-use Filament\Facades\Filament;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
-use Livewire\Attributes\Url;
-
-/** Box aging: how long boxes have waited since unload, at each stage; which are late and why. */
-abstract class AgingPage extends AiPage
-{
-    protected string $view = 'filament.ai.aging';
-
-    protected static string $feature = 'aging';
-
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClock;
-
-    protected static ?string $navigationLabel = 'Box aging';
-
-    protected static ?string $title = 'Box aging';
-
-    protected static ?string $slug = 'box-aging';
-
-    protected static ?int $navigationSort = -1;
-
-    #[Url]
-    public string $stage = '';
-
-    #[Url]
-    public int $bucket = -1;
-
-    #[Url]
-    public string $show = '';
-
-    public string $by = 'place';
-
-    public bool $freshAdvice = false;
-
-    public function getSubheading(): ?string
-    {
-        return 'How long each box has waited since it was unloaded, at each stage.';
-    }
-
-    public static function getNavigationBadge(): ?string
-    {
-        // never counts here (that would slow every page); shows the number from the last count
-        [$hub, $wh] = static::scope();
-        $n = BoxAging::lateCountCached($hub, $wh);
-
-        return $n ? (string) $n : null;
-    }
-
-    public static function getNavigationBadgeColor(): ?string
-    {
-        return 'danger';
-    }
-
-    /** @return array{0: ?int, 1: ?int} [hub, warehouse] for this person in this panel */
-    protected static function scope(): array
-    {
-        $user = Auth::user();
-        $hub = AiScope::hubId($user) ?: null;
-        $wh = Filament::getCurrentPanel()?->getId() === 'warehouse' ? ($user->warehouse_id ?: null) : null;
-
-        return [$hub, $hub ? null : $wh];
-    }
-
-    protected static function rowsFor(bool $fresh = false): Collection
-    {
-        [$hub, $wh] = static::scope();
-
-        return BoxAging::rows($hub, $wh, $fresh);
-    }
-
-    public function pick(string $stage, int $bucket): void
-    {
-        $this->stage = $stage;
-        $this->bucket = $bucket;
-        $this->show = '';
-    }
-
-    public function showOnly(string $what): void
-    {
-        $this->show = $what;
-        $this->stage = '';
-        $this->bucket = -1;
-    }
-
-    public function refresh(): void
-    {
-        static::rowsFor(true);
-    }
-
-    public function askAi(): void
-    {
-        $this->freshAdvice = true;
-    }
-
-    protected function getViewData(): array
-    {
-        $rows = static::rowsFor();
-        [$hub, $wh] = static::scope();
-        $advice = AgingAdvice::for($rows, ($hub ?? 'x').'.'.($wh ?? 'x'), $this->freshAdvice, call: $this->freshAdvice);
-        $this->freshAdvice = false;
-
-        $table = collect(BoxAging::STAGES)->map(function ($label, $key) use ($rows) {
-            $r = $rows->where('stage', $key);
-            $lim = BoxAging::limitFor($key, 'all');
-
-            return [
-                'key' => $key, 'label' => $label, 'warn' => $lim[0], 'late' => $lim[1], 'lateN' => $r->where('stageStatus', 'late')->count(),
-                'cells' => collect(BoxAging::BUCKETS)->map(function ($b, $i) use ($r) {
-                    $in = $r->filter(fn ($x) => $x['days'] >= $b[0] && $x['days'] <= $b[1]);
-
-                    return ['i' => $i, 'n' => $in->count(), 'status' => $in->contains('stageStatus', 'late') ? 'late' : ($in->contains('stageStatus', 'warn') ? 'warn' : 'ok')];
-                })->all(),
-            ];
-        })->values();
-
-        $list = match (true) {
-            $this->show === 'late' => $rows->where('status', 'late'),
-            $this->show === 'tomorrow' => $rows->where('tomorrow', true),
-            $this->stage !== '' && $this->bucket >= 0 => $rows->where('stage', $this->stage)
-                ->filter(fn ($x) => $x['days'] >= BoxAging::BUCKETS[$this->bucket][0] && $x['days'] <= BoxAging::BUCKETS[$this->bucket][1]),
-            default => $rows->where('status', 'late'),
-        };
-        $listTitle = match (true) {
-            $this->show === 'tomorrow' => 'Will be late tomorrow',
-            $this->stage !== '' && $this->bucket >= 0 => (BoxAging::STAGES[$this->stage] ?? '').' · '.BoxAging::BUCKETS[$this->bucket][2],
-            default => 'Late boxes',
-        };
-
-        $groupKey = $this->by === 'consolidator' ? 'consolidator' : 'owner';
-        $places = $rows->groupBy(fn ($r) => $groupKey === 'consolidator' ? ($r['consolidator'] ?: '—') : ($r['hub'] && in_array($r['stage'], ['hub', 'truck', 'failed'], true) ? $r['hub'] : 'Warehouse'))
-            ->map(fn ($g, $name) => [
-                'name' => $name, 'n' => $g->count(), 'late' => $g->where('status', 'late')->count(),
-                'ok' => round($g->where('status', 'ok')->count() / max(1, $g->count()) * 100),
-                'warn' => round($g->where('status', 'warn')->count() / max(1, $g->count()) * 100),
-                'lateP' => round($g->where('status', 'late')->count() / max(1, $g->count()) * 100),
-            ])->sortByDesc('late')->take(8)->values();
-
-        return [
-            'sum' => BoxAging::summary($rows),
-            'advice' => $advice,
-            'table' => $table,
-            'list' => $list->sortByDesc('days')->take(25)->values(),
-            'listCount' => $list->count(),
-            'listTitle' => $listTitle,
-            'places' => $places,
-            'isHub' => (bool) $hub,
-            'stageLabels' => BoxAging::STAGES,
-            'tripsUrl' => Str::of(Filament::getCurrentPanel()?->getUrl() ?? url('/'))->rtrim('/').'/plan-trips',
-        ];
-    }
-}
-DISPATCH_FILE_END_4
-
-# ---------------------------------------------------------------- app/Filament/Shared/Ai/TripsPage.php
-mkdir -p 'app/Filament/Shared/Ai'
-cat > 'app/Filament/Shared/Ai/TripsPage.php' <<'DISPATCH_FILE_END_5'
-<?php
-
-namespace App\Filament\Shared\Ai;
-
-use App\Support\Ai\TripPlanner;
-use App\Support\BoxSizes;
-use BackedEnum;
-use Filament\Notifications\Notification;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
-use Throwable;
-
-/** AI trip helper: a draft of trips from the ready boxes and free trucks; nothing is created until you press Create. */
-abstract class TripsPage extends AiPage
-{
-    protected string $view = 'filament.ai.trips';
-
-    protected static string $feature = 'trips';
-
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedTruck;
-
-    protected static ?string $navigationLabel = 'AI trip helper';
-
-    protected static ?string $title = 'AI trip helper';
-
-    protected static ?string $slug = 'ai-trips';
-
-    protected static ?int $navigationSort = 0;
-
-    public string $mode = '';
-
-    public string $date = '';
-
-    public string $instruction = '';
-
-    /** @var list<array{truck_id: int, dest: ?int, why: string, places: list<array{place: string, units: list<string>}>}> */
-    public array $trips = [];
-
-    public string $note = '';
-
-    public bool $usedAi = false;
-
-    public bool $drafted = false;
-
-    public array $created = [];
-
-    public ?string $error = null;
-
-    protected ?Collection $unitCache = null;
-
-    public static function canAccess(): bool
-    {
-        return parent::canAccess() && TripPlanner::modesFor(Auth::user()) !== [];
-    }
-
-    public function getSubheading(): ?string
-    {
-        return 'The AI drafts trips from the boxes waiting for a trip and your free trucks. Nothing is created until you press Create.';
-    }
-
-    /** Plan trips does this now (with the AI inside): the old page is out of the menu, and its address opens Plan trips. */
-    public static function shouldRegisterNavigation(): bool
-    {
-        return false;
-    }
-
-    public function mount(): void
-    {
-        $plan = preg_replace('/Ai\\\\AiTrips$/', 'PlanTrips', static::class);
-        if (request()->routeIs('filament.*.pages.ai-trips') && $plan !== static::class && class_exists($plan) && $plan::canAccess()) {
-            $this->redirect($plan::getUrl());
-
-            return;
-        }
-        $this->mode = TripPlanner::modesFor(Auth::user())[0];
-        $this->date = now()->addDay()->toDateString();
-    }
-
-    protected function planner(): TripPlanner
-    {
-        $modes = TripPlanner::modesFor(Auth::user());
-        if (! in_array($this->mode, $modes, true)) {
-            $this->mode = $modes[0];
-        }
-
-        return new TripPlanner(Auth::user(), $this->mode);
-    }
-
-    protected function units(): Collection
-    {
-        return $this->unitCache ??= $this->planner()->units();
-    }
-
-    public function setMode(string $mode): void
-    {
-        if (in_array($mode, TripPlanner::modesFor(Auth::user()), true)) {
-            $this->mode = $mode;
-            $this->startOver();
-        }
-    }
-
-    public function suggest(): void
-    {
-        $this->error = null;
-        $this->created = [];
-        $out = $this->planner()->suggest(trim($this->instruction));
-        $this->trips = array_map(fn ($t) => ['truck_id' => $t['truck_id'], 'dest' => $t['dest'], 'why' => $t['why'], 'places' => $t['places']], $out['trips']);
-        $this->note = $out['note'];
-        $this->usedAi = $out['ai'];
-        $this->drafted = true;
-    }
-
-    /** Move a whole barangay (all its receivers) to the next trip. */
-    public function movePlace(int $trip, int $place): void
-    {
-        if (count($this->trips) < 2 || ! isset($this->trips[$trip]['places'][$place])) {
-            return;
-        }
-        $to = ($trip + 1) % count($this->trips);
-        $moving = $this->trips[$trip]['places'][$place];
-        array_splice($this->trips[$trip]['places'], $place, 1);
-        $slot = collect($this->trips[$to]['places'])->search(fn ($p) => $p['place'] === $moving['place']);
-        if ($slot === false) {
-            $this->trips[$to]['places'][] = $moving;
-        } else {
-            $this->trips[$to]['places'][$slot]['units'] = array_values(array_unique(array_merge($this->trips[$to]['places'][$slot]['units'], $moving['units'])));
-        }
-        $this->trips = array_values(array_filter($this->trips, fn ($t) => $t['places']));
-    }
-
-    /** Put a waiting barangay onto a trip. */
-    public function addPlace(string $place, int $trip): void
-    {
-        if (! isset($this->trips[$trip])) {
-            return;
-        }
-        $used = collect($this->trips)->flatMap(fn ($t) => collect($t['places'])->flatMap(fn ($p) => $p['units']))->flip();
-        $keys = $this->units()->filter(fn ($u) => TripPlanner::placeKey($u) === $place && ! isset($used[$u['key']]))->pluck('key')->values()->all();
-        if ($keys) {
-            $this->trips[$trip]['places'][] = ['place' => $place, 'units' => $keys];
-        }
-    }
-
-    public function removeTrip(int $trip): void
-    {
-        unset($this->trips[$trip]);
-        $this->trips = array_values($this->trips);
-    }
-
-    public function setTruck(int $trip, $truckId): void
-    {
-        $truckId = (int) $truckId;
-        if (! isset($this->trips[$trip]) || ! $this->planner()->trucks()->contains('id', $truckId)) {
-            return;
-        }
-        // swap with the trip that had this truck
-        foreach ($this->trips as $i => $t) {
-            if ($i !== $trip && $t['truck_id'] === $truckId) {
-                $this->trips[$i]['truck_id'] = $this->trips[$trip]['truck_id'];
-            }
-        }
-        $this->trips[$trip]['truck_id'] = $truckId;
-    }
-
-    public function setDest(int $trip, $dest): void
-    {
-        if (isset($this->trips[$trip]) && $this->planner()->destinations()->contains('id', (int) $dest)) {
-            $this->trips[$trip]['dest'] = (int) $dest;
-        }
-    }
-
-    public function startOver(): void
-    {
-        $this->trips = [];
-        $this->note = '';
-        $this->drafted = false;
-        $this->created = [];
-        $this->error = null;
-    }
-
-    public function create(): void
-    {
-        $this->error = null;
-        $view = $this->tripsView();
-        if ($view->isEmpty()) {
-            return;
-        }
-        if ($over = $view->first(fn ($t) => $t['over'])) {
-            $this->error = BoxSizes::on()
-                ? "{$over['title']} needs more space than truck {$over['truck']} has (".BoxSizes::fmt($over['space'])." of {$over['capacity']}). Move a barangay to another trip first."
-                : "{$over['title']} has more boxes than truck {$over['truck']} can carry. Move a barangay to another trip first.";
-
-            return;
-        }
-        try {
-            $date = Carbon::parse($this->date);
-        } catch (Throwable) {
-            $this->error = 'Pick the trip date.';
-
-            return;
-        }
-        try {
-            $this->created = $this->planner()->create($this->trips, $date);
-        } catch (Throwable $e) {
-            report($e);
-            $this->error = $e instanceof \DomainException ? $e->getMessage() : 'The trips could not be created: '.$e->getMessage();
-
-            return;
-        }
-        $this->trips = [];
-        $this->drafted = false;
-        Notification::make()->title(count($this->created).' '.str('trip')->plural(count($this->created)).' created')->success()->send();
-    }
-
-    /** The draft with counts, for the screen. */
-    protected function tripsView(): Collection
-    {
-        $units = $this->units()->keyBy('key');
-        $trucks = $this->planner()->trucks()->keyBy('id');
-        $word = $this->mode === 'transfer' ? 'Transfer' : 'Trip';
-
-        return collect($this->trips)->map(function ($t, $i) use ($units, $trucks, $word) {
-            $places = collect($t['places'])->map(function ($p) use ($units) {
-                $us = collect($p['units'])->map(fn ($k) => $units[$k] ?? null)->filter();
-
-                return [
-                    'place' => $p['place'], 'barangay' => Str::afterLast($p['place'], ' › '),
-                    'city' => Str::of($p['place'])->beforeLast(' › ')->afterLast(' › ')->toString(),
-                    'n' => $us->sum('n'), 'space' => $us->sum('space'), 'receivers' => $us->count(), 'big' => $us->sortByDesc('n')->first(),
-                ];
-            })->filter(fn ($p) => $p['n'] > 0)->values();
-            $all = collect($t['places'])->flatMap(fn ($p) => $p['units'])->map(fn ($k) => $units[$k] ?? null)->filter();
-            $truck = $trucks[$t['truck_id']] ?? null;
-            $n = $all->sum('n');
-            $space = BoxSizes::half($all->sum('space'));
-            $cap = $truck['capacity'] ?? 0;
-            $mix = [];
-            foreach ($all as $u) {
-                foreach ($u['mix'] ?? [] as $name => $c) {
-                    $mix[$name] = ($mix[$name] ?? 0) + $c;
-                }
-            }
-            arsort($mix);
-
-            return [
-                'i' => $i, 'title' => $word.' '.($i + 1), 'truck_id' => $t['truck_id'], 'truck' => $truck['plate'] ?? '—', 'capacitySet' => $truck['set'] ?? false,
-                'capacity' => $cap, 'boxes' => $n, 'space' => $space, 'mix' => BoxSizes::mixText($mix),
-                'pct' => $cap ? min(100, (int) round($space / $cap * 100)) : 0, 'over' => $cap && $space > $cap,
-                'prio' => $all->sum('prio'), 'retry' => $all->sum('retry'), 'dest' => $t['dest'], 'why' => $t['why'], 'places' => $places,
-            ];
-        })->filter(fn ($t) => $t['boxes'] > 0)->values();
-    }
-
-    protected function getViewData(): array
-    {
-        $planner = $this->planner();
-        $units = $this->units();
-        $used = collect($this->trips)->flatMap(fn ($t) => collect($t['places'])->flatMap(fn ($p) => $p['units']))->flip();
-        $waiting = $units->reject(fn ($u) => isset($used[$u['key']]));
-
-        $tree = $units->groupBy('province')->sortKeys()->map(fn ($p, $prov) => [
-            'name' => $prov, 'n' => $p->sum('n'),
-            'cities' => $p->groupBy('city')->sortKeys()->map(fn ($c, $city) => [
-                'name' => $city, 'n' => $c->sum('n'),
-                'brgys' => $c->groupBy('barangay')->sortKeys()->map(fn ($b, $brgy) => $brgy.' '.$b->sum('n'))->join(' · '),
-            ])->values(),
-        ])->values();
-
-        return [
-            'paused' => $this->pausedReason(),
-            'modes' => collect(TripPlanner::modesFor(Auth::user()))->mapWithKeys(fn ($m) => [$m => TripPlanner::MODES[$m]]),
-            'tree' => $tree,
-            'ready' => $units->sum('n'),
-            'prio' => $units->sum('prio'),
-            'retry' => $units->sum('retry'),
-            'bigGroups' => $units->where('n', '>=', 5)->count(),
-            'tripsView' => $this->tripsView(),
-            'trucks' => $planner->trucks(),
-            'dests' => $planner->destinations(),
-            'waitingPlaces' => $waiting->groupBy(fn ($u) => TripPlanner::placeKey($u))->map(fn ($g, $k) => ['place' => $k, 'n' => $g->sum('n'), 'prio' => $g->sum('prio') + $g->sum('retry')])->sortByDesc('prio')->values(),
-            'word' => $this->mode === 'transfer' ? 'transfer' : 'trip',
-            'bySpace' => BoxSizes::on(),
-            'readySpace' => BoxSizes::half($units->sum('space')),
-        ];
-    }
-}
-DISPATCH_FILE_END_5
-
-# ---------------------------------------------------------------- app/Filament/Shared/Hubs/HubAreasPage.php
-mkdir -p 'app/Filament/Shared/Hubs'
-cat > 'app/Filament/Shared/Hubs/HubAreasPage.php' <<'DISPATCH_FILE_END_6'
-<?php
-
-namespace App\Filament\Shared\Hubs;
-
-use App\Models\Hubs\HubArea;
-use App\Models\Hubs\HubAreaRequest;
-use App\Models\Invoice;
+namespace App\Filament\Resources\Deliverylogs\Tables;
+
+use App\Filament\Pages\TripStops;
+use App\Filament\Pages\TripFuel;
+use App\Filament\Tables\TripBoardColumns;
+use App\Models\Deliverylog;
 use App\Models\Logistichub;
-use App\Models\AppSetting;
-use App\Support\Hubs\HubAreas;
-use App\Support\Maps\Barangays;
-use App\Support\Trips\TripRules;
+use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteBulkAction;
+use Filament\Actions\EditAction;
 use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\ToggleColumn;
+use Filament\Tables\Enums\RecordActionsPosition;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
-/** Settings → Hub areas: which partner hub delivers each place. Admin and Super admin. */
-class HubAreasPage extends Page
+class DeliverylogsTable
 {
-    protected string $view = 'filament.hubs.areas';
-
-    protected static ?string $slug = 'hub-areas';
-
-    protected static ?string $title = 'Hub areas';
-
-    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-map';
-
-    /** @var array<int, array{province?: string, city?: string, barangay?: string}> */
-    public array $add = [];
-
-    public ?array $conflict = null;
-
-    public static function canAccess(): bool
+    public static function configure(Table $table): Table
     {
-        return HubAreas::ready() && TripRules::isOffice(Auth::user());
-    }
-
-    public static function getNavigationBadge(): ?string
-    {
-        $n = HubAreas::pendingCount();
-
-        return $n ? (string) $n : null;
-    }
-
-    public function getHeading(): string|Htmlable
-    {
-        return '';
-    }
-
-    public function addPlace(int $hubId): void
-    {
-        $f = $this->add[$hubId] ?? [];
-        if (blank($f['province'] ?? null)) {
-            Notification::make()->title('Type the province')->warning()->send();
-
-            return;
-        }
-        $r = HubAreas::add($hubId, $f['province'], $f['city'] ?? null, $f['barangay'] ?? null, Auth::user());
-        if (isset($r['conflict'])) {
-            $this->conflict = ['hub' => $hubId, 'area' => $r['conflict']->id, 'owner' => (int) $r['conflict']->logistichub_id, 'label' => $r['conflict']->label()];
-
-            return;
-        }
-        $this->add[$hubId] = [];
-        $this->conflict = null;
-    }
-
-    public function moveIt(): void
-    {
-        if ($this->conflict && ($a = HubArea::find($this->conflict['area']))) {
-            HubAreas::add($this->conflict['hub'], $a->province, $a->city, $a->barangay, Auth::user(), true);
-            $this->add[$this->conflict['hub']] = [];
-        }
-        $this->conflict = null;
-    }
-
-    public function cancel(): void
-    {
-        $this->conflict = null;
-    }
-
-    public function removeArea(int $id): void
-    {
-        if ($a = HubArea::find($id)) {
-            HubAreas::remove($a, Auth::user());
-        }
-    }
-
-    public function decide(int $id, bool $yes): void
-    {
-        HubAreas::decide(HubAreaRequest::where('status', 'pending')->findOrFail($id), $yes, Auth::user());
-    }
-
-    /** A switched-off hub: keep its places direct (hide this warning) or give them to another hub. */
-    public function keepDirect(int $hubId): void
-    {
-        AppSetting::put('hubs.orphan_ok.'.$hubId, '1');
-    }
-
-    public function giveTo(int $fromHub, int $toHub): void
-    {
-        $n = 0;
-        foreach (HubArea::where('logistichub_id', $fromHub)->get() as $a) {
-            $n += HubAreas::add($toHub, $a->province, $a->city, $a->barangay, Auth::user(), true)['ok'] ? 1 : 0;
-        }
-        Notification::make()->title($n.' places given to '.HubAreas::name($toHub))->success()->send();
-    }
-
-    protected function getViewData(): array
-    {
-        $areas = HubArea::query()->orderBy('province')->orderBy('city')->orderBy('barangay')->get()->groupBy('logistichub_id');
-        $hubs = HubAreas::hubs()->map(fn (Logistichub $h) => ['hub' => $h, 'areas' => $areas[$h->id] ?? collect()]);
-        $split = HubAreas::splitCities();
-
-        // boxes waiting in a shared city with no barangay: they go to the city's main hub, or to Addresses to check
-        $unclear = 0;
-        foreach ($split as $s) {
-            $unclear += Invoice::query()->where('is_verified', true)->where('is_assigned', false)->where('is_delivered', false)
-                ->where('receiver_city', 'like', $s['city'].'%')->where('receiver_province', 'like', $s['province'])->limit(500)->get()
-                ->filter(fn ($i) => Barangays::of($i) === null)->count();
-        }
-
-        return [
-            'hubs' => $hubs, 'split' => $split, 'unclear' => $unclear,
-            'requests' => HubAreaRequest::with(['hub', 'user'])->where('status', 'pending')->latest('id')->get(),
-            'answered' => HubAreaRequest::with('hub')->where('status', '!=', 'pending')->latest('decided_at')->limit(3)->get(),
-            'orphans' => HubAreas::orphans()->reject(fn ($o) => AppSetting::get('hubs.orphan_ok.'.$o['id'])),
-            'log' => DB::table('hub_area_log')->latest('id')->limit(8)->get(),
-            'colors' => ['#1d6fb8', '#c97a00', '#17895e', '#7a4fd6', '#c2410c', '#0e7490'],
-            'setupUrl' => class_exists($p = str_replace('HubAreas', 'HubSetup', static::class)) && $p !== static::class ? $p::getUrl() : null,
-            'provinces' => collect(HubAreas::REGIONS)->flatten()->sort()->values(),
-        ];
-    }
-}
-DISPATCH_FILE_END_6
-
-# ---------------------------------------------------------------- app/Filament/Shared/Hubs/HubSetupPage.php
-mkdir -p 'app/Filament/Shared/Hubs'
-cat > 'app/Filament/Shared/Hubs/HubSetupPage.php' <<'DISPATCH_FILE_END_7'
-<?php
-
-namespace App\Filament\Shared\Hubs;
-
-use App\Models\Hubs\HubArea;
-use App\Models\Logistichub;
-use App\Support\Hubs\HubAreas;
-use App\Support\Trips\TripRules;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
-use Livewire\Attributes\Url;
-
-/** Settings → Hubs → add a hub (or set where a hub is) and approve its suggested area. */
-class HubSetupPage extends Page
-{
-    protected string $view = 'filament.hubs.setup';
-
-    protected static ?string $slug = 'hub-setup';
-
-    protected static ?string $title = 'Add a hub';
-
-    protected static bool $shouldRegisterNavigation = false;
-
-    #[Url]
-    public ?int $hub = null;
-
-    public array $form = ['name' => '', 'code' => '', 'province' => '', 'city' => '', 'barangay' => '', 'phone' => ''];
-
-    /** @var array<int, bool> suggestions left out (by index) */
-    public array $leave = [];
-
-    /** @var array<int, string> "closer" places: area id => yes|no */
-    public array $move = [];
-
-    public bool $saved = false;
-
-    public static function canAccess(): bool
-    {
-        return HubAreas::ready() && TripRules::isOffice(Auth::user());
-    }
-
-    public function getHeading(): string|Htmlable
-    {
-        return '';
-    }
-
-    public function mount(): void
-    {
-        if ($h = $this->record()) {
-            $this->form = ['name' => $h->hub_name, 'code' => $h->hub_code, 'province' => (string) $h->province, 'city' => (string) $h->city, 'barangay' => (string) $h->barangay, 'phone' => (string) $h->phone];
-        }
-    }
-
-    protected function record(): ?Logistichub
-    {
-        return $this->hub ? Logistichub::where('is_company', true)->find($this->hub) : null;
-    }
-
-    public function save(): void
-    {
-        $f = array_map(fn ($v) => Str::squish((string) $v), $this->form);
-        if ($f['name'] === '' || $f['code'] === '' || $f['province'] === '') {
-            Notification::make()->title('Fill in the name, the code and where the hub is (province)')->warning()->send();
-
-            return;
-        }
-        $code = Str::upper($f['code']);
-        if (Logistichub::where('hub_code', $code)->when($this->hub, fn ($q) => $q->whereKeyNot($this->hub))->exists()) {
-            Notification::make()->title('The code '.$code.' is used by another hub')->warning()->send();
-
-            return;
-        }
-        $h = $this->record() ?? (new Logistichub)->forceFill(['is_company' => true, 'is_active' => true, 'trip_counter' => 0, 'user_id' => Auth::id()]);
-        $h->forceFill(['hub_name' => $f['name'], 'hub_code' => $code, 'province' => Str::title($f['province']), 'city' => $f['city'] ? Str::title($f['city']) : null,
-            'barangay' => $f['barangay'] ?: null, 'phone' => $f['phone'] ?: null])->save();
-        $this->hub = $h->id;
-        Notification::make()->title($h->hub_name.' saved')->success()->send();
-    }
-
-    public function toggleLeave(int $i): void
-    {
-        $this->leave[$i] = ! ($this->leave[$i] ?? false);
-    }
-
-    public function decideMove(int $areaId, string $yes): void
-    {
-        $this->move[$areaId] = $yes === 'yes' ? 'yes' : 'no';
-    }
-
-    public function approve(): void
-    {
-        $h = $this->record();
-        if (! $h) {
-            return;
-        }
-        $s = HubAreas::suggest($h);
-        $n = 0;
-        foreach ($s['free'] as $i => $g) {
-            if (empty($this->leave[$i])) {
-                $n += HubAreas::add($h->id, $g['province'], $g['city'], null, Auth::user())['ok'] ? 1 : 0;
-            }
-        }
-        foreach ($this->move as $areaId => $yes) {
-            if ($yes === 'yes' && ($a = HubArea::find($areaId))) {
-                $n += HubAreas::add($h->id, $a->province, $a->city, $a->barangay, Auth::user(), true)['ok'] ? 1 : 0;
-            }
-        }
-        $this->saved = true;
-        $this->leave = [];
-        $this->move = [];
-        Notification::make()->title($h->hub_name.': '.$n.' '.Str::plural('place', $n).' approved')->success()->send();
-    }
-
-    public function toggleActive(): void
-    {
-        if ($h = $this->record()) {
-            $h->forceFill(['is_active' => ! $h->is_active])->save();
-            HubAreas::log($h->id, $h->hub_name.' switched '.($h->is_active ? 'on' : 'off'), Auth::user());
-        }
-    }
-
-    protected function getViewData(): array
-    {
-        $h = $this->record();
-        $s = $h ? HubAreas::suggest($h) : ['free' => [], 'closer' => []];
-        $picked = collect($s['free'])->keys()->reject(fn ($i) => ! empty($this->leave[$i]))->count() + collect($this->move)->filter(fn ($v) => $v === 'yes')->count();
-        $areasPage = str_replace('HubSetup', 'HubAreas', static::class);
-
-        return [
-            'record' => $h, 'free' => $s['free'], 'closer' => $s['closer'], 'picked' => $picked,
-            'mine' => $h ? HubArea::where('logistichub_id', $h->id)->get() : collect(),
-            'provinces' => collect(HubAreas::REGIONS)->flatten()->sort()->values(),
-            'areasUrl' => class_exists($areasPage) && $areasPage !== static::class ? $areasPage::getUrl() : null,
-        ];
-    }
-}
-DISPATCH_FILE_END_7
-
-# ---------------------------------------------------------------- app/Filament/Shared/Hubs/MyAreaPage.php
-mkdir -p 'app/Filament/Shared/Hubs'
-cat > 'app/Filament/Shared/Hubs/MyAreaPage.php' <<'DISPATCH_FILE_END_8'
-<?php
-
-namespace App\Filament\Shared\Hubs;
-
-use App\Models\Hubs\HubArea;
-use App\Models\Hubs\HubAreaRequest;
-use App\Models\Logistichub;
-use App\Support\Hubs\HubAreas;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\Auth;
-
-/** Partner hub › My area: the places this hub delivers; ask the office for another place. */
-class MyAreaPage extends Page
-{
-    protected string $view = 'filament.hubs.my-area';
-
-    protected static ?string $slug = 'my-area';
-
-    protected static ?string $title = 'My area';
-
-    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-map';
-
-    public array $ask = ['province' => '', 'city' => '', 'barangay' => '', 'reason' => ''];
-
-    public static function canAccess(): bool
-    {
-        $u = Auth::user();
-
-        return HubAreas::ready() && $u?->logistichub_id && Logistichub::whereKey($u->logistichub_id)->value('is_company');
-    }
-
-    public function getHeading(): string|Htmlable
-    {
-        return '';
-    }
-
-    public function send(): void
-    {
-        if (blank($this->ask['province']) || blank($this->ask['reason'])) {
-            Notification::make()->title('Type the place and why')->warning()->send();
-
-            return;
-        }
-        HubAreas::request((int) Auth::user()->logistichub_id, $this->ask['province'], $this->ask['city'], $this->ask['barangay'], $this->ask['reason'], Auth::user());
-        $this->ask = ['province' => '', 'city' => '', 'barangay' => '', 'reason' => ''];
-        Notification::make()->title('Sent to the office')->success()->send();
-    }
-
-    protected function getViewData(): array
-    {
-        $hub = Logistichub::find(Auth::user()->logistichub_id);
-        $areas = HubArea::where('logistichub_id', $hub->id)->orderBy('province')->orderBy('city')->get();
-
-        return [
-            'hub' => $hub,
-            'provinces' => $areas->where('c_key', ''),
-            'cities' => $areas->where('c_key', '!=', '')->where('b_key', ''),
-            'brgys' => $areas->where('b_key', '!=', '')->groupBy(fn ($a) => $a->city.', '.$a->province),
-            'requests' => HubAreaRequest::where('logistichub_id', $hub->id)->latest('id')->limit(6)->get(),
-            'list' => collect(HubAreas::REGIONS)->flatten()->sort()->values(),
-        ];
-    }
-}
-DISPATCH_FILE_END_8
-
-# ---------------------------------------------------------------- app/Filament/Shared/LoadTripPage.php
-mkdir -p 'app/Filament/Shared'
-cat > 'app/Filament/Shared/LoadTripPage.php' <<'DISPATCH_FILE_END_9'
-<?php
-
-namespace App\Filament\Shared;
-
-use App\Filament\Concerns\ScansInvoices;
-use App\Models\Deliverylog;
-use App\Models\Invoice;
-use Filament\Notifications\Notification;
-use App\Models\Tripinvoice;
-use App\Models\Boxes\SetSplit;
-use App\Models\User;
-use App\Services\TripAssignment;
-use App\Support\Boxes\BoxSets;
-use App\Support\Maps\LoadOrder;
-use App\Support\Maps\TripSorter;
-use Filament\Forms\Components\Select;
-use Filament\Pages\Page;
-use Filament\Schemas\Schema;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Auth;
-
-/**
- * Scan station: crew scans each box as it goes onto the truck of a trip.
- *
- * Used by the admin hub (Scanload), the warehouse hub (Hubloaded) and partner
- * hubs (LoadTruck, which loads boxes handed over to the hub's own trips).
- */
-abstract class LoadTripPage extends Page
-{
-    use ScansInvoices;
-    use \App\Filament\Concerns\BypassesTripRules;
-
-    protected string $view = 'filament.pages.scanload';
-
-    protected static string|\BackedEnum|null $navigationIcon = Heroicon::OutlinedArrowUpTray;
-
-    /** Partner-hub mode: invoices are linked via deliveryloghub_id / is_loaded_hub. */
-    protected static bool $atHub = false;
-
-    /** Set by "Load it anyway" after a "too early" warning. */
-    public bool $forceLoad = false;
-
-    /** The last box that was too early to load (see LoadOrder). */
-    public ?array $early = null;
-
-    /** Where the box just loaded goes: ['zone' => 'front', 'stop' => 7]. */
-    public ?array $spot = null;
-
-    /** The box is for another hub than the trip goes to. */
-    public ?array $wrongHub = null;
-
-    /** The box's set on this truck: "Maria Santos · 2 of 3 · still to load X-103 (C)". */
-    public ?array $setInfo = null;
-
-    public function mount(): void
-    {
-        $this->form->fill();
-    }
-
-    protected function tripColumn(): string
-    {
-        return static::$atHub ? 'deliveryloghub_id' : 'deliverylog_id';
-    }
-
-    protected function loadedColumn(): string
-    {
-        return static::$atHub ? 'is_loaded_hub' : 'is_loaded';
-    }
-
-    protected function tripOptionsQuery(): Builder
-    {
-        return Deliverylog::query()
-            ->with('destination:id,hub_name')
-            ->where('logistichub_id', Auth::user()->logistichub_id)
-            ->whereNotNull('truck_id')
-            ->where('is_active', true)
-            ->latest('id');
-    }
-
-    public function form(Schema $schema): Schema
-    {
-        return $schema
-            ->statePath('data')
-            ->components([
-                Select::make('deliverylog_id')
-                    ->label('Trip')
-                    ->placeholder('Choose the trip you are loading')
+        return $table
+            // board 42: one clear row per trip; click a trip for its details on the side
+            ->recordUrl(null)
+            ->recordAction('details')
+            ->defaultSort('created_at', 'desc')
+            ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
+            ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'delivery'))
+            ->columns([...\App\Filament\Tables\TripList::columns(), ...collect([
+                \App\Filament\Shared\Trips\TripActions::stageColumn(),
+
+                TripBoardColumns::status('delivery'),
+
+                TripBoardColumns::progress('delivery'),
+
+                // Partner hub by truck: "Received by Baguio · 2 missing" (Scan app · Receive truck).
+                TextColumn::make('hub_received')
+                    ->label('Hub received')
+                    ->badge()
+                    ->color(fn ($state) => str_contains((string) $state, 'missing') ? 'danger' : (str_contains((string) $state, 'Received') ? 'success' : 'warning'))
+                    ->visible(fn () => \App\Support\Shipping\TruckReceive::ready())
+                    ->getStateUsing(function ($record) {
+                        $r = \App\Models\Shipping\TruckReceipt::with('hub:id,hub_name')->where('deliverylog_id', $record->id)->get();
+
+                        return $r->isEmpty() ? null : $r->map(fn ($x) => $x->finished_at
+                            ? 'Received by '.($x->hub?->hub_name ?? 'hub').($x->missing ? ' · '.$x->missing.' missing' : '')
+                            : ($x->hub?->hub_name ?? 'Hub').' receiving…')->join(' / ');
+                    }),
+
+                TextColumn::make('truck_id')
+                    ->label('Truck')
+                    ->searchable(query: function ($query, $search) {
+                        return $query->whereHas('truck', function ($q) use ($search) {
+                            $q->where('plate_no', 'like', "%{$search}%");
+                        });
+                    })
+                    ->sortable()
+                    ->getStateUsing(function ($record) {
+                        return $record->truck ? $record->truck->plate_no : 'Truck not assigned';
+                    }),
+                TextColumn::make('vicheletype')
+                    ->label('Vichele Type/Size')
+                    ->getStateUsing(function ($record) {
+                        return $record->truck ? $record->truck->category : ' ';
+                    }),
+                TextColumn::make('trip_day')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->numeric()
+                    ->sortable(),
+                TextColumn::make('logistichub.hub_name')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('Logistic Hub/Location'),
+                TextColumn::make('Total Invoices')
+                    ->label('Total Invoices')
+                    ->badge()
+                    ->color('danger')
+                    ->getStateUsing(function ($record) {
+                        return $record->tripinvoices()->count();
+                    }),
+                TextColumn::make('Total Loaded')
+                    ->badge()
+                    ->color('success')
+                    ->label('Total Loaded')
+                    ->getStateUsing(function ($record) {
+                        return $record->tripinvoices()->whereHas('invoice', function ($query) {
+                            $query->where('is_loaded', 1);
+                        })->count();
+                    }),
+                TextColumn::make('Verified Invoices')
+                    ->label('Invoices Verified')
+                    ->badge()
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->color('info')
+                    ->getStateUsing(function ($record) {
+                        return $record->tripinvoices()->whereHas('invoice', function ($query) {
+                            $query->where('is_verified', 1);
+                        })->count();
+                        // return $record->tripinvoices->invoices->where('is_verified', 1)->count();
+                    }),
+                TextColumn::make('City')
+                    ->label('City')
+                    ->separator(',')
+                    ->color('primary')
+                    ->listWithLineBreaks()
+                    ->limitList(3)
+                    ->expandableLimitedList()
+                    ->getStateUsing(function ($record) {
+                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
+                        return DB::table('tripinvoices')
+                            ->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
+                            ->where('tripinvoices.deliverylog_id', $record->id)
+                            ->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
+                            ->distinct()->orderBy('invoices.receiver_city')->pluck('invoices.receiver_city');
+                        //   ->implode(" , ");
+                    }),
+                TextColumn::make('Province')
+                    ->label('Province')
+                    ->separator(',')
+                    ->color('primary')
+                    ->listWithLineBreaks()
+                    ->limitList(3)
+                    ->expandableLimitedList()
+                    ->getStateUsing(function ($record) {
+                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
+                        return DB::table('tripinvoices')
+                            ->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
+                            ->where('tripinvoices.deliverylog_id', $record->id)
+                            ->whereNotNull('invoices.receiver_province')->where('invoices.receiver_province', '!=', '')
+                            ->distinct()->orderBy('invoices.receiver_province')->pluck('invoices.receiver_province');
+                        //   ->implode(" , ");
+                    }),
+                IconColumn::make('is_lock')
+                    ->label('Lock Status')
+                    ->boolean()
+                    ->trueIcon(Heroicon::LockClosed)
+                    ->falseIcon(Heroicon::LockOpen)
+                    ->sortable()
+                    ->color(function ($state) {
+                        return $state ? 'danger' : 'success';
+                    }),
+
+                TextColumn::make('waybill_number')
+                    ->label('Waybill No. / Container No.')
                     ->searchable()
-                    ->live()
-                    ->required()
-                    ->afterStateUpdated(fn () => $this->reset('lastInvoiceId', 'lastStatus', 'lastMessage'))
-                    ->options(fn () => $this->tripOptionsQuery()
-                        ->get()
-                        ->mapWithKeys(fn (Deliverylog $trip) => [
-                            $trip->id => $trip->trip_number.($trip->destination ? ' → '.$trip->destination->hub_name : ''),
-                        ])),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->sortable(),
+                TextColumn::make('eta')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('ETA')
+                    ->date()
+                    ->sortable(),
+                TextColumn::make('departure_date')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->date()
+                    ->sortable(),
+                TextColumn::make('assigned_to')
+                    ->sortable()
+                    ->getStateUsing(function ($record) {
+                        return Logistichub::where('id', $record->assigned_to)->first()->hub_name;
+                    }),
+                TextColumn::make('user.full_name')
+                    ->label('Created By')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->sortable(),
+
+                ToggleColumn::make('is_active')
+                    ->label('Is Active')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('created_at')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('updated_at')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+            ])->map(fn ($c) => $c->toggleable(isToggledHiddenByDefault: true))->all()])
+            ->filters([
+                ...\App\Filament\Tables\TripList::filters(),
+                TripBoardColumns::filter('delivery'),
+                SelectFilter::make('assigned_to')
+                    ->label('Going To')
+                    ->options(Logistichub::query()->pluck('hub_name', 'id'))
+                    ->searchable()
+                    ->preload(),
+            ])->deferFilters(false)
+            ->filtersLayout(\Filament\Tables\Enums\FiltersLayout::AboveContent)->filtersFormColumns(5)
+            ->recordActions([
+                Action::make('stops')
+                    ->label('Stops & loading')
+                    ->icon('heroicon-o-map')
+                    ->button()
+                    ->color('gray')
+                    ->url(fn ($record): string => TripStops::getUrl(['trip' => $record->id])),
+                Action::make('seaShipment')
+                    ->label('Make it a sea shipment')
+                    ->icon('heroicon-o-globe-asia-australia')
+                    ->button()
+                    ->color('info')
+                    ->tooltip(fn ($record) => ($record->destination?->hub_name ?? 'This hub').' is reached by sea')
+                    ->visible(fn ($record): bool => \App\Support\Shipping\Shipments::ready() && $record->is_active && $record->destination?->is_company
+                        && \App\Support\Shipping\Islands::bySea($record->destination) && ! \App\Models\Shipping\SeaShipment::where('deliverylog_id', $record->id)->exists())
+                    ->url(fn ($record): string => \App\Filament\Pages\SeaShipments::getUrl(['trip' => $record->id])),
+                Action::make('fuel')
+                    ->label('Fuel')
+                    ->icon('heroicon-o-beaker')
+                    ->button()
+                    ->color('gray')
+                    ->visible(fn (): bool => \App\Support\Fuel\Fuel::ready())
+                    ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
+                ActionGroup::make([
+                    Action::make('locktrip')
+                        ->requiresConfirmation()
+                        ->label(function ($record) {
+                            return $record->is_lock ? 'Unlock Trip' : 'Lock Trip';
+                        })
+                        ->color('info')
+                        ->icon(function ($record) {
+                            return $record->is_lock ? Heroicon::LockOpen : Heroicon::LockClosed;
+                        })
+                        // locking is on the Trip page (when ready); here a super admin can only unlock
+                        ->hidden(function ($record) {
+                            return ! $record->is_lock || ! Auth::user()->hasRole('super_admin');
+                        })
+                        ->action(function ($record) {
+                            $record->update([
+                                'is_lock' => ! $record->is_lock,
+                            ]);
+
+                            Notification::make()
+                                ->title($record->is_lock ? 'Trip Locked Successfully' : 'Trip Unlocked Successfully')
+                                ->success()
+                                ->send();
+                        }),
+                    \App\Filament\Shared\Trips\TripActions::release(),
+                    \App\Filament\Shared\Trips\TripActions::crew(),
+                    EditAction::make()
+                        ->label('Edit')
+                        ->icon(Heroicon::PencilSquare)
+                        ->hidden(function ($record) {
+                            return $record->is_lock;
+                        }),
+
+                ]),
+                \App\Filament\Tables\TripList::details(),
+            ], position: RecordActionsPosition::AfterColumns)
+            ->toolbarActions([
+                BulkActionGroup::make([
+                    //    DeleteBulkAction::make(),
+
+                ]),
             ]);
     }
-
-    protected function selectionField(): ?string
-    {
-        return 'deliverylog_id';
-    }
-
-    protected function selectionLabel(): string
-    {
-        return 'a trip';
-    }
-
-    /** The selected trip, re-checked against what this user may load. */
-    protected function selectedTrip(): ?Deliverylog
-    {
-        return $this->tripOptionsQuery()->find($this->data['deliverylog_id'] ?? null);
-    }
-
-    protected function handleScan(string $code): void
-    {
-        $trip = $this->selectedTrip();
-
-        if (! $trip) {
-            $this->scanResult('danger', 'That trip is no longer open for loading.');
-
-            return;
-        }
-
-        $tripinvoice = Tripinvoice::with('invdata')
-            ->where($this->tripColumn(), $trip->id)
-            ->where('invoice', $code)
-            ->latest('id')
-            ->first();
-
-        $this->bypass = null;
-        $box = $tripinvoice?->invdata ?? Invoice::where('invoice', $code)->where('is_delivered', false)->latest('id')->first();
-        // Truck full: the box does not fit in the truck's space (only for trucks with a space set).
-        if ($box && ! static::$atHub && ! $tripinvoice?->{$this->loadedColumn()} && ($full = \App\Support\Trips\TripSpace::overFull($trip, $box))
-            && ! $this->skips('truck_full', $trip->id, $box->id)) {
-            $this->early = null;
-            $this->wrongHub = ['kind' => 'full', 'code' => $code, 'for' => $full['used'].' of '.$full['cap'].' space used', 'section' => $box->whSection?->code ?? '—',
-                'color' => $box->whSection?->color, 'trip' => $trip->trip_number, 'space' => $full['space'], 'province' => $box->receiver_province];
-            $this->scanResult('warning', "Truck full: {$code} does not fit ({$full['used']} of {$full['cap']} space used).", $box);
-
-            return;
-        }
-
-        // Trip planned by city: a waiting box of one of its cities joins the trip now.
-        $cityTrip = ! static::$atHub && \App\Support\Trips\CityTrips::isCityTrip($trip);
-        if (! $tripinvoice && $cityTrip) {
-            [$joined, $why] = \App\Support\Trips\CityTrips::join($trip, $code, $box ? $this->skips('topup_other', $trip->id, $box->id) : $this->forceLoad,
-                $box ? $this->skips('direct_hub', $trip->id, $box->id) : false);
-            if ($joined) {
-                $tripinvoice = $joined;
-            } elseif ($why === 'other-city') {
-                $inv = Invoice::where('invoice', $code)->latest('id')->first();
-                $place = \Illuminate\Support\Str::title(trim($inv?->receiver_city.', '.$inv?->receiver_province, ', '));
-                $this->early = null;
-                $this->wrongHub = ['kind' => 'city', 'code' => $code, 'for' => $place, 'section' => $inv?->whSection?->code ?? '—', 'color' => $inv?->whSection?->color,
-                    'trip' => \App\Models\TripCity::where('deliverylog_id', $trip->id)->pluck('city')->join(', ')];
-                $this->forceLoad = false;
-                $this->scanResult('warning', "Other city: {$code} is for {$place}. Trip {$trip->trip_number} goes to {$this->wrongHub['trip']}.", $inv);
-
-                return;
-            } elseif (is_string($why) && str_starts_with($why, 'hub:')) {
-                // the box goes to a partner hub, or is ours while this trip goes to a hub
-                $inv = Invoice::where('invoice', $code)->latest('id')->first();
-                $hubId = (int) substr($why, 4);
-                $place = \Illuminate\Support\Str::title(trim($inv?->receiver_city.', '.$inv?->receiver_province, ', '));
-                $goes = $hubId ? \App\Support\Hubs\HubAreas::name($hubId) : 'our own trucks (direct to the customer)';
-                $this->early = null;
-                $this->wrongHub = ['kind' => 'hub', 'code' => $code, 'for' => $place, 'home' => $goes, 'section' => $inv?->whSection?->code ?? '—', 'color' => $inv?->whSection?->color,
-                    'trip' => $trip->trip_number];
-                $this->forceLoad = false;
-                $this->scanResult('warning', "Not for this trip: {$code} ({$place}) goes ".($hubId ? "to {$goes}" : 'with our own trucks').'.', $inv);
-
-                return;
-            } elseif ($why) {
-                $this->scanResult('danger', $why, $this->invoicesMatching($code)->first());
-
-                return;
-            }
-        }
-
-        if (! $tripinvoice && static::$atHub && $box && \App\Support\Hubs\HubAreas::ready()
-            && ($other = \App\Support\Hubs\HubAreas::hubOf($box)) && $other !== (int) Auth::user()?->logistichub_id) {
-            // a box of another hub's area came to this hub by mistake
-            $mine = \App\Support\Hubs\HubAreas::name((int) Auth::user()?->logistichub_id);
-            $place = \Illuminate\Support\Str::title(trim($box->receiver_city.', '.$box->receiver_province, ', '));
-            $this->scanResult('danger', "Not for {$mine}: {$code} is for ".\App\Support\Hubs\HubAreas::name($other)." ({$place}). Not loaded: put it aside and tell the office.", $box);
-
-            return;
-        }
-
-        if (! $tripinvoice) {
-            $elsewhere = Tripinvoice::with(['deliverylog:id,trip_number', 'invdata'])
-                ->where('invoice', $code)
-                ->latest('id')
-                ->first();
-
-            $this->scanResult(
-                'danger',
-                $elsewhere
-                    ? "{$code} belongs to trip {$elsewhere->deliverylog?->trip_number}, not {$trip->trip_number}."
-                    : "{$code} is not on trip {$trip->trip_number}.",
-                $elsewhere?->invdata ?? $this->invoicesMatching($code)->first(),
-            );
-
-            return;
-        }
-
-        if (static::$atHub && \App\Support\Shipping\Shipments::ready() && ($sea = \App\Support\Shipping\Shipments::stillAtSea($tripinvoice))) {
-            $this->scanResult('danger', "{$code} is still on sea shipment {$sea->code}".($sea->eta ? ' (arriving about '.$sea->eta->format('M j').')' : '').'. Receive the container first (Scan app → Receive container).', $tripinvoice->invdata);
-
-            return;
-        }
-
-        if ($tripinvoice->{$this->loadedColumn()}) {
-            $who = $tripinvoice->loaded_by && $tripinvoice->loaded_by !== Auth::id() ? User::find($tripinvoice->loaded_by)?->first_name : null;
-            $when = $tripinvoice->loaded_at ? \Illuminate\Support\Carbon::parse($tripinvoice->loaded_at)->format('g:i A') : null;
-            $this->scanResult('warning', "{$code} was already loaded".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $tripinvoice->invdata);
-
-            return;
-        }
-
-        $this->early = null;
-        $this->spot = null;
-        $this->wrongHub = null;
-        $this->setInfo = null;
-        if (! $this->skips('wrong_hub', $trip->id, $tripinvoice->invoice_id) && ($wrong = $this->wrongHubFor($trip, $tripinvoice))) {
-            $this->wrongHub = $wrong;
-            $this->scanResult('warning', "Wrong hub: {$code} is for {$wrong['for']} (section {$wrong['section']}). This trip goes to {$wrong['trip']}.", $tripinvoice->invdata);
-
-            return;
-        }
-        if (! $this->skips('load_order', $trip->id, $tripinvoice->invoice_id) && ! $cityTrip && ($early = LoadOrder::tooEarly($trip, $tripinvoice, static::$atHub))) {
-            $this->early = $early;
-            $this->scanResult('warning', "Too early: {$code} is for stop {$early['stop']}".($early['place'] ? " ({$early['place']})" : '').'. It goes in later, nearer the door. Load stop '.$early['nextStop'].' first.', $tripinvoice->invdata);
-
-            return;
-        }
-        $this->forceLoad = false;
-
-        app(TripAssignment::class)->markLoaded($tripinvoice, atHub: static::$atHub);
-        $tripinvoice->forceFill(['loaded_by' => Auth::id(), 'loaded_at' => now()])->saveQuietly();
-        $this->spot = TripSorter::zoneMap($trip)[$tripinvoice->id] ?? null;
-        // One container, more hubs: the hub that unloads last goes deep inside.
-        if (! $this->spot && ! static::$atHub && \App\Support\Shipping\Shipments::ready()) {
-            $this->spot = \App\Support\Shipping\Shipments::loadZone($trip->id);
-        }
-        if ($tripinvoice->invdata) {
-            $this->setInfo = BoxSets::onTrip($tripinvoice->invdata, $trip, $this->tripColumn(), $this->loadedColumn());
-        }
-
-        $this->scanResult('success', "{$code} loaded.", $tripinvoice->invdata);
-    }
-
-    /** The box's section is for another partner hub than the one this trip goes to. */
-    protected function wrongHubFor(Deliverylog $trip, Tripinvoice $tripinvoice): ?array
-    {
-        $section = $tripinvoice->invdata?->whSection;
-        $to = static::$atHub ? null : $trip->assigned_to;
-        if (! $section || ! $section->logistichub_id || ! $to || (int) $section->logistichub_id === (int) $to) {
-            return null;
-        }
-
-        return ['code' => $tripinvoice->invoice, 'for' => $section->name ?: $section->goesTo(), 'section' => $section->code, 'color' => $section->color,
-            'trip' => $trip->destination?->hub_name ?? 'another hub'];
-    }
-
-    /**
-     * Trip by city, every waiting box of its cities loaded, and room left: the best nearby city to top up with.
-     *
-     * @return array{room: int, key: string, city: string, province: string, boxes: int, days: int, section: ?string}|null
-     */
-    public function cityTopUp(): ?array
-    {
-        $trip = $this->selectedTrip();
-        if (! $trip || static::$atHub || $trip->is_lock || ! \App\Support\Trips\CityTrips::isCityTrip($trip)) {
-            return null;
-        }
-        $mine = \App\Models\TripCity::where('deliverylog_id', $trip->id)->get();
-        $keys = $mine->map(fn ($c) => \Illuminate\Support\Str::lower((string) $c->province).'|'.$c->city_key)->flip();
-        $ct = new \App\Support\Trips\CityTrips(Auth::user());
-        $places = $ct->places();
-        if ($places->contains(fn ($p) => isset($keys[$p['key']])) || ! Tripinvoice::where('deliverylog_id', $trip->id)->where('is_loaded', true)->exists()) {
-            return null; // still boxes of its own cities to load
-        }
-        $cap = \App\Support\Trips\TripSpace::capacity($trip) ?? \App\Support\TruckSpace::capacity($trip->truck);
-        $room = (int) floor($cap - \App\Support\Trips\TripSpace::used($trip));
-        if ($room < 5) {
-            return null;
-        }
-        $covered = $ct->covered();
-        $prov = \Illuminate\Support\Str::lower((string) $mine->first()?->province);
-        $best = $places->reject(fn ($p) => $p['unclear'] || isset($keys[$p['key']]) || isset($covered[$p['key']]) || $p['space'] > $room)
-            ->sortBy(fn ($p) => [\Illuminate\Support\Str::lower($p['province']) === $prov ? 0 : 1, -$p['days'], -$p['boxes']])->first();
-        if (! $best) {
-            return null;
-        }
-        $section = Invoice::where('is_verified', true)->where('is_assigned', false)->where('receiver_city', 'like', '%'.\Illuminate\Support\Str::before($best['city'], ' ').'%')
-            ->whereNotNull('wh_section_id')->with('whSection')->first()?->whSection?->code;
-
-        return ['room' => $room, 'key' => $best['key'], 'city' => $best['city'], 'province' => $best['province'], 'boxes' => $best['boxes'], 'days' => $best['days'], 'section' => $section,
-            'same' => \Illuminate\Support\Str::lower($best['province']) === $prov];
-    }
-
-    /** Add the suggested city: its boxes join when scanned. */
-    public function addTopUpCity(string $key): void
-    {
-        $trip = $this->selectedTrip();
-        $top = $this->cityTopUp();
-        if (! $trip || ! $top || $top['key'] !== $key) {
-            Notification::make()->title('That top-up is not possible any more.')->warning()->send();
-
-            return;
-        }
-        \App\Models\TripCity::create(['deliverylog_id' => $trip->id, 'province' => $top['province'], 'city' => $top['city'],
-            'city_key' => \Illuminate\Support\Str::after($key, '|'), 'planned_boxes' => $top['boxes']]);
-        Notification::make()->title($top['city'].' added to '.$trip->trip_number.': scan its '.$top['boxes'].' boxes'.($top['section'] ? ' (section '.$top['section'].')' : ''))->success()->send();
-    }
-
-    /** Customers whose boxes are not all on the truck, for the Done screen. */
-    public function openSets(): array
-    {
-        $trip = $this->selectedTrip();
-
-        return $trip ? BoxSets::openOnTrip($trip, $this->tripColumn(), $this->loadedColumn()) : [];
-    }
-
-    /** Why a box of a set stays behind. */
-    public function recordSplit(int $invoiceId, string $reason): bool
-    {
-        $trip = $this->selectedTrip();
-        if (! $trip || ! array_key_exists($reason, SetSplit::REASONS)) {
-            return false;
-        }
-        $ok = collect($this->openSets())->pluck('missing')->flatten(1)->contains('id', $invoiceId);
-        if (! $ok) {
-            return false;
-        }
-        $need = \App\Support\Trips\TripRules::need('split_set', Auth::user(), $trip->id, $invoiceId);
-        $ctx = ['trip_id' => $trip->id, 'trip_number' => $trip->trip_number, 'invoice_id' => $invoiceId, 'box' => Invoice::whereKey($invoiceId)->value('invoice'), 'data' => ['split' => $reason]];
-        if ($need === 'office') {
-            \App\Support\Trips\TripRules::ask('split_set', Auth::user(), SetSplit::REASONS[$reason], $ctx);
-
-            return true;
-        }
-        if ($need === 'reason' && ! SetSplit::where('invoice_id', $invoiceId)->where('deliverylog_id', $trip->id)->exists()) {
-            \App\Support\Trips\TripRules::record('split_set', Auth::user(), SetSplit::REASONS[$reason], $ctx);
-        }
-        $split = SetSplit::updateOrCreate(['invoice_id' => $invoiceId, 'deliverylog_id' => $trip->id],
-            ['reason' => $reason, 'user_id' => Auth::id(), 'set_key' => Invoice::whereKey($invoiceId)->value('set_key')]);
-        if ($split->wasRecentlyCreated) {
-            BoxSets::textRestFollows($split, $trip, $this->tripColumn(), $this->loadedColumn());
-        }
-
-        return true;
-    }
-
-    /** Who loaded how many boxes on this trip. */
-    public function team(): array
-    {
-        $id = $this->data['deliverylog_id'] ?? null;
-        if (! $id) {
-            return [];
-        }
-        $counts = Tripinvoice::where($this->tripColumn(), $id)->where($this->loadedColumn(), true)->whereNotNull('loaded_by')
-            ->selectRaw('loaded_by, count(*) n')->groupBy('loaded_by')->pluck('n', 'loaded_by');
-        $names = User::whereIn('id', $counts->keys())->pluck('first_name', 'id');
-
-        return $counts->sortDesc()->map(fn ($n, $uid) => ['name' => (int) $uid === Auth::id() ? 'You' : ($names[$uid] ?? '?'), 'n' => (int) $n, 'me' => (int) $uid === Auth::id()])->values()->all();
-    }
-
-
-    /** What to load next on the selected trip (null when the trip has no sorted stops). */
-    public function loadNext(): ?array
-    {
-        $trip = $this->selectedTrip();
-
-        return $trip ? LoadOrder::next($trip, static::$atHub) : null;
-    }
-
-    /** @return array{loaded: int, total: int} */
-    public function progress(): array
-    {
-        $tripId = $this->data['deliverylog_id'] ?? null;
-
-        if (! $tripId) {
-            return ['loaded' => 0, 'total' => 0];
-        }
-
-        $query = Tripinvoice::where($this->tripColumn(), $tripId);
-
-        return [
-            'loaded' => (clone $query)->where($this->loadedColumn(), true)->count(),
-            'total' => $query->count(),
-            'last' => (clone $query)->where($this->loadedColumn(), true)->max('updated_at'),
-        ];
-    }
-
-    public function household(): array
-    {
-        $tripId = (int) ($this->data['deliverylog_id'] ?? 0);
-
-        return $this->householdRows($this->lastInvoice(), function (Invoice $box) use ($tripId): array {
-            $onTrip = Tripinvoice::with('deliverylog:id,trip_number')->where('invoice_id', $box->id)->latest('id')->first();
-
-            return [
-                'trip' => $onTrip?->deliverylog?->trip_number,
-                'done' => (bool) ($onTrip?->{$this->loadedColumn()} && (int) $onTrip->{$this->tripColumn()} === $tripId),
-            ];
-        });
-    }
-
-    public function photoStep(): ?string
-    {
-        return static::$atHub ? 'hub_load' : 'load';
-    }
-
-    public function photoContext(): array
-    {
-        return [
-            'deliverylog_id' => $this->data['deliverylog_id'] ?? null,
-            'warehouse_id' => Auth::user()?->warehouse_id,
-            'logistichub_id' => Auth::user()?->logistichub_id,
-        ];
-    }
-
-    public function appChoices(): Collection
-    {
-        return $this->tripOptionsQuery()->latest('id')->limit(60)->get()
-            ->map(fn (Deliverylog $t) => ['id' => $t->id, 'name' => 'Trip '.$t->trip_number, 'active' => (bool) ($t->is_active ?? true),
-                'sub' => $t->destination?->hub_name ? 'To '.$t->destination->hub_name : ($t->departure_date ? 'Leaves '.$t->departure_date : null)]);
-    }
 }
-DISPATCH_FILE_END_9
+DISPATCH_FILE_END_3
 
 # ---------------------------------------------------------------- app/Filament/Shared/Trips/PlanTripsPage.php
 mkdir -p 'app/Filament/Shared/Trips'
-cat > 'app/Filament/Shared/Trips/PlanTripsPage.php' <<'DISPATCH_FILE_END_10'
+cat > 'app/Filament/Shared/Trips/PlanTripsPage.php' <<'DISPATCH_FILE_END_4'
 <?php
 
 namespace App\Filament\Shared\Trips;
@@ -1484,6 +581,7 @@ class PlanTripsPage extends Page
         }
         $trips = ($this->hubWhen[$hub] ?? 'now') === 'later' ? array_slice($h['trips'], 0, 1) : $h['trips'];
         try {
+            $this->city()->made = [];
             $made = $this->city()->createHub($hub, $trips, Carbon::parse($this->date ?: today()), $h['tip']);
         } catch (\Throwable $e) {
             report($e);
@@ -1582,6 +680,7 @@ class PlanTripsPage extends Page
         if (isset($this->trips[$i]) && $this->mayChange()) {
             $this->trips[$i]['on'] = ! $this->trips[$i]['on'];
             $this->trips[$i]['changed'] = true;
+            $this->trips[$i]['changedNote'] = $this->trips[$i]['on'] ? 'Switched off, then on again' : 'Switched off';
             $this->made = [];
         }
     }
@@ -1650,6 +749,8 @@ class PlanTripsPage extends Page
         $at = $options->search($this->trips[$i]['truck_id'], true);
         $n = ($at === false ? -1 : $at) + 1;
         $next = $options->has($n) ? $options[$n] : $options[0];
+        $plate = fn ($id) => $id ? ($trucks->firstWhere('id', $id)['plate'] ?? '#'.$id) : 'no truck';
+        $this->trips[$i]['changedNote'] = 'Truck '.$plate($this->trips[$i]['changedFrom'] ??= $this->trips[$i]['truck_id']).' → '.$plate($next);
         $this->trips[$i]['truck_id'] = $next;
         $this->trips[$i]['cap'] = $next ? ($trucks->firstWhere('id', $next)['capacity'] ?? CityTrips::DEFAULT_CAPACITY) : CityTrips::DEFAULT_CAPACITY;
         $this->made = [];
@@ -1669,6 +770,7 @@ class PlanTripsPage extends Page
                 \App\Support\Trips\TripRules::record('change_plan', Auth::user(), $this->planReason, ['note' => $t['province'].' › '.collect($t['cities'])->pluck('city')->join(', ').($t['on'] ? '' : ' (switched off)')]);
             }
         }
+        $this->city()->made = ['ai' => $this->ai, 'instruction' => trim($this->instruction), 'reason' => $this->planReason];
         try {
             $this->made = $this->city()->create($this->trips, $date);
         } catch (\Throwable $e) {
@@ -1750,402 +852,271 @@ class PlanTripsPage extends Page
         ];
     }
 }
-DISPATCH_FILE_END_10
+DISPATCH_FILE_END_4
 
-# ---------------------------------------------------------------- app/Models/Hubs/HubArea.php
-mkdir -p 'app/Models/Hubs'
-cat > 'app/Models/Hubs/HubArea.php' <<'DISPATCH_FILE_END_11'
+# ---------------------------------------------------------------- app/Filament/Tables/TripList.php
+mkdir -p 'app/Filament/Tables'
+cat > 'app/Filament/Tables/TripList.php' <<'DISPATCH_FILE_END_5'
 <?php
 
-namespace App\Models\Hubs;
+namespace App\Filament\Tables;
 
-use App\Models\Logistichub;
+use App\Models\Deliverylog;
+use App\Models\TripCity;
+use App\Models\TripCrew;
+use App\Models\TripOverride;
+use App\Support\TripFlow;
+use App\Support\Trips\TripRules;
+use Filament\Actions\Action;
+use Filament\Forms\Components\ToggleButtons;
+use Filament\Schemas\Components\Tabs\Tab;
+use Filament\Tables\Columns\ViewColumn;
+use Filament\Tables\Filters\Filter;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-
-/** One place a partner hub delivers: a province, a city, or a barangay. One owner per place. */
-class HubArea extends Model
-{
-    protected $guarded = [];
-
-    public function hub(): BelongsTo
-    {
-        return $this->belongsTo(Logistichub::class, 'logistichub_id');
-    }
-
-    public function label(): string
-    {
-        return collect([$this->barangay ? 'Brgy. '.preg_replace('/^(brgy\.?|barangay)\s+/i', '', $this->barangay) : null, $this->city, $this->province])->filter()->join(', ');
-    }
-}
-DISPATCH_FILE_END_11
-
-# ---------------------------------------------------------------- app/Models/Hubs/HubAreaRequest.php
-mkdir -p 'app/Models/Hubs'
-cat > 'app/Models/Hubs/HubAreaRequest.php' <<'DISPATCH_FILE_END_12'
-<?php
-
-namespace App\Models\Hubs;
-
-use App\Models\Logistichub;
-use App\Models\User;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-
-/** A hub asks the office for a place. */
-class HubAreaRequest extends Model
-{
-    protected $guarded = [];
-
-    protected function casts(): array
-    {
-        return ['decided_at' => 'datetime'];
-    }
-
-    public function hub(): BelongsTo
-    {
-        return $this->belongsTo(Logistichub::class, 'logistichub_id');
-    }
-
-    public function user(): BelongsTo
-    {
-        return $this->belongsTo(User::class);
-    }
-
-    public function label(): string
-    {
-        return collect([$this->barangay ? 'Brgy. '.preg_replace('/^(brgy\.?|barangay)\s+/i', '', $this->barangay) : null, $this->city, $this->province])->filter()->join(', ');
-    }
-}
-DISPATCH_FILE_END_12
-
-# ---------------------------------------------------------------- app/Support/Aging/BoxAging.php
-mkdir -p 'app/Support/Aging'
-cat > 'app/Support/Aging/BoxAging.php' <<'DISPATCH_FILE_END_13'
-<?php
-
-namespace App\Support\Aging;
-
-use App\Models\Ai\AgingLimit;
-use App\Models\Container;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
- * Box aging: how long each box that is not delivered yet has been at its current stage,
- * and in total since its container was unloaded. Plain counting on your own data.
+ * Delivery trips list (board 42): one clear row per trip, who made it (✦ AI, ✦ Plan trips, changed, by hand),
+ * where it goes, truck and crew, boxes, status; tabs, Made by and Going to filters, details on the side.
  */
-class BoxAging
+class TripList
 {
-    public const STAGES = [
-        'container' => 'In container, not unloaded',
-        'waiting' => 'In warehouse, waiting for a trip',
-        'transfer' => 'Warehouse transfer (on the way)',
-        'hub' => 'At partner hub, waiting for its trip',
-        'truck' => 'On a truck, not delivered',
-        'failed' => 'Tried and failed, waiting',
+    public const MADE = [
+        'ai' => ['✦ AI', 'ai'],
+        'plan' => ['✦ Plan trips', 'plan'],
+        'changed' => ['✦ Plan trips · changed', 'changed'],
+        'manual' => ['✎ By hand', 'manual'],
     ];
 
-    public const TOTAL = 'total';
-
-    /** Used until you save your own (or the AI's) limits. [warn, late] */
-    public const DEFAULTS = [
-        'container' => ['all' => [2, 4]],
-        'waiting' => ['all' => [4, 7], 'mindanao' => [7, 11]],
-        'transfer' => ['all' => [2, 4]],
-        'hub' => ['all' => [3, 6]],
-        'truck' => ['all' => [2, 4]],
-        'failed' => ['all' => [3, 7]],
-        'total' => ['metro_manila' => [7, 9], 'luzon' => [9, 12], 'visayas' => [10, 14], 'mindanao' => [14, 18], 'all' => [10, 14]],
-    ];
-
-    public const BUCKETS = [[0, 3, '0–3 days'], [4, 7, '4–7 days'], [8, 14, '8–14 days'], [15, 9999, '15+ days']];
-
-    /** Only boxes from containers made in the last … days are followed. */
-    public const WINDOW_DAYS = 150;
-
-    /** @return array<string, array<string, array{0: int, 1: int}>> */
-    protected static ?array $limitMemo = null;
-
-    public static function limits(): array
+    protected static function hasMade(): bool
     {
-        return static::$limitMemo ??= Cache::remember('ai.aging.limits', 600, function () {
-            $limits = self::DEFAULTS;
-            foreach (AgingLimit::all() as $l) {
-                $limits[$l->stage][$l->region] = [(int) $l->warn_days, (int) $l->late_days];
+        static $has = null;
+
+        return $has ??= Schema::hasColumn('deliverylogs', 'made_by');
+    }
+
+    /** How the trip was made. Old trips: Plan trips when they have cities, else by hand. */
+    public static function madeKey(Model $trip): string
+    {
+        $m = static::hasMade() ? $trip->made_by : null;
+        if ($m && isset(self::MADE[$m])) {
+            return $m;
+        }
+
+        return TripCity::where('deliverylog_id', $trip->id)->exists() ? 'plan' : 'manual';
+    }
+
+    public static function isHubTrip(Model $trip): bool
+    {
+        return $trip->assigned_to && (int) $trip->assigned_to !== (int) $trip->logistichub_id;
+    }
+
+    /** @return array{to: string, cities: string, dot: string} */
+    public static function goes(Model $trip): array
+    {
+        $cities = TripCity::where('deliverylog_id', $trip->id)->get();
+        if ($cities->isEmpty()) {
+            $rows = DB::table('tripinvoices')->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
+                ->where(fn ($q) => $q->where('tripinvoices.deliverylog_id', $trip->id)->orWhere('tripinvoices.deliveryloghub_id', $trip->id))
+                ->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
+                ->select('invoices.receiver_province as province', 'invoices.receiver_city as city')->distinct()->limit(6)->get();
+            $prov = Str::title((string) ($rows->first()->province ?? ''));
+            $list = $rows->pluck('city')->map(fn ($c) => Str::title($c))->unique();
+        } else {
+            $prov = (string) $cities->first()->province;
+            $list = $cities->pluck('city')->unique();
+        }
+        $cityText = $list->isEmpty() ? 'No boxes yet' : $list->take(3)->join(', ').($list->count() > 3 ? ' +'.($list->count() - 3) : '');
+        if (static::isHubTrip($trip)) {
+            $color = class_exists(\App\Support\Hubs\HubAreas::class) ? \App\Support\Hubs\HubAreas::color((int) $trip->assigned_to) : '#1d6fb8';
+
+            return ['to' => '→ '.($trip->destination?->hub_name ?? 'Hub'), 'cities' => $cityText, 'dot' => $color];
+        }
+
+        return ['to' => $prov ?: ($list->isEmpty() ? 'Not set yet' : 'Direct'), 'cities' => $cityText, 'dot' => '#17895e'];
+    }
+
+    public static function crew(Model $trip)
+    {
+        return TripCrew::with('user.workposition')->where('deliverylog_id', $trip->id)->get()->sortBy(fn ($c) => TripFlow::isLead($c) ? 0 : 1)->values();
+    }
+
+    /** @return array{label: string, tone: string, when: string} */
+    public static function status(Model $trip): array
+    {
+        $stage = TripFlow::ready() ? TripFlow::stage($trip) : ($trip->is_active ? 'loading' : 'closed');
+        $label = TripFlow::STAGES[$stage][0] ?? Str::title($stage);
+        $when = match ($stage) {
+            'road' => $trip->taken_at ? 'Left '.$trip->taken_at->format('g:i A') : 'On the road',
+            'back' => $trip->back_at ? 'Back '.$trip->back_at->format('g:i A') : 'Back at the hub',
+            'closed' => $trip->closed_at ? 'Done '.$trip->closed_at->format('M j g:i A') : 'Done',
+            'ready' => $trip->ready_at ? 'Locked '.$trip->ready_at->format('g:i A') : 'Locked',
+            'waiting' => 'Waits for the truck',
+            default => $trip->departure_date ? 'Leaves '.\Illuminate\Support\Carbon::parse($trip->departure_date)->format('M j') : '',
+        };
+
+        return ['label' => $label, 'tone' => $stage, 'when' => $when];
+    }
+
+    /** "How this trip was made" lines for the details panel. */
+    public static function how(Deliverylog $trip): array
+    {
+        $key = static::madeKey($trip);
+        $note = static::hasMade() ? $trip->made_note : null;
+        $lines = [];
+        $lines[] = match ($key) {
+            'ai' => ['✦', 'Plan trips with the AI'.($note ? ': “'.$note.'”' : '').'.'],
+            'changed' => ['✎', 'Plan trips, changed before Create'.($note ? ': '.$note : '').'.'],
+            'plan' => ['✦', ($note ?: (static::isHubTrip($trip) ? 'Plan trips › To hubs' : 'Plan trips')).' (system rules).'],
+            default => ['✎', 'Made by hand in Delivery trips › New trip.'],
+        };
+        if ($trip->plan_why) {
+            $lines[] = ['💬', 'Why: '.$trip->plan_why];
+        }
+        if (static::isHubTrip($trip)) {
+            $lines[] = ['⌂', ($trip->destination?->hub_name ?? 'The hub').' delivers the boxes with its own trucks.'];
+        }
+        if (TripRules::ready()) {
+            foreach (TripOverride::where('trip_id', $trip->id)->latest('id')->limit(4)->get() as $o) {
+                $lines[] = ['⇄', (TripRules::RULES[$o->rule][0] ?? $o->rule).($o->box ? ' · '.$o->box : '').($o->reason ? ': '.$o->reason : '').' ('.$o->status.')'];
             }
-
-            return $limits;
-        });
-    }
-
-    public static function forgetLimits(): void
-    {
-        static::$limitMemo = null;
-        Cache::forget('ai.aging.limits');
-    }
-
-    /** @return array{0: int, 1: int} */
-    public static function limitFor(string $stage, string $region): array
-    {
-        $l = static::limits()[$stage] ?? [];
-
-        return $l[$region] ?? $l['all'] ?? [5, 10];
-    }
-
-    public static function status(int $days, array $limit): string
-    {
-        return $days >= $limit[1] ? 'late' : ($days >= $limit[0] ? 'warn' : 'ok');
-    }
-
-    /**
-     * One row per box that is not delivered yet.
-     *
-     * @return Collection<int, array<string, mixed>>
-     */
-    public static function rows(?int $hubId = null, ?int $warehouseId = null, bool $fresh = false): Collection
-    {
-        $key = 'ai.aging.rows.'.($hubId ?? 'x').'.'.($warehouseId ?? 'x');
-        $store = Cache::store('file');
-        if ($fresh) {
-            $store->forget($key);
         }
 
-        return $store->remember($key, 900, function () use ($hubId, $warehouseId) {
-            $rows = static::compute($hubId, $warehouseId);
-            Cache::store('file')->put(static::badgeKey($hubId, $warehouseId), $rows->where('status', 'late')->count(), 3600);
-
-            return $rows;
-        });
+        return $lines;
     }
 
-    /** Big warehouses can have many thousands of boxes open: give this count enough memory. */
-    public static function roomToWork(): void
+    /** @return list<ViewColumn> */
+    public static function columns(): array
     {
-        $limit = ini_get('memory_limit');
-        $bytes = $limit === '-1' ? PHP_INT_MAX : (int) $limit * (str_ends_with(strtoupper((string) $limit), 'G') ? 1024 ** 3 : (str_ends_with(strtoupper((string) $limit), 'M') ? 1024 ** 2 : 1));
-        if ($bytes < 512 * 1024 ** 2) {
-            @ini_set('memory_limit', '512M');
-        }
-        if (PHP_SAPI !== 'cli' && (int) ini_get('max_execution_time') < 120) {
-            @set_time_limit(120);
-        }
-    }
-
-    public static function badgeKey(?int $hubId, ?int $warehouseId): string
-    {
-        return 'ai.aging.badge.'.($hubId ?? 'x').'.'.($warehouseId ?? 'x');
-    }
-
-    /** The number of late boxes from the last count, without counting again (for the menu badge). */
-    public static function lateCountCached(?int $hubId, ?int $warehouseId): ?int
-    {
-        $n = Cache::store('file')->get(static::badgeKey($hubId, $warehouseId));
-
-        return $n === null ? null : (int) $n;
-    }
-
-    /** Lean: plain rows from the database in chunks, no models, so big warehouses don't run out of memory. */
-    protected static function compute(?int $hubId, ?int $warehouseId): Collection
-    {
-        static::roomToWork();
-        $now = now();
-        $days = fn ($since) => $since ? max(0, (int) floor(Carbon::parse($since)->diffInHours($now) / 24)) : 0;
-        $hubs = DB::table('logistichubs')->get(['id', 'hub_name', 'is_company'])->keyBy('id');
-        $out = [];
-
-        $base = DB::table('invoices as i')
-            ->join('containers as c', 'c.id', '=', 'i.container_id')
-            ->leftJoin('consolidators as k', 'k.id', '=', 'c.consolidator_id')
-            ->where('i.is_delivered', false)
-            ->where('c.created_at', '>=', $now->copy()->subDays(self::WINDOW_DAYS))
-            ->when($warehouseId, fn ($q) => $q->where('i.warehouse_id', $warehouseId))
-            ->when($hubId, fn ($q) => $q->whereExists(fn ($e) => $e->from('tripinvoices as h')->whereColumn('h.invoice_id', 'i.id')->where('h.logistichub_id', $hubId)))
-            ->select(['i.id', 'i.invoice', 'i.receiver_name', 'i.receiver_barangay', 'i.receiver_city', 'i.receiver_province', 'i.warehouse_id',
-                'c.container_no', 'c.created_at as c_created', 'c.unloaded_at', 'c.is_unloaded', 'c.updated_at as c_updated', 'k.company_name']);
-
-        $base->orderBy('i.id')->chunk(2000, function ($chunk) use (&$out, $hubs, $days) {
-            $ids = $chunk->pluck('id')->all();
-            $trips = DB::table('tripinvoices as t')->join('deliverylogs as d', 'd.id', '=', 't.deliverylog_id')
-                ->leftJoin('deliverylogs as hd', 'hd.id', '=', 't.deliveryloghub_id')
-                ->whereIn('t.invoice_id', $ids)->orderBy('t.id')
-                ->get(['t.invoice_id', 't.logistichub_id', 't.is_loaded', 't.hub_assigned', 't.created_at', 't.updated_at',
-                    'd.trip_number', 'd.departure_date', 'hd.trip_number as h_trip', 'hd.departure_date as h_departure'])
-                ->keyBy('invoice_id'); // last one wins
-            $transfers = DB::table('whtripinvoices as w')->join('whdeliverylogs as wd', 'wd.id', '=', 'w.whdeliverylog_id')
-                ->whereIn('w.invoice_id', $ids)->where('w.is_unloaded', false)->orderBy('w.id')
-                ->get(['w.invoice_id', 'w.created_at', 'wd.trip_number', 'wd.departure_date'])->keyBy('invoice_id');
-            $attempts = DB::table('delivery_attempts')->whereIn('invoice_id', $ids)
-                ->selectRaw('invoice_id, max(created_at) as at')->groupBy('invoice_id')->pluck('at', 'invoice_id');
-
-            foreach ($chunk as $i) {
-                $unloaded = $i->unloaded_at ?? ($i->is_unloaded ? $i->c_updated : null);
-                $t = $trips[$i->id] ?? null;
-                $w = $transfers[$i->id] ?? null;
-                $a = $attempts[$i->id] ?? null;
-                $hub = $t ? ($hubs[$t->logistichub_id] ?? null) : null;
-
-                if (! $unloaded) {
-                    [$stage, $since, $where] = ['container', $i->c_created, $i->container_no];
-                } elseif ($w) {
-                    [$stage, $since, $where] = ['transfer', $w->departure_date ?? $w->created_at, 'Transfer '.$w->trip_number];
-                } elseif ($t && $a && Carbon::parse($a)->gte(Carbon::parse($t->created_at))) {
-                    [$stage, $since, $where] = ['failed', $a, 'Trip '.($t->h_trip ?? $t->trip_number)];
-                } elseif ($t && $hub?->is_company && ! $t->hub_assigned && $t->is_loaded) {
-                    [$stage, $since, $where] = ['hub', $t->updated_at, $hub->hub_name];
-                } elseif ($t && ($t->is_loaded || $t->hub_assigned)) {
-                    $hubTrip = $t->hub_assigned && $t->h_trip;
-                    [$stage, $since, $where] = ['truck', ($hubTrip ? $t->h_departure : $t->departure_date) ?? $t->updated_at, 'Trip '.($hubTrip ? $t->h_trip : $t->trip_number)];
-                } else {
-                    [$stage, $since, $where] = ['waiting', $unloaded, $t ? 'On trip '.$t->trip_number.' (not loaded)' : 'Warehouse'];
-                }
-
-                $region = Regions::of($i->receiver_province, $i->receiver_city);
-                $d = $days($since);
-                $total = $unloaded ? $days($unloaded) : 0;
-                $stageLimit = static::limitFor($stage, $region);
-                $totalLimit = static::limitFor(self::TOTAL, $region);
-                $st = static::status($d, $stageLimit);
-                $tt = $unloaded ? static::status($total, $totalLimit) : 'ok';
-                $worst = ($st === 'late' || $tt === 'late') ? 'late' : (($st === 'warn' || $tt === 'warn') ? 'warn' : 'ok');
-
-                $out[] = [
-                    'invoice_id' => $i->id, 'invoice' => $i->invoice,
-                    'name' => Str::title((string) $i->receiver_name),
-                    'place' => Str::title(trim($i->receiver_barangay.', '.$i->receiver_city, ', ')),
-                    'province' => Str::title((string) $i->receiver_province), 'region' => $region,
-                    'stage' => $stage, 'where' => $where,
-                    'days' => $d, 'total' => $total, 'stageStatus' => $st, 'status' => $worst,
-                    'tomorrow' => $worst !== 'late' && ($d + 1 >= $stageLimit[1] || ($unloaded && $total + 1 >= $totalLimit[1])),
-                    'warehouse_id' => $i->warehouse_id, 'hub_id' => $t?->logistichub_id, 'hub' => $hub?->hub_name,
-                    'container' => $i->container_no, 'consolidator' => $i->company_name, 'tried' => (bool) $a,
-                ];
-            }
-        });
-
-        return collect($out);
-    }
-
-    /** Numbers for the top of the page and the morning summary. */
-    public static function summary(Collection $rows): array
-    {
-        $key = 'ai.aging.ontime';
-        [$onTime, $count] = Cache::store('file')->remember($key, 1800, function () {
-            $ok = 0;
-            $n = 0;
-            DB::table('tripinvoices as t')->join('invoices as i', 'i.id', '=', 't.invoice_id')->join('containers as c', 'c.id', '=', 'i.container_id')
-                ->where('t.is_delivered', true)->where('t.delivered_at', '>=', now()->subDays(30))
-                ->select(['t.id', 't.delivered_at', 'c.unloaded_at', 'i.receiver_province', 'i.receiver_city'])->orderBy('t.id')
-                ->chunk(3000, function ($chunk) use (&$ok, &$n) {
-                    foreach ($chunk as $r) {
-                        $n++;
-                        if (! $r->unloaded_at || ! $r->delivered_at) {
-                            $ok++;
-
-                            continue;
-                        }
-                        $limit = static::limitFor(self::TOTAL, Regions::of($r->receiver_province, $r->receiver_city));
-                        $ok += Carbon::parse($r->unloaded_at)->diffInDays(Carbon::parse($r->delivered_at)) < $limit[1] ? 1 : 0;
-                    }
-                });
-
-            return [$ok, $n];
-        });
-
         return [
-            'open' => $rows->count(),
-            'late' => $rows->where('status', 'late')->count(),
-            'warn' => $rows->where('status', 'warn')->count(),
-            'tomorrow' => $rows->where('tomorrow', true)->count(),
-            'onTime' => $count ? (int) round($onTime / $count * 100) : null,
-            'oldest' => $rows->sortByDesc('total')->first(),
+            ViewColumn::make('trip_number')->label('Trip · made by')->view('filament.trips.list.trip')->searchable()->sortable(),
+            ViewColumn::make('goes')->label('Going to')->view('filament.trips.list.goes'),
+            ViewColumn::make('truck_view')->label('Truck · crew')->view('filament.trips.list.truck')
+                ->searchable(query: fn (Builder $query, string $search) => $query->whereHas('truck', fn ($t) => $t->where('plate_no', 'like', "%{$search}%"))),
+            ViewColumn::make('boxes_bar')->label('Boxes')->view('filament.trips.list.boxes'),
+            ViewColumn::make('stage_view')->label('Status')->view('filament.trips.list.status'),
         ];
     }
 
-    public const PHRASE = [
-        'container' => 'still in the container', 'waiting' => 'waiting in the warehouse for a trip', 'transfer' => 'on a warehouse transfer',
-        'hub' => 'waiting at the partner hub', 'truck' => 'on a truck, not delivered', 'failed' => 'waiting after a failed try',
-    ];
-
-    /** Plain reasons and next steps for late boxes (used when the AI is not available). */
-    public static function reasons(Collection $rows): array
+    /** Made by and Going to, as chips above the list. */
+    public static function filters(): array
     {
-        $action = [
-            'container' => 'Unload the container', 'waiting' => 'Plan the trips (Plan trips)', 'transfer' => 'Check the transfer trip',
-            'hub' => 'Plan hub trips', 'truck' => 'Call the driver of the trip', 'failed' => 'Text the receivers (Risky deliveries)',
+        return [
+            Filter::make('made')
+                ->schema([ToggleButtons::make('v')->label('Made by')->inline()->options(['all' => 'All', 'ai' => '✦ AI', 'plan' => '✦ Plan trips', 'manual' => '✎ By hand'])->default('all')])
+                ->query(function (Builder $query, array $data) {
+                    $q = $query;
+                    $v = $data['v'] ?? 'all';
+                    if ($v === 'all' || ! $v) {
+                        return $q;
+                    }
+                    $hasCities = fn ($w) => $w->select(DB::raw(1))->from('trip_cities')->whereColumn('trip_cities.deliverylog_id', 'deliverylogs.id');
+                    $made = static::hasMade();
+
+                    return match ($v) {
+                        'ai' => $made ? $q->where('deliverylogs.made_by', 'ai') : $q->whereRaw('1 = 0'),
+                        'plan' => $q->where(fn ($w) => $made
+                            ? $w->whereIn('deliverylogs.made_by', ['plan', 'changed'])->orWhere(fn ($n) => $n->whereNull('deliverylogs.made_by')->whereExists($hasCities))
+                            : $w->whereExists($hasCities)),
+                        'manual' => $q->where(fn ($w) => $made
+                            ? $w->where('deliverylogs.made_by', 'manual')->orWhere(fn ($n) => $n->whereNull('deliverylogs.made_by')->whereNotExists($hasCities))
+                            : $w->whereNotExists($hasCities)),
+                        default => $q,
+                    };
+                })
+                ->columnSpan(2)
+                ->indicateUsing(fn (array $data) => ($data['v'] ?? 'all') !== 'all' ? 'Made by: '.(['ai' => 'AI', 'plan' => 'Plan trips', 'manual' => 'By hand'][$data['v']] ?? '') : null),
+            Filter::make('going')
+                ->schema([ToggleButtons::make('v')->label('Going to')->inline()->options(['all' => 'All', 'direct' => 'Direct', 'hub' => 'To hubs'])->default('all')])
+                ->query(fn (Builder $query, array $data) => match ($data['v'] ?? 'all') {
+                    'direct' => $query->whereColumn('deliverylogs.assigned_to', 'deliverylogs.logistichub_id'),
+                    'hub' => $query->whereColumn('deliverylogs.assigned_to', '!=', 'deliverylogs.logistichub_id'),
+                    default => $query,
+                })
+                ->indicateUsing(fn (array $data) => ($data['v'] ?? 'all') !== 'all' ? 'Going to: '.(['direct' => 'Direct', 'hub' => 'To hubs'][$data['v']] ?? '') : null),
         ];
-        $items = $rows->where('stageStatus', 'late')
-            ->groupBy(fn ($r) => $r['stage'].'|'.($r['stage'] === 'waiting' ? ($r['container'] ?? '') : ($r['where'] ?? '')))
-            ->sortByDesc(fn ($g) => $g->count())->take(3)
-            ->map(function ($g) use ($action) {
-                $r = $g->first();
-                $limit = static::limitFor($r['stage'], $r['region']);
-                $ref = $r['stage'] === 'waiting' ? ($r['container'] ? 'container '.$r['container'] : null) : $r['where'];
+    }
 
-                return [
-                    't' => sprintf('%d %s %s%s for %d+ days.', $g->count(), Str::plural('box', $g->count()), self::PHRASE[$r['stage']], $ref ? ' ('.$ref.')' : '', $limit[1]),
-                    'act' => $action[$r['stage']],
-                ];
-            })->values()->all();
+    /** Click a trip: its details on the side. */
+    public static function details(): Action
+    {
+        return Action::make('details')
+            ->label('Details')
+            ->icon('heroicon-o-ellipsis-horizontal')
+            ->iconButton()
+            ->slideOver()
+            ->modalWidth('lg')
+            ->modalHeading(fn (Deliverylog $record) => 'Trip '.$record->trip_number)
+            ->modalContent(fn (Deliverylog $record) => view('filament.trips.list.details', ['trip' => $record]))
+            ->modalSubmitAction(false)
+            ->modalCancelActionLabel('Close');
+    }
 
-        $totalOnly = $rows->where('status', 'late')->where('stageStatus', '!=', 'late');
-        if ($totalOnly->isNotEmpty() && count($items) < 4) {
-            $items[] = [
-                't' => sprintf('%d %s on time at the current stage but past the total limit since unload (oldest %d days).', $totalOnly->count(), Str::plural('box', $totalOnly->count()), $totalOnly->max('total')),
-                'act' => 'Deliver these first',
-            ];
-        }
+    /** All / Planned / Loading / On the road / Done. */
+    public static function tabs(Builder $base): array
+    {
+        $loaded = fn ($w) => $w->select(DB::raw(1))->from('tripinvoices')->where('tripinvoices.is_loaded', true)
+            ->where(fn ($x) => $x->whereColumn('tripinvoices.deliverylog_id', 'deliverylogs.id')->orWhereColumn('tripinvoices.deliveryloghub_id', 'deliverylogs.id'));
+        $taken = Schema::hasColumn('deliverylogs', 'taken_at');
+        $q = [
+            'all' => fn (Builder $b) => $b,
+            'planned' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->whereNotExists($loaded),
+            'loading' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->whereExists($loaded),
+            'road' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNotNull('deliverylogs.taken_at'), fn ($x) => $x->whereRaw('1 = 0')),
+            'done' => fn (Builder $b) => $b->where('deliverylogs.is_active', false),
+        ];
+        $labels = ['all' => 'All', 'planned' => 'Planned', 'loading' => 'Loading', 'road' => 'On the road', 'done' => 'Done'];
 
-        return $items;
+        return collect($q)->mapWithKeys(fn ($fn, $k) => [$k => Tab::make($labels[$k])
+            ->badge(fn () => $fn((clone $base))->count())
+            ->modifyQueryUsing(fn (Builder $query) => $fn($query))])->all();
     }
 }
-DISPATCH_FILE_END_13
+DISPATCH_FILE_END_5
 
-# ---------------------------------------------------------------- app/Support/Ai/AiFeatures.php
-mkdir -p 'app/Support/Ai'
-cat > 'app/Support/Ai/AiFeatures.php' <<'DISPATCH_FILE_END_14'
+# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Deliverylogs/Pages/CreateDeliverylog.php
+mkdir -p 'app/Filament/Warehouse/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Warehouse/Resources/Deliverylogs/Pages/CreateDeliverylog.php' <<'DISPATCH_FILE_END_6'
 <?php
 
-namespace App\Support\Ai;
+namespace App\Filament\Warehouse\Resources\Deliverylogs\Pages;
 
-/** The AI helpers that can be switched on in Admin → Settings → AI. */
-class AiFeatures
+use App\Filament\Warehouse\Resources\Deliverylogs\DeliverylogResource;
+use App\Models\Truck;
+use Filament\Resources\Pages\CreateRecord;
+use Illuminate\Support\Facades\Auth;
+
+class CreateDeliverylog extends CreateRecord
 {
-    /** key => [title, what it does, who uses it, needs the API key] */
-    public const ALL = [
-        'trips' => ['Trip helper', 'The AI inside Plan trips: type what matters today ("Rizal first, keep one truck free") and it orders the provinces and keeps trucks free. When this is off, Plan trips still makes trips with the system rules; only the type box is grey.', 'Admin · Warehouse · Partner hub · Plan trips', true],
-        'aging' => ['Box aging', 'How long each box has waited since unload, at each stage. Late boxes in the bell, a morning summary, limits suggested from your history, and why boxes are late (AI).', 'Admin · Warehouse · Partner hub', false],
-        'photo_check' => ['AI photo check', 'Looks at every box photo (scan and proof of delivery) and lists the ones that look damaged, wet, opened or blurry.', 'Admin · Warehouse · Partner hub', true],
-        'ask' => ['Ask the system', 'Staff ask about boxes, containers, trips and drivers in plain words. It can only read.', 'Admin · Warehouse · Partner hub', true],
-        'manifest' => ['Read a manifest', 'Reads a consolidator manifest (PDF, Excel, CSV or a photo) into a container\'s invoices, and fixes messy addresses.', 'Admin · Warehouse', true],
-        'risky' => ['Risky deliveries', 'Lists boxes on trips that will likely fail, writes a text for the receiver, and warns the driver.', 'Admin · Partner hub · Driver app', true],
-        'alerts' => ['Alerts', 'Checks every 15 minutes for unusual things: too-fast deliveries, boxes on two trips, boxes stuck, many failures in one barangay.', 'Admin · Warehouse · Partner hub', false],
-        'issues' => ['Issue helper', 'On an Invoice Issue: sums it up, suggests the next step and writes the email to the consolidator with the photos.', 'Admin', true],
-        'insights' => ['Insights', 'Forecast of boxes for the next 8 weeks and a weekly report for each partner hub.', 'Admin · Warehouse · Partner hub', true],
-        'voice' => ['Driver voice note', 'In the Driver app, "Can\'t deliver": the driver says what happened and the reason and note are filled in.', 'Driver app', true],
-        'sms_writer' => ['SMS writer', 'In Settings → SMS: make a text fit in 1 SMS, friendlier, or translate it to Tagalog or Bisaya. Also turns the driver\'s note ("wala tao, balik bukas") into a clear "not delivered" text.', 'Admin', true],
-        'alert_explain' => ['Truck alerts explained', 'Each truck alert gets a short note: what probably happened (lunch, no signal, wrong turn), how worried to be, and what to do.', 'Admin · Warehouse · Partner hub', true],
-        'day_summary' => ['End-of-day truck summary', 'After work: the day in short, and for each truck what went well and what to look at. Optional daily email.', 'Admin · Warehouse · Partner hub', true],
-        'addresses' => ['AI address cleaning', 'Fixes messy addresses ("purok 3 near chapel, Lapu2" → "Purok 3, Pusok, Lapu-Lapu City, Cebu") so the map finds more stops, fills in a missing barangay from clues in the address, and so finds the right hub for a box in a city shared by two hubs. Unsure ones go to Addresses to check.', 'Admin · Warehouse · Partner hub', true],
-        'fuel_receipts' => ['Read fuel receipts', 'In the Driver app, reads the fuel receipt photo (station, diesel or gasoline, liters, price, total, VAT, TIN) and the odometer photo, so the driver does not type them.', 'Driver app · Fuel', true],
-        'box_sizes' => ['Box sizes: same box, different spelling', 'In Settings → Box sizes, finds box types on the manifests that are the same box written differently ("Bulilit" and "Small", "X-LARGE" and "XL") so you can join them.', 'Admin', true],
-        'help_ask' => ['Help answers', 'In the Help guide, staff and drivers ask in their own words (English, Tagalog or Taglish) and get a short answer taken only from the guides, with the right guide to open.', 'Admin · Warehouse · Partner hub · Scan app · Driver app', true],
-        'customer_chat' => ['Customer chat', 'A public page where receivers type their box number and ask questions. Answers come from tracking; anything else goes to staff.', 'Receivers · Admin · Partner hub', true],
-    ];
-
-    public static function title(string $key): string
+    protected static string $resource = DeliverylogResource::class;
+    protected function mutateFormDataBeforeCreate(array $data): array
     {
-        return self::ALL[$key][0] ?? $key;
+        $data['logistichub_id'] = Auth::user()->logistichub_id;
+        $data['user_id'] = Auth::id();
+        if (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'made_by')) {
+            $data['made_by'] = 'manual'; // made by hand (Delivery trips › New trip)
+        }
+
+        return $data;
+
+    }
+    protected function afterCreate(): void
+    {
+        $newtruckid = $this->data['truck_id'];
+
+        Truck::where('id', $newtruckid)->update([
+            'is_assigned' => 1,
+        ]);
     }
 }
-DISPATCH_FILE_END_14
+DISPATCH_FILE_END_6
 
 # ---------------------------------------------------------------- app/Support/Ai/TripPlanner.php
 mkdir -p 'app/Support/Ai'
-cat > 'app/Support/Ai/TripPlanner.php' <<'DISPATCH_FILE_END_15'
+cat > 'app/Support/Ai/TripPlanner.php' <<'DISPATCH_FILE_END_7'
 <?php
 
 namespace App\Support\Ai;
@@ -2569,7 +1540,7 @@ class TripPlanner
                         'logistichub_id' => $this->user->logistichub_id,
                         'assigned_to' => $this->mode === 'hub' ? $this->user->logistichub_id : ($t['dest'] ?: $this->user->logistichub_id),
                         'user_id' => $this->user->id,
-                    ]);
+                    ] + (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'made_by') ? ['made_by' => 'plan', 'made_note' => 'Old AI trip helper'] : []));
                     $truck->update(['is_assigned' => true]);
                     $added = $this->mode === 'hub'
                         ? $service->addToHubTrip($trip, Tripinvoice::whereKey($ids)->get())
@@ -2584,1044 +1555,11 @@ class TripPlanner
         return $made;
     }
 }
-DISPATCH_FILE_END_15
-
-# ---------------------------------------------------------------- app/Support/Hubs/HubAreas.php
-mkdir -p 'app/Support/Hubs'
-cat > 'app/Support/Hubs/HubAreas.php' <<'DISPATCH_FILE_END_16'
-<?php
-
-namespace App\Support\Hubs;
-
-use App\Models\Hubs\HubArea;
-use App\Models\Hubs\HubAreaRequest;
-use App\Models\Invoice;
-use App\Models\Logistichub;
-use App\Models\User;
-use App\Support\Maps\Barangays;
-use Filament\Notifications\Notification;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Str;
-
-/**
- * Hub areas: which active partner hub delivers each place.
- * One owner per place. The smallest place wins: barangay, then city, then province.
- * A place with no hub is delivered direct by the warehouse.
- */
-class HubAreas
-{
-    /** Philippine regions: a new hub is suggested the places of its own region that have no hub. */
-    public const REGIONS = [
-        'NCR' => ['Metro Manila'],
-        'CAR' => ['Abra', 'Apayao', 'Benguet', 'Ifugao', 'Kalinga', 'Mountain Province'],
-        'Ilocos' => ['Ilocos Norte', 'Ilocos Sur', 'La Union', 'Pangasinan'],
-        'Cagayan Valley' => ['Batanes', 'Cagayan', 'Isabela', 'Nueva Vizcaya', 'Quirino'],
-        'Central Luzon' => ['Aurora', 'Bataan', 'Bulacan', 'Nueva Ecija', 'Pampanga', 'Tarlac', 'Zambales'],
-        'Calabarzon' => ['Batangas', 'Cavite', 'Laguna', 'Quezon', 'Rizal'],
-        'Mimaropa' => ['Marinduque', 'Occidental Mindoro', 'Oriental Mindoro', 'Palawan', 'Romblon'],
-        'Bicol' => ['Albay', 'Camarines Norte', 'Camarines Sur', 'Catanduanes', 'Masbate', 'Sorsogon'],
-        'Western Visayas' => ['Aklan', 'Antique', 'Capiz', 'Guimaras', 'Iloilo'],
-        'Negros Island' => ['Negros Occidental', 'Negros Oriental', 'Siquijor'],
-        'Central Visayas' => ['Bohol', 'Cebu'],
-        'Eastern Visayas' => ['Biliran', 'Eastern Samar', 'Leyte', 'Northern Samar', 'Samar', 'Southern Leyte'],
-        'Zamboanga Peninsula' => ['Zamboanga del Norte', 'Zamboanga del Sur', 'Zamboanga Sibugay'],
-        'Northern Mindanao' => ['Bukidnon', 'Camiguin', 'Lanao del Norte', 'Misamis Occidental', 'Misamis Oriental'],
-        'Davao' => ['Davao de Oro', 'Davao del Norte', 'Davao del Sur', 'Davao Occidental', 'Davao Oriental'],
-        'Soccsksargen' => ['Cotabato', 'Sarangani', 'South Cotabato', 'Sultan Kudarat'],
-        'Caraga' => ['Agusan del Norte', 'Agusan del Sur', 'Dinagat Islands', 'Surigao del Norte', 'Surigao del Sur'],
-        'BARMM' => ['Basilan', 'Lanao del Sur', 'Maguindanao del Norte', 'Maguindanao del Sur', 'Sulu', 'Tawi-Tawi'],
-    ];
-
-    /** One color per hub, the same on every page. */
-    public static function color(int $hubId): string
-    {
-        $c = ['#1d6fb8', '#c97a00', '#17895e', '#7a4fd6', '#c2410c', '#0e7490'];
-
-        return $c[$hubId % count($c)];
-    }
-
-    public static function ready(): bool
-    {
-        return Schema::hasTable('hub_areas');
-    }
-
-    /** Partner hubs that can own places (active, not the main hub). */
-    public static function hubs(bool $activeOnly = true): Collection
-    {
-        return Logistichub::query()->where('is_company', true)->when($activeOnly, fn ($q) => $q->where('is_active', true))->orderBy('hub_name')->get();
-    }
-
-    public static function pKey(?string $province): string
-    {
-        $p = Str::lower(Str::ascii(Str::squish((string) $province)));
-        $p = preg_replace('/^(province of|prov\.?)\s+/', '', $p);
-
-        return trim(preg_replace('/[^a-z0-9]+/', ' ', $p));
-    }
-
-    public static function cKey(?string $city): string
-    {
-        return Barangays::cityKey($city);
-    }
-
-    public static function bKey(?string $barangay): string
-    {
-        return Barangays::nameKey($barangay);
-    }
-
-    /** Changes when an area changes or a hub is switched on or off (for caches). */
-    public static function version(): string
-    {
-        if (! static::ready()) {
-            return '0';
-        }
-
-        return DB::table('hub_area_log')->max('id').'.'.DB::table('hub_areas')->count().'.'.Logistichub::where('is_company', true)->where('is_active', true)->count();
-    }
-
-    /**
-     * Every place of an active partner hub: "p|c|b" => hub id. Read it once, then use hubOf() for many boxes.
-     *
-     * @return array<string, int>
-     */
-    public static function map(): array
-    {
-        if (! static::ready()) {
-            return [];
-        }
-        $active = static::hubs()->pluck('id')->flip();
-
-        return HubArea::query()->get(['logistichub_id', 'p_key', 'c_key', 'b_key'])
-            ->filter(fn ($a) => isset($active[$a->logistichub_id]))
-            ->mapWithKeys(fn ($a) => [$a->p_key.'|'.$a->c_key.'|'.$a->b_key => (int) $a->logistichub_id])->all();
-    }
-
-    /** The hub that delivers this box, or null (the warehouse delivers it direct). */
-    public static function hubOf(?Invoice $i, ?array $map = null): ?int
-    {
-        if (! $i) {
-            return null;
-        }
-        $map ??= static::map();
-        if ($map === []) {
-            return null;
-        }
-        $p = static::pKey($i->receiver_province);
-        $c = static::cKey($i->receiver_city);
-        if ($c !== '') {
-            $b = static::bKey(Barangays::of($i));
-            if ($b !== '' && isset($map[$p.'|'.$c.'|'.$b])) {
-                return $map[$p.'|'.$c.'|'.$b];
-            }
-            if (isset($map[$p.'|'.$c.'|'])) {
-                return $map[$p.'|'.$c.'|'];
-            }
-        }
-
-        return $map[$p.'||'] ?? null;
-    }
-
-    /** The owner of exactly this place (any hub, active or not). */
-    public static function owner(string $province, ?string $city = null, ?string $barangay = null): ?HubArea
-    {
-        return HubArea::where('p_key', static::pKey($province))->where('c_key', $city ? static::cKey($city) : '')
-            ->where('b_key', $barangay ? static::bKey($barangay) : '')->first();
-    }
-
-    /**
-     * Give a place to a hub. A place owned by another hub is not taken: the conflict comes back, unless $move.
-     *
-     * @return array{ok: bool, conflict?: HubArea}
-     */
-    public static function add(int $hubId, string $province, ?string $city, ?string $barangay, ?User $by, bool $move = false): array
-    {
-        $province = Str::title(Str::squish($province));
-        $city = filled($city) ? Str::title(Str::squish($city)) : null;
-        $barangay = filled($barangay) && $city ? Str::title(Str::squish($barangay)) : null;
-        if (static::pKey($province) === '') {
-            return ['ok' => false];
-        }
-        $have = static::owner($province, $city, $barangay);
-        if ($have && (int) $have->logistichub_id === $hubId) {
-            return ['ok' => true];
-        }
-        if ($have && ! $move) {
-            return ['ok' => false, 'conflict' => $have];
-        }
-        $label = collect([$barangay ? 'Brgy. '.$barangay : null, $city, $province])->filter()->join(', ');
-        DB::transaction(function () use ($have, $hubId, $province, $city, $barangay, $by, $label) {
-            if ($have) {
-                static::log($hubId, $label.': '.static::name($have->logistichub_id).' → '.static::name($hubId), $by);
-                $have->update(['logistichub_id' => $hubId]);
-
-                return;
-            }
-            HubArea::create(['logistichub_id' => $hubId, 'province' => $province, 'city' => $city, 'barangay' => $barangay,
-                'p_key' => static::pKey($province), 'c_key' => $city ? static::cKey($city) : '', 'b_key' => $barangay ? static::bKey($barangay) : '']);
-            static::log($hubId, static::name($hubId).': + '.$label, $by);
-        });
-
-        return ['ok' => true];
-    }
-
-    public static function remove(HubArea $a, ?User $by): void
-    {
-        static::log($a->logistichub_id, static::name($a->logistichub_id).': − '.$a->label(), $by);
-        $a->delete();
-    }
-
-    public static function name(?int $hubId): string
-    {
-        return $hubId ? (string) (Logistichub::whereKey($hubId)->value('hub_name') ?? 'hub #'.$hubId) : '';
-    }
-
-    public static function log(?int $hubId, string $text, ?User $by): void
-    {
-        DB::table('hub_area_log')->insert(['logistichub_id' => $hubId, 'text' => Str::limit($text, 295, ''), 'user_id' => $by?->id, 'created_at' => now(), 'updated_at' => now()]);
-    }
-
-    /** A hub asks for a place; the office gets it in the bell. */
-    public static function request(int $hubId, string $province, ?string $city, ?string $barangay, ?string $reason, ?User $by): HubAreaRequest
-    {
-        // who delivers it now: the barangay's hub, or the city's, or the province's
-        $now = ($barangay ? static::owner($province, $city, $barangay) : null)?->logistichub_id
-            ?? ($city ? static::owner($province, $city) : null)?->logistichub_id
-            ?? static::owner($province)?->logistichub_id;
-        $r = HubAreaRequest::create(['logistichub_id' => $hubId, 'province' => Str::title(Str::squish($province)), 'city' => filled($city) ? Str::title(Str::squish($city)) : null,
-            'barangay' => filled($barangay) ? Str::title(Str::squish($barangay)) : null, 'reason' => Str::limit((string) $reason, 295, ''), 'now_hub_id' => $now, 'user_id' => $by?->id]);
-        try {
-            $office = User::where('is_admin', true)->get()->merge(User::role('super_admin')->get())->unique('id');
-            Notification::make()->title(static::name($hubId).' asks for '.$r->label())
-                ->body(collect([$now ? 'now '.static::name($now) : 'no hub now', $reason])->filter()->join(' · '))->warning()->sendToDatabase($office);
-        } catch (\Throwable $e) {
-            report($e);
-        }
-
-        return $r;
-    }
-
-    public static function decide(HubAreaRequest $r, bool $yes, ?User $by): void
-    {
-        if ($yes) {
-            static::add($r->logistichub_id, $r->province, $r->city, $r->barangay, $by, true);
-        }
-        $r->update(['status' => $yes ? 'approved' : 'refused', 'decided_by' => $by?->id, 'decided_at' => now()]);
-        if (! $yes) {
-            static::log($r->logistichub_id, static::name($r->logistichub_id).' asked for '.$r->label().': refused', $by);
-        }
-        try {
-            $users = User::where('logistichub_id', $r->logistichub_id)->get();
-            Notification::make()->title($r->label().': '.($yes ? 'approved' : 'refused'))
-                ->body($yes ? 'New boxes for this place now come to your hub.' : 'It stays as it is.')->{$yes ? 'success' : 'warning'}()->sendToDatabase($users);
-        } catch (\Throwable $e) {
-            report($e);
-        }
-    }
-
-    public static function pendingCount(): int
-    {
-        return static::ready() ? HubAreaRequest::where('status', 'pending')->count() : 0;
-    }
-
-    /** Boxes per week for a province (or a city), from the last 4 weeks of manifests. */
-    public static function perWeek(string $province, ?string $city = null): int
-    {
-        $q = Invoice::query()->where('created_at', '>=', now()->subDays(28))->where('receiver_province', 'like', $province);
-        if ($city) {
-            $q->where('receiver_city', 'like', $city.'%');
-        }
-
-        return (int) round($q->count() / 4);
-    }
-
-    public static function regionOf(?string $province): ?string
-    {
-        $k = static::pKey($province);
-        foreach (self::REGIONS as $r => $list) {
-            foreach ($list as $p) {
-                if (static::pKey($p) === $k) {
-                    return $r;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Suggested area for a hub, from where it is: its own province and the provinces of its region with no hub;
-     * places of its province that another hub (from another province) delivers come back as "closer".
-     *
-     * @return array{free: list<array{province: string, city: ?string, sub: string, perWeek: int}>, closer: list<array{area: HubArea, sub: string}>}
-     */
-    public static function suggest(Logistichub $hub): array
-    {
-        $out = ['free' => [], 'closer' => []];
-        if (blank($hub->province)) {
-            return $out;
-        }
-        $own = Str::title(Str::squish($hub->province));
-        $taken = HubArea::query()->get();
-        $ownedProvince = fn (string $p) => $taken->first(fn ($a) => $a->p_key === static::pKey($p) && $a->c_key === '');
-        $anyInProvince = fn (string $p) => $taken->contains(fn ($a) => $a->p_key === static::pKey($p));
-        $hubProv = Logistichub::query()->pluck('province', 'id')->map(fn ($p) => static::pKey($p));
-
-        if (! $ownedProvince($own)) {
-            $out['free'][] = ['province' => $own, 'city' => null, 'sub' => 'Whole province · the hub is here', 'perWeek' => static::perWeek($own)];
-        }
-        foreach (self::REGIONS[static::regionOf($own)] ?? [] as $p) {
-            if (static::pKey($p) !== static::pKey($own) && ! $anyInProvince($p)) {
-                $out['free'][] = ['province' => $p, 'city' => null, 'sub' => 'No hub now · same region', 'perWeek' => static::perWeek($p)];
-            }
-        }
-        foreach ($taken->where('p_key', static::pKey($own)) as $a) {
-            if ((int) $a->logistichub_id !== (int) $hub->id && ($hubProv[$a->logistichub_id] ?? '') !== static::pKey($own)) {
-                $out['closer'][] = ['area' => $a, 'sub' => $a->label().' is with '.static::name($a->logistichub_id).', a hub in another province. '.$hub->hub_name.' is in '.$own.'.'];
-            }
-        }
-        $out['free'] = collect($out['free'])->sortByDesc('perWeek')->take(6)->values()->all();
-
-        return $out;
-    }
-
-    /** Places of hubs that are switched off: their boxes go direct now. */
-    public static function orphans(): Collection
-    {
-        if (! static::ready()) {
-            return collect();
-        }
-        $off = Logistichub::where('is_company', true)->where('is_active', false)->pluck('hub_name', 'id');
-
-        return HubArea::whereIn('logistichub_id', $off->keys())->get()->groupBy('logistichub_id')
-            ->map(fn ($g, $id) => ['hub' => $off[$id], 'id' => (int) $id, 'places' => $g])->values();
-    }
-
-    /** Cities shared by two hubs (barangays given to a hub other than the city's main hub). */
-    public static function splitCities(): Collection
-    {
-        if (! static::ready()) {
-            return collect();
-        }
-        $all = HubArea::query()->get();
-
-        return $all->where('b_key', '!=', '')->groupBy(fn ($a) => $a->p_key.'|'.$a->c_key)->map(function ($brgys, $k) use ($all) {
-            [$p, $c] = explode('|', $k);
-            $main = $all->first(fn ($a) => $a->p_key === $p && $a->c_key === $c && $a->b_key === '')
-                ?? $all->first(fn ($a) => $a->p_key === $p && $a->c_key === '' && $a->b_key === '');
-            $first = $brgys->first();
-            $known = Invoice::query()->where('receiver_city', 'like', $first->city.'%')->where('receiver_province', 'like', $first->province)
-                ->whereNotNull('receiver_barangay')->where('receiver_barangay', '!=', '')->distinct()->count('receiver_barangay');
-
-            return ['city' => $first->city, 'province' => $first->province, 'main' => $main?->logistichub_id,
-                'byHub' => $brgys->groupBy('logistichub_id'), 'known' => max($known, $brgys->count())];
-        })->values();
-    }
-}
-DISPATCH_FILE_END_16
-
-# ---------------------------------------------------------------- app/Support/Navigation/Menu.php
-mkdir -p 'app/Support/Navigation'
-cat > 'app/Support/Navigation/Menu.php' <<'DISPATCH_FILE_END_17'
-<?php
-
-namespace App\Support\Navigation;
-
-use App\Models\Shipping\WrongHubBox;
-use App\Support\Shipping\Shipments;
-use App\Support\Tracking\Tracker;
-use Filament\Navigation\NavigationGroup;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Cache;
-
-/**
- * The side menu of the Admin, Warehouse and Partner hub panels, in one place:
- * the groups (in the order of the work of the day) and, per page, its group, name and place.
- * Pages not listed here keep their own group and name.
- */
-class Menu
-{
-    /** Panel => [group name => folded at first]. */
-    public const GROUPS = [
-        'admin' => [
-            'Boxes' => false, 'Trips & delivery' => false, 'Sea & partner hubs' => false, 'Money' => false,
-            'AI helpers' => true, 'Scan on this computer' => false,
-            'Settings · company & people' => true, 'Settings · places & routes' => true,
-            'Settings · trucks & boxes' => true, 'Settings · messages & AI' => true, 'Help' => false,
-        ],
-        'warehouse' => [
-            'Boxes' => false, 'Trips' => false, 'Sea & returns' => false, 'Scan on this computer' => false,
-            'Trucks' => false, 'AI helpers' => true, 'Settings & help' => true,
-        ],
-        'company' => [
-            'Coming in' => false, 'Delivery' => false, 'Returns' => false, 'Scan on this computer' => false,
-            'Trucks & people' => false, 'AI helpers' => true, 'Settings & help' => true,
-        ],
-    ];
-
-    /** Panel => [page or resource class (short, after the panel's namespace) => [group, name or null to keep, sort]]. */
-    public const ITEMS = [
-        'admin' => [
-            'Resources\\ContainerResource' => ['Boxes', null, 1],
-            'Resources\\Unmanifesteds\\UnmanifestedResource' => ['Boxes', null, 2],
-            'Resources\\Inventories\\InventoryResource' => ['Boxes', 'Inventory', 3],
-            'Pages\\WhereToUnload' => ['Boxes', null, 1],
-            'Resources\\Boxsummaries\\BoxsummaryResource' => ['Boxes', 'Box summary', 4],
-            'Resources\\Searchinvs\\SearchinvResource' => ['Boxes', 'Find a box', 5],
-            'Resources\\Invoiceissues\\InvoiceissueResource' => ['Boxes', 'Box issues', 6],
-            'Pages\\BoxPhotos' => ['Boxes', 'Box photos', 7],
-
-            'Resources\\Deliverylogs\\DeliverylogResource' => ['Trips & delivery', 'Delivery trips', 1],
-            'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Trips & delivery', 'Delivery invoices', 2],
-            'Pages\\PlanTrips' => ['Trips & delivery', null, 0],
-            'Pages\\AddressesToCheck' => ['Trips & delivery', null, 2],
-            'Pages\\Overrides' => ['Trips & delivery', null, 2],
-            'Pages\\WarehouseTransfers' => ['Trips & delivery', null, 2],
-            'Pages\\CrewBoard' => ['Trips & delivery', null, 3],
-            'Pages\\TruckTracking' => ['Trips & delivery', null, 4],
-            'Pages\\TruckDay' => ['Trips & delivery', null, 5],
-
-            'Pages\\SeaShipments' => ['Sea & partner hubs', null, 1],
-            'Pages\\WrongHub' => ['Sea & partner hubs', null, 2],
-
-            'Pages\\CostPerBox' => ['Money', null, 1],
-            'Pages\\Fuel' => ['Money', null, 2],
-
-            'Pages\\Scaninvoice' => ['Scan on this computer', 'Unload container', 1],
-            'Pages\\Scanload' => ['Scan on this computer', 'Load truck', 2],
-            'Pages\\ReturnBoxes' => ['Scan on this computer', 'Return boxes', 3],
-
-            'Pages\\Companyinfo' => ['Settings · company & people', 'Company info', 1],
-            'Pages\\AppIcons' => ['Settings · company & people', null, 2],
-            'Pages\\PrintSettings' => ['Settings · company & people', null, 3],
-            'Resources\\UserResource' => ['Settings · company & people', null, 4],
-            '\\BezhanSalleh\\FilamentShield\\Resources\\Roles\\RoleResource' => ['Settings · company & people', null, 5],
-            'Resources\\Workpositions\\WorkpositionResource' => ['Settings · company & people', 'Job positions', 6],
-            'Resources\\PanelcategoryResource' => ['Settings · company & people', 'Account types', 7],
-
-            'Resources\\Warehouses\\WarehouseResource' => ['Settings · places & routes', null, 1],
-            'Pages\\WarehouseSections' => ['Settings · places & routes', null, 2],
-            'Pages\\WarehouseCoverage' => ['Settings · places & routes', null, 2],
-            'Pages\\HubAreas' => ['Settings · places & routes', null, 2],
-            'Resources\\Logistichubs\\LogistichubResource' => ['Settings · places & routes', 'Logistic hubs', 3],
-            'Pages\\HubIslands' => ['Settings · places & routes', null, 4],
-            'Resources\\RouteareaResource' => ['Settings · places & routes', 'Route areas', 5],
-            'Pages\\MapsRoutes' => ['Settings · places & routes', null, 6],
-
-            'Pages\\Fleet' => ['Settings · trucks & boxes', 'Trucks', 1],
-            'Pages\\RentalTrucks' => ['Settings · trucks & boxes', null, 1],
-            'Resources\\Truckteams\\TruckteamResource' => ['Settings · trucks & boxes', 'Truck teams', 2],
-            'Pages\\TrackingSettings' => ['Settings · trucks & boxes', 'Truck tracking settings', 3],
-            'Pages\\FuelSettings' => ['Settings · trucks & boxes', 'Fuel settings', 4],
-            'Pages\\BoxSizeSettings' => ['Settings · trucks & boxes', null, 5],
-            'Pages\\TripRules' => ['Settings · trucks & boxes', null, 5],
-            'Resources\\Boxissues\\BoxissueResource' => ['Settings · trucks & boxes', 'Box issue types', 6],
-            'Pages\\BoxPhotoSettings' => ['Settings · trucks & boxes', 'Box photo settings', 7],
-            'Pages\\AgingLimits' => ['Settings · trucks & boxes', null, 8],
-            'Resources\\ConsolidatorResource' => ['Settings · trucks & boxes', null, 9],
-            'Resources\\CompanyResource' => ['Settings · trucks & boxes', 'Agents', 10],
-
-            'Pages\\SmsSettings' => ['Settings · messages & AI', null, 1],
-            'Pages\\SmsLog' => ['Settings · messages & AI', null, 2],
-            'Pages\\AiSettings' => ['Settings · messages & AI', 'AI settings', 3],
-            'Pages\\AddressAi' => ['Settings · messages & AI', null, 4],
-            'Resources\\HelpGuides\\HelpGuideResource' => ['Settings · messages & AI', 'Help guides (edit)', 4],
-
-            'Pages\\HelpGuide' => ['Help', null, 1],
-        ],
-        'warehouse' => [
-            'Resources\\Containers\\ContainerResource' => ['Boxes', null, 1],
-            'Resources\\Inventories\\InventoryResource' => ['Boxes', 'Inventory', 2],
-            'Pages\\Sections' => ['Boxes', null, 3],
-            'Resources\\Searchinvs\\SearchinvResource' => ['Boxes', 'Find a box', 4],
-            'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Boxes', 'Delivery invoices', 5],
-            'Resources\\Invoiceissues\\InvoiceissueResource' => ['Boxes', 'Box issues', 6],
-            'Pages\\BoxPhotos' => ['Boxes', 'Box photos', 7],
-
-            'Resources\\Deliverylogs\\DeliverylogResource' => ['Trips', 'Delivery trips', 1],
-            'Resources\\Whdeliverylogs\\WhdeliverylogResource' => ['Trips', 'Transfers to other warehouses', 2],
-            'Pages\\PlanTrips' => ['Trips', null, 0],
-            'Pages\\AddressesToCheck' => ['Trips', null, 2],
-            'Pages\\Overrides' => ['Trips', null, 2],
-            'Pages\\WarehouseTransfers' => ['Trips', null, 2],
-            'Pages\\CrewBoard' => ['Trips', null, 3],
-            'Pages\\TruckTracking' => ['Trips', null, 3],
-            'Pages\\TruckDay' => ['Trips', null, 4],
-            'Pages\\Fuel' => ['Trips', null, 5],
-
-            'Pages\\SeaShipments' => ['Sea & returns', null, 1],
-            'Pages\\ComingBack' => ['Sea & returns', null, 2],
-
-            'Pages\\Unloadedcontainer' => ['Scan on this computer', 'Unload container', 1],
-            'Pages\\Hubloaded' => ['Scan on this computer', 'Load delivery truck', 2],
-            'Pages\\HubReturnBoxes' => ['Scan on this computer', 'Return boxes', 3],
-            'Pages\\Whloaded' => ['Scan on this computer', 'Load transfer truck', 4],
-            'Pages\\Whunloaded' => ['Scan on this computer', 'Receive transfer truck', 5],
-
-            'Pages\\Fleet' => ['Trucks', 'Trucks', 1],
-            'Pages\\RentalTrucks' => ['Trucks', null, 2],
-            'Resources\\Truckteams\\TruckteamResource' => ['Trucks', 'Truck teams', 2],
-
-            'Pages\\MapsRoutes' => ['Settings & help', null, 1],
-            'Pages\\WarehouseCoverage' => ['Settings & help', null, 1],
-            'Pages\\InstallApps' => ['Settings & help', null, 2],
-            'Pages\\HelpGuide' => ['Settings & help', null, 3],
-        ],
-        'company' => [
-            'Pages\\IncomingShipments' => ['Coming in', null, 1],
-            'Pages\\IncomingBoxes' => ['Coming in', null, 2],
-
-            'Pages\\PlanTrips' => ['Delivery', null, 0],
-            'Resources\\Deliverylogs\\DeliverylogResource' => ['Delivery', 'Delivery trips', 1],
-            'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Delivery', 'Delivery invoices', 2],
-            'Pages\\NotDelivered' => ['Delivery', null, 3],
-            'Pages\\AddressesToCheck' => ['Delivery', null, 3],
-            'Pages\\TrackBox' => ['Delivery', null, 4],
-            'Pages\\MyArea' => ['Settings & help', 'My area', 0],
-
-            'Pages\\WrongHub' => ['Returns', null, 1],
-
-            'Pages\\LoadTruck' => ['Scan on this computer', 'Load truck', 1],
-            'Pages\\ReturnBoxes' => ['Scan on this computer', 'Return boxes', 2],
-
-            'Pages\\Fleet' => ['Trucks & people', 'Trucks', 1],
-            'Pages\\RentalTrucks' => ['Trucks & people', null, 2],
-            'Pages\\CrewBoard' => ['Trucks & people', null, 2],
-            'Pages\\HubDrivers' => ['Trucks & people', null, 2],
-            'Resources\\DriverResource' => ['Trucks & people', 'Crew', 3],
-            'Pages\\TruckTracking' => ['Trucks & people', null, 4],
-            'Pages\\TruckDay' => ['Trucks & people', null, 5],
-            'Pages\\Fuel' => ['Trucks & people', null, 6],
-
-            'Pages\\BoxPhotos' => ['Settings & help', 'Box photos', 1],
-            'Pages\\MapsRoutes' => ['Settings & help', null, 2],
-            'Pages\\InstallApps' => ['Settings & help', null, 3],
-            'Pages\\HelpGuide' => ['Settings & help', null, 4],
-        ],
-    ];
-
-    /** Pages with a number of what waits: panel => [short class => counter]. */
-    public const BADGES = [
-        'admin' => ['Pages\\SeaShipments' => 'sea', 'Pages\\WrongHub' => 'wrongHub'],
-        'warehouse' => ['Pages\\SeaShipments' => 'sea', 'Pages\\ComingBack' => 'comingBack'],
-        'company' => ['Pages\\IncomingShipments' => 'sea', 'Pages\\WrongHub' => 'wrongHub'],
-    ];
-
-    protected const BASE = ['admin' => 'App\\Filament\\', 'warehouse' => 'App\\Filament\\Warehouse\\', 'company' => 'App\\Filament\\Company\\'];
-
-    public static function has(?string $panel): bool
-    {
-        return isset(self::GROUPS[$panel ?? '']);
-    }
-
-    /** @return array<NavigationGroup> */
-    public static function groups(string $panel): array
-    {
-        return collect(self::GROUPS[$panel] ?? [])
-            ->map(fn (bool $folded, string $name) => NavigationGroup::make($name)->collapsible()->collapsed($folded))
-            ->values()->all();
-    }
-
-    protected static function full(string $panel, string $short): string
-    {
-        return str_starts_with($short, '\\') ? ltrim($short, '\\') : self::BASE[$panel].$short;
-    }
-
-    /** @return array<class-string, array{0: string, 1: ?string, 2: int}> */
-    public static function items(string $panel): array
-    {
-        return collect(self::ITEMS[$panel] ?? [])->mapWithKeys(fn ($v, $k) => [static::full($panel, $k) => $v])->all();
-    }
-
-    /** @return array<class-string, string> */
-    public static function badges(string $panel): array
-    {
-        return collect(self::BADGES[$panel] ?? [])->mapWithKeys(fn ($v, $k) => [static::full($panel, $k) => $v])->all();
-    }
-
-    /** The number shown beside a page, kept for a minute; null when nothing waits. */
-    public static function count(string $panel, string $counter): ?string
-    {
-        $user = Auth::user();
-        if (! $user) {
-            return null;
-        }
-        try {
-            $n = Cache::remember("menu:{$panel}:{$user->getKey()}:{$counter}", 60, function () use ($panel, $user, $counter): int {
-                if (! Shipments::ready()) {
-                    return 0;
-                }
-                $hub = Tracker::hubFor($user, $panel);
-                if ($hub === false) {
-                    return 0;
-                }
-
-                return match ($counter) {
-                    'sea' => Shipments::visible($hub)->where('status', '!=', 'received')->count(),
-                    'wrongHub' => WrongHubBox::query()->when(is_int($hub), fn ($q) => $q->where('logistichub_id', $hub))->where('status', 'waiting')->count(),
-                    'comingBack' => WrongHubBox::query()->where('status', 'returning')->count(),
-                    default => 0,
-                };
-            });
-        } catch (\Throwable) {
-            return null;
-        }
-
-        return $n > 0 ? (string) $n : null;
-    }
-}
-DISPATCH_FILE_END_17
-
-# ---------------------------------------------------------------- app/Support/Sms/SmsEvents.php
-mkdir -p 'app/Support/Sms'
-cat > 'app/Support/Sms/SmsEvents.php' <<'DISPATCH_FILE_END_18'
-<?php
-
-namespace App\Support\Sms;
-
-use App\Models\DeliveryAttempt;
-use App\Models\Deliverylog;
-use App\Models\Logistichub;
-use App\Models\Maps\TripStop;
-use App\Models\Sms\SmsMessage;
-use App\Models\Tracking\TruckPosition;
-use App\Models\Tripinvoice;
-use App\Support\Ai\TripPlanner;
-use App\Support\Maps\TripSorter;
-use App\Support\Tracking\Tracker;
-use Illuminate\Support\Str;
-use Throwable;
-
-/**
- * When to text receivers. One text per receiver (all their boxes together), never twice
- * for the same thing. Nothing is sent when the message is switched off or there is no key.
- */
-class SmsEvents
-{
-    /** Trip on the road: all boxes loaded, or the first box delivered. */
-    public static function outForDelivery(Deliverylog $trip): int
-    {
-        if (TripSorter::isTransfer($trip) || ($trip->no_sms ?? false)) {
-            return 0;
-        }
-        // a hub's own trip has its own switch and text
-        $atHub = Tripinvoice::where('deliveryloghub_id', $trip->id)->exists();
-        $kind = $atHub && array_key_exists('out_for_delivery_hub', SmsSettings::KINDS) ? 'out_for_delivery_hub' : 'out_for_delivery';
-        if (! SmsSettings::on($kind)) {
-            return 0;
-        }
-        // Trip planned by city: boxes keep joining while loading, so text only once the trip is locked.
-        if (\App\Support\Trips\CityTrips::isCityTrip($trip) && ! $trip->is_lock && ! $trip->taken_at) {
-            return 0;
-        }
-        if (! TripSorter::ensure($trip, 0)) {
-            return 0;
-        }
-        $boxes = TripSorter::boxes($trip);
-        $hub = Tripinvoice::where('deliveryloghub_id', $trip->id)->exists();
-        $onRoad = ! (clone $boxes)->where($hub ? 'is_loaded_hub' : 'is_loaded', false)->exists() || (clone $boxes)->where('is_delivered', true)->exists();
-        if (! $onRoad || ! (clone $boxes)->exists()) {
-            return 0;
-        }
-        $n = 0;
-        foreach (Tracker::stopsLeft($trip) as $stop) {
-            $n += static::forStop($kind, $trip, $stop) ? 1 : 0;
-        }
-
-        return $n;
-    }
-
-    /** The next 1–2 stops, once the driver is delivering (a box delivered or the truck moving). */
-    public static function driverNext(Deliverylog $trip): int
-    {
-        if (! SmsSettings::on('driver_next') || TripSorter::isTransfer($trip) || ! TripSorter::ensure($trip, 0)) {
-            return 0;
-        }
-        $active = TripSorter::boxes($trip)->where('is_delivered', true)->whereDate('delivered_at', today())->exists()
-            || TruckPosition::where('deliverylog_id', $trip->id)->where('recorded_at', '>=', now()->subMinutes(15))->exists();
-        if (! $active) {
-            return 0;
-        }
-        $card = $trip->truck ? Tracker::card($trip) : null;
-        $n = 0;
-        foreach (Tracker::stopsLeft($trip)->take(2)->values() as $i => $stop) {
-            $min = $i === 0 && $card && preg_match('/~(\d+) min/', (string) $card['next'], $m) ? (int) $m[1] : 15 + $i * 15;
-            $n += static::forStop('driver_next', $trip, $stop, ['minutes' => max(5, (int) (ceil($min / 5) * 5))]) ? 1 : 0;
-        }
-
-        return $n;
-    }
-
-    /** The last box of a receiver was delivered. */
-    public static function delivered(Tripinvoice $box): void
-    {
-        if (! SmsSettings::on('delivered') || ! ($trip = static::tripOf($box)) || ! TripSorter::ensure($trip, 0)) {
-            return;
-        }
-        $stop = static::stopOf($trip, $box->id);
-        if (! $stop) {
-            return;
-        }
-        $rows = Tripinvoice::whereIn('id', $stop->box_ids)->get(['id', 'is_delivered', 'delivered_at']);
-        if ($rows->contains(fn ($r) => ! $r->is_delivered)) {
-            return;
-        }
-        static::forStop('delivered', $trip, $stop, ['time' => optional($rows->max('delivered_at'))->format('g:i A') ?? now()->format('g:i A')], $stop->box_ids);
-    }
-
-    public static function notDelivered(DeliveryAttempt $a): void
-    {
-        $box = Tripinvoice::find($a->tripinvoice_id);
-        if (! SmsSettings::on('not_delivered') || ! $box || ! ($trip = static::tripOf($box)) || ! TripSorter::ensure($trip, 0)) {
-            return;
-        }
-        $stop = static::stopOf($trip, $box->id);
-        if (! $stop) {
-            return;
-        }
-        $lang = Templates::langFor($box->invdata?->receiver_province);
-        static::forStop('not_delivered', $trip, $stop, [
-            'reason' => SmsWriter::reason($a, $lang),
-            'next_day' => static::nextDay(),
-        ], [$box->id], perDay: true);
-    }
-
-    /** Handed to a partner hub. */
-    public static function hubArrived(Tripinvoice $box): void
-    {
-        if (! SmsSettings::on('hub_arrived') || ! $box->logistichub_id || ! ($inv = $box->invdata)) {
-            return;
-        }
-        $hub = Logistichub::find($box->logistichub_id);
-        if (! $hub?->is_company) {
-            return;
-        }
-        $key = substr(sha1('hub'.$hub->id.TripPlanner::receiverKey($inv).$box->deliverylog_id), 0, 40);
-        if (SmsMessage::where('kind', 'hub_arrived')->where('receiver_key', $key)->exists()) {
-            return;
-        }
-        $codes = Tripinvoice::where('deliverylog_id', $box->deliverylog_id)->where('logistichub_id', $hub->id)->with('invdata')->get()
-            ->filter(fn ($b) => $b->invdata && TripPlanner::receiverKey($b->invdata) === TripPlanner::receiverKey($inv));
-        $lang = Templates::langFor($inv->receiver_province);
-        $text = Templates::render(Templates::get('hub_arrived', $lang), [
-            'name' => static::firstName($inv->receiver_name), 'boxes' => static::codes($codes->pluck('invoice')->all()),
-            'box_count' => $codes->count(), 'hub' => $hub->hub_name, 'hub_phone' => SmsSettings::officePhone(),
-        ]);
-        SmsSender::send('hub_arrived', $inv->receiver_mobile_no, Str::title((string) $inv->receiver_name), $text, ['receiver_key' => $key, 'invoice_ids' => $codes->pluck('invoice_id')->all(), 'lang' => $lang]);
-    }
-
-    protected static function forStop(string $kind, Deliverylog $trip, TripStop $stop, array $extra = [], ?array $ids = null, bool $perDay = false): ?SmsMessage
-    {
-        $already = SmsMessage::where('kind', $kind)->where('deliverylog_id', $trip->id)->where('receiver_key', $stop->receiver_key)
-            ->whereNotIn('status', ['failed'])->when($perDay, fn ($q) => $q->whereDate('created_at', today()));
-        if ($already->exists()) {
-            return null;
-        }
-        $boxes = Tripinvoice::with('invdata')->whereIn('id', $ids ?? $stop->box_ids)->get();
-        $inv = $boxes->first()?->invdata;
-        if (! $inv) {
-            return null;
-        }
-        $lang = Templates::langFor($inv->receiver_province);
-        $driver = $trip->truck ? Tracker::crew($trip->truck_id)['driver'] : null;
-        $text = Templates::render(Templates::get($kind, $lang), $extra + [
-            'name' => static::firstName($inv->receiver_name),
-            'boxes' => static::codes($boxes->pluck('invoice')->all()),
-            'box_count' => $boxes->count(),
-            'truck' => (string) $trip->truck?->plate_no,
-            'driver' => $driver ? Str::before((string) $driver->full_name, ' ') : '',
-            'hub' => (string) $trip->destination?->hub_name,
-            'hub_phone' => $kind === 'out_for_delivery_hub' ? ((string) \App\Models\Logistichub::whereKey($trip->logistichub_id)->value('phone') ?: SmsSettings::officePhone()) : SmsSettings::officePhone(),
-        ]);
-
-        return SmsSender::send($kind, $stop->phone ?: $inv->receiver_mobile_no, $stop->name, $text, [
-            'deliverylog_id' => $trip->id, 'receiver_key' => $stop->receiver_key, 'invoice_ids' => $boxes->pluck('invoice_id')->all(), 'lang' => $lang,
-        ]);
-    }
-
-    protected static function tripOf(Tripinvoice $box): ?Deliverylog
-    {
-        return Deliverylog::with('truck')->find($box->deliveryloghub_id ?: $box->deliverylog_id);
-    }
-
-    protected static function stopOf(Deliverylog $trip, int $boxId): ?TripStop
-    {
-        $stop = TripStop::where('deliverylog_id', $trip->id)->get()->first(fn (TripStop $s) => in_array($boxId, $s->box_ids ?? [], false));
-        if (! $stop) {
-            TripSorter::sort($trip, 0);
-            $stop = TripStop::where('deliverylog_id', $trip->id)->get()->first(fn (TripStop $s) => in_array($boxId, $s->box_ids ?? [], false));
-        }
-
-        return $stop;
-    }
-
-    public static function firstName(?string $name): string
-    {
-        return Str::title(Str::before(Str::squish((string) $name), ' ')) ?: 'po';
-    }
-
-    public static function codes(array $codes): string
-    {
-        $codes = array_values(array_filter($codes));
-
-        return count($codes) > 4 ? implode(', ', array_slice($codes, 0, 3)).' +'.(count($codes) - 3).' more' : implode(', ', $codes);
-    }
-
-    public static function nextDay(): string
-    {
-        $d = today()->addDay();
-
-        return ($d->isSunday() ? $d->addDay() : $d)->format('M j');
-    }
-
-    /** Every 5 minutes (sms:work). */
-    public static function work(): int
-    {
-        $n = 0;
-        foreach (Deliverylog::with('truck', 'destination')->where('is_active', true)->get() as $trip) {
-            try {
-                $n += static::outForDelivery($trip) + static::driverNext($trip);
-            } catch (Throwable $e) {
-                report($e);
-            }
-        }
-
-        return $n;
-    }
-}
-DISPATCH_FILE_END_18
-
-# ---------------------------------------------------------------- app/Support/Sms/SmsSettings.php
-mkdir -p 'app/Support/Sms'
-cat > 'app/Support/Sms/SmsSettings.php' <<'DISPATCH_FILE_END_19'
-<?php
-
-namespace App\Support\Sms;
-
-use App\Models\AppSetting;
-use App\Models\Sms\SmsMessage;
-use Illuminate\Support\Facades\Crypt;
-use Throwable;
-
-/** Admin → Settings → SMS. Keys are saved encrypted. With no key nothing is sent. */
-class SmsSettings
-{
-    public const PROVIDERS = [
-        'semaphore' => ['Semaphore', 'Philippine company, used by many local businesses. Paste the API key from semaphore.co.', true],
-        'twilio' => ['Twilio', 'International. Paste "Account SID:Auth Token"; the sender is your Twilio number or Messaging Service SID. Usually costs more.', true],
-        'm360' => ['M360', 'Philippine SMS provider for businesses. Send us their API details and we connect it.', false],
-        'itexmo' => ['iTexMo / Movider', 'Local and regional options. Send us their API details and we connect it.', false],
-    ];
-
-    public const KINDS = [
-        'out_for_delivery' => ['Out for delivery', 'When the truck is loaded and the trip is on the road', true],
-        'out_for_delivery_hub' => ['Out for delivery from a hub', 'When a hub locks its own trip and the hub truck is on the road', true],
-        'driver_next' => ['Driver is next', 'When the receiver is the next 1–2 stops', true],
-        'delivered' => ['Delivered', 'When the last box of the receiver is delivered', true],
-        'not_delivered' => ['Not delivered', 'When the driver marks it not delivered', true],
-        'hub_arrived' => ['Arrived at partner hub', 'When the box is handed to a partner hub', false],
-        'set_split' => ['Rest of the boxes follow', 'When some of a customer\'s boxes stay behind at loading', false],
-    ];
-
-    public static function provider(): string
-    {
-        $p = (string) AppSetting::get('sms.provider', 'semaphore');
-
-        return isset(self::PROVIDERS[$p]) ? $p : 'semaphore';
-    }
-
-    public static function key(?string $provider = null): ?string
-    {
-        $v = AppSetting::get('sms.key.'.($provider ?? static::provider()));
-        try {
-            return $v ? Crypt::decryptString($v) : null;
-        } catch (Throwable) {
-            return null;
-        }
-    }
-
-    public static function putKey(string $provider, ?string $key): void
-    {
-        AppSetting::put('sms.key.'.$provider, filled($key) ? Crypt::encryptString(trim($key)) : null);
-    }
-
-    public static function masked(string $provider): ?string
-    {
-        $k = static::key($provider);
-
-        return $k ? substr($k, 0, 4).str_repeat('•', 10).substr($k, -3) : null;
-    }
-
-    public static function ready(): bool
-    {
-        return (bool) static::key() && (self::PROVIDERS[static::provider()][2] ?? false);
-    }
-
-    public static function sender(): string
-    {
-        return (string) AppSetting::get('sms.sender', '');
-    }
-
-    public static function limit(): int
-    {
-        return (int) AppSetting::get('sms.limit', 3000);
-    }
-
-    public static function on(string $kind): bool
-    {
-        return (bool) AppSetting::get('sms.on.'.$kind, self::KINDS[$kind][2] ?? false);
-    }
-
-    /** auto (by province), en, tl, ceb */
-    public static function language(): string
-    {
-        return (string) AppSetting::get('sms.language', 'auto');
-    }
-
-    public static function officePhone(): string
-    {
-        return (string) AppSetting::get('sms.office_phone', '');
-    }
-
-    /** Texts (SMS parts) used this month. */
-    public static function usedThisMonth(): int
-    {
-        return (int) SmsMessage::where('status', 'sent')->where('created_at', '>=', now()->startOfMonth())->sum('parts');
-    }
-}
-DISPATCH_FILE_END_19
-
-# ---------------------------------------------------------------- app/Support/Sms/Templates.php
-mkdir -p 'app/Support/Sms'
-cat > 'app/Support/Sms/Templates.php' <<'DISPATCH_FILE_END_20'
-<?php
-
-namespace App\Support\Sms;
-
-use App\Models\AppSetting;
-use Illuminate\Support\Str;
-
-/** The text of each message, in English, Tagalog and Bisaya, with {blanks}. */
-class Templates
-{
-    public const LANGS = ['en' => 'English', 'tl' => 'Tagalog', 'ceb' => 'Bisaya'];
-
-    public const BLANKS = ['{name}', '{boxes}', '{box_count}', '{truck}', '{driver}', '{time}', '{minutes}', '{reason}', '{next_day}', '{hub}', '{hub_phone}'];
-
-    public const DEFAULTS = [
-        'out_for_delivery' => [
-            'en' => 'Hi {name}, your {box_count} box(es) {boxes} are out for delivery today with truck {truck}. Driver: {driver}.',
-            'tl' => 'Hi {name}, ang {box_count} box mo ({boxes}) ay ide-deliver ngayong araw, truck {truck}. Driver: {driver}.',
-            'ceb' => 'Hi {name}, ang {box_count} ka box nimo ({boxes}) i-deliver karong adlawa, truck {truck}. Driver: {driver}.',
-        ],
-        'driver_next' => [
-            'en' => 'Hi {name}, our driver is on the way. Expected in about {minutes} minutes. Please prepare an ID.',
-            'tl' => 'Hi {name}, papunta na ang driver namin. Darating sa loob ng mga {minutes} minuto. Ihanda po ang ID.',
-            'ceb' => 'Hi {name}, padulong na ang among driver. Moabot sa mga {minutes} ka minuto. Palihug andama ang ID.',
-        ],
-        'delivered' => [
-            'en' => 'Hi {name}, box {boxes} was delivered at {time}. Thank you!',
-            'tl' => 'Hi {name}, na-deliver na ang box {boxes} nang {time}. Salamat po!',
-            'ceb' => 'Hi {name}, na-deliver na ang box {boxes} sa {time}. Salamat!',
-        ],
-        'not_delivered' => [
-            'en' => 'Hi {name}, we tried to deliver box {boxes} but {reason}. We will try again on {next_day}. Call {hub_phone}.',
-            'tl' => 'Hi {name}, sinubukan naming i-deliver ang box {boxes} pero {reason}. Babalik kami sa {next_day}. Tumawag sa {hub_phone}.',
-            'ceb' => 'Hi {name}, gisulayan namo i-deliver ang box {boxes} pero {reason}. Mobalik mi sa {next_day}. Tawag sa {hub_phone}.',
-        ],
-        'out_for_delivery_hub' => [
-            'en' => 'Hi {name}, your {box_count} box(es) {boxes} are out for delivery today from {hub} with truck {truck}. Driver: {driver}. Questions: {hub_phone}.',
-            'tl' => 'Hi {name}, ang {box_count} box mo ({boxes}) ay ide-deliver ngayong araw mula sa {hub}, truck {truck}. Driver: {driver}. Tanong: {hub_phone}.',
-            'ceb' => 'Hi {name}, ang imong {box_count} ka box ({boxes}) i-deliver karong adlawa gikan sa {hub}, truck {truck}. Driver: {driver}. Pangutana: {hub_phone}.',
-        ],
-        'hub_arrived' => [
-            'en' => 'Hi {name}, your box {boxes} arrived at {hub} and will be delivered soon.',
-            'tl' => 'Hi {name}, ang box mo ({boxes}) ay dumating na sa {hub} at ide-deliver na sa lalong madaling panahon.',
-            'ceb' => 'Hi {name}, ang imong box ({boxes}) niabot na sa {hub} ug i-deliver dayon.',
-        ],
-        'set_split' => [
-            'en' => 'Hi {name}, {box_count} of your boxes are on the way. Box {boxes} follows on the next trip. Call {hub_phone}.',
-            'tl' => 'Hi {name}, papunta na ang {box_count} sa mga box mo. Ang box {boxes} ay susunod sa next trip. Tumawag sa {hub_phone}.',
-            'ceb' => 'Hi {name}, padulong na ang {box_count} sa imong mga box. Ang box {boxes} mosunod sa sunod nga biyahe. Tawag sa {hub_phone}.',
-        ],
-    ];
-
-    /** Provinces where receivers get Bisaya, and where they get Tagalog (else English). */
-    public const BISAYA = ['cebu', 'bohol', 'siquijor', 'negros oriental', 'leyte', 'southern leyte', 'biliran', 'camiguin', 'misamis oriental', 'misamis occidental',
-        'bukidnon', 'agusan del norte', 'agusan del sur', 'surigao del norte', 'surigao del sur', 'dinagat islands', 'davao del norte', 'davao del sur', 'davao oriental',
-        'davao occidental', 'davao de oro', 'zamboanga del norte', 'zamboanga del sur', 'zamboanga sibugay', 'lanao del norte', 'samar', 'eastern samar', 'northern samar'];
-
-    public const TAGALOG = ['metro manila', 'ncr', 'manila', 'national capital region', 'bulacan', 'cavite', 'laguna', 'batangas', 'rizal', 'quezon', 'nueva ecija',
-        'bataan', 'pampanga', 'tarlac', 'zambales', 'aurora', 'marinduque', 'occidental mindoro', 'oriental mindoro', 'romblon', 'palawan'];
-
-    public static function get(string $kind, string $lang): string
-    {
-        return (string) (AppSetting::get("sms.tpl.{$kind}.{$lang}") ?: (self::DEFAULTS[$kind][$lang] ?? self::DEFAULTS[$kind]['en'] ?? ''));
-    }
-
-    public static function put(string $kind, string $lang, ?string $text): void
-    {
-        $text = Str::squish((string) $text);
-        AppSetting::put("sms.tpl.{$kind}.{$lang}", $text === '' || $text === (self::DEFAULTS[$kind][$lang] ?? null) ? null : $text);
-    }
-
-    public static function langFor(?string $province): string
-    {
-        $rule = SmsSettings::language();
-        if ($rule !== 'auto') {
-            return isset(self::LANGS[$rule]) ? $rule : 'en';
-        }
-        $p = Str::lower(Str::squish((string) $province));
-        foreach (self::BISAYA as $b) {
-            if ($p !== '' && str_contains($p, $b)) {
-                return 'ceb';
-            }
-        }
-        foreach (self::TAGALOG as $t) {
-            if ($p !== '' && str_contains($p, $t)) {
-                return 'tl';
-            }
-        }
-
-        return 'en';
-    }
-
-    public static function render(string $text, array $vals): string
-    {
-        $out = $text;
-        foreach ($vals as $k => $v) {
-            $out = str_replace('{'.$k.'}', (string) $v, $out);
-        }
-
-        return Str::squish(preg_replace('/\{[a-z_]+\}/', '', $out));
-    }
-
-    /** How many SMS parts a text needs (160 / 153 plain, 70 / 67 with emojis or special letters). */
-    public static function parts(string $text): int
-    {
-        $gsm = preg_match('/^[\x{0A}\x{0D}\x{20}-\x{7E}£¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ¡ÄÖÑÜ§¿äöñüà€]*$/u', $text) === 1;
-        $len = mb_strlen($text);
-        [$one, $many] = $gsm ? [160, 153] : [70, 67];
-
-        return $len <= $one ? 1 : (int) ceil($len / $many);
-    }
-
-    /** The blanks used in a text. @return list<string> */
-    public static function blanksIn(string $text): array
-    {
-        preg_match_all('/\{[a-z_]+\}/', $text, $m);
-        $b = array_values(array_unique($m[0]));
-        sort($b);
-
-        return $b;
-    }
-}
-DISPATCH_FILE_END_20
+DISPATCH_FILE_END_7
 
 # ---------------------------------------------------------------- app/Support/Trips/CityTrips.php
 mkdir -p 'app/Support/Trips'
-cat > 'app/Support/Trips/CityTrips.php' <<'DISPATCH_FILE_END_21'
+cat > 'app/Support/Trips/CityTrips.php' <<'DISPATCH_FILE_END_8'
 <?php
 
 namespace App\Support\Trips;
@@ -3690,6 +1628,25 @@ class CityTrips
     public function places(): Collection
     {
         return $this->placesMemo ??= $this->freshPlaces();
+    }
+
+    /** How these trips are made (Delivery trips › Made by): ['ai' => bool, 'instruction' => what was typed, 'reason' => why the plan was changed]. */
+    public array $made = [];
+
+    /** made_by / made_note of one planned trip. */
+    protected function madeFields(array $t, string $default = 'plan'): array
+    {
+        if (! Schema::hasColumn('deliverylogs', 'made_by')) {
+            return [];
+        }
+        if (! empty($t['changed'])) {
+            return ['made_by' => 'changed', 'made_note' => Str::limit(trim(($t['changedNote'] ?? 'changed').(! empty($this->made['reason']) ? '. Reason: '.$this->made['reason'] : '')), 295, '')];
+        }
+        if (! empty($this->made['ai']) && filled($this->made['instruction'] ?? null)) {
+            return ['made_by' => 'ai', 'made_note' => Str::limit((string) $this->made['instruction'], 295, '')];
+        }
+
+        return ['made_by' => $default, 'made_note' => null];
     }
 
     /** Cities of a hub's area delivered direct instead (keys "hubId|province|city"), set by Plan trips. */
@@ -3865,7 +1822,7 @@ class CityTrips
                     'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
                     'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $hubId, 'user_id' => $this->user->id,
                     'plan_why' => Str::limit((string) $why, 295), 'plan_space' => (int) $t['load'],
-                ]);
+                ] + $this->madeFields([]));
                 foreach (collect($t['cities'])->unique('key') as $c) {
                     TripCity::create(['deliverylog_id' => $trip->id, 'province' => $c['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'),
                         'planned_boxes' => (int) $c['boxes'], 'hub_id' => $hubId]);
@@ -4133,7 +2090,7 @@ class CityTrips
                     'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
                     'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $this->user->logistichub_id, 'user_id' => $this->user->id,
                     'plan_why' => Str::limit((string) ($t['why'] ?? ''), 295), 'plan_space' => (int) $t['load'],
-                ] + (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []));
+                ] + (\Illuminate\Support\Facades\Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []) + $this->madeFields($t));
                 foreach ($t['cities'] as $c) {
                     TripCity::create(['deliverylog_id' => $trip->id, 'province' => $t['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'), 'planned_boxes' => (int) $c['boxes']]);
                     // a hub's boxes of this city delivered direct instead
@@ -4172,7 +2129,7 @@ class CityTrips
                     'truck_id' => $truck?->id, 'trip_day' => 1, 'eta' => $date->toDateString(), 'departure_date' => $date->toDateString(),
                     'logistichub_id' => $this->user->logistichub_id, 'assigned_to' => $this->user->logistichub_id, 'user_id' => $this->user->id,
                     'plan_why' => Str::limit((string) ($t['why'] ?? ''), 295), 'plan_space' => (int) $t['load'],
-                ] + (Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []));
+                ] + (Schema::hasColumn('deliverylogs', 'no_sms') ? ['no_sms' => array_key_exists('sms', $t) && ! $t['sms']] : []) + $this->madeFields($t));
                 foreach ($t['cities'] as $c) {
                     TripCity::create(['deliverylog_id' => $trip->id, 'province' => $t['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'), 'planned_boxes' => (int) $c['boxes']]);
                 }
@@ -4302,277 +2259,42 @@ class CityTrips
         return ['container' => $rows->sortByDesc('id')->first()->container?->container_no, 'rows' => $out];
     }
 }
-DISPATCH_FILE_END_21
+DISPATCH_FILE_END_8
 
-# ---------------------------------------------------------------- app/Support/Trips/TripRules.php
-mkdir -p 'app/Support/Trips'
-cat > 'app/Support/Trips/TripRules.php' <<'DISPATCH_FILE_END_22'
-<?php
-
-namespace App\Support\Trips;
-
-use App\Models\AppSetting;
-use App\Models\Boxes\SetSplit;
-use App\Models\Invoice;
-use App\Models\TripOverride;
-use App\Models\User;
-use Filament\Notifications\Notification;
-use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Str;
-
-/**
- * Trip rules and who can bypass them: off (no reason needed), anyone with a reason, or office only.
- * The office = Admin and Super admin. Every bypass is saved with who and why.
- */
-class TripRules
-{
-    /** key => [title, what it stops, default level] */
-    public const RULES = [
-        'topup_other' => ['Top up with other cities', 'Add boxes of a city not on the trip', 'reason'],
-        'truck_full' => ['Truck full', 'Load more than the truck space', 'reason'],
-        'split_set' => ['Split a customer', 'A customer’s boxes on two trips', 'office'],
-        'wrong_hub' => ['Wrong hub or warehouse', 'Box for another partner hub or warehouse', 'office'],
-        'change_plan' => ['Change the AI plan', 'Switch off a trip or change its truck before Create', 'reason'],
-        'load_order' => ['Load out of order', 'Too early for its stop', 'off'],
-        'direct_hub' => ['Deliver direct instead of a hub', 'A hub’s boxes on our own trip, or the reverse', 'reason'],
-    ];
-
-    public const LEVELS = ['off' => 'Off', 'reason' => 'Anyone with a reason', 'office' => 'Office only'];
-
-    public const DEFAULT_REASONS = ['Customer called', 'Road closed', 'It still fits (small box)', 'Truck problem', 'Other'];
-
-    public static function ready(): bool
-    {
-        return Schema::hasTable('trip_overrides');
-    }
-
-    public static function level(string $rule): string
-    {
-        $l = (string) AppSetting::get('rules.'.$rule, self::RULES[$rule][2] ?? 'reason');
-
-        return isset(self::LEVELS[$l]) ? $l : 'reason';
-    }
-
-    public static function setLevel(string $rule, string $level): void
-    {
-        if (isset(self::RULES[$rule], self::LEVELS[$level])) {
-            AppSetting::put('rules.'.$rule, $level);
-        }
-    }
-
-    /** @return list<string> */
-    public static function reasons(): array
-    {
-        $r = json_decode((string) AppSetting::get('rules.reasons', ''), true);
-
-        return is_array($r) && $r ? array_values($r) : self::DEFAULT_REASONS;
-    }
-
-    public static function setReasons(array $reasons): void
-    {
-        AppSetting::put('rules.reasons', json_encode(array_values(array_unique(array_filter(array_map(fn ($r) => Str::limit(trim((string) $r), 60, ''), $reasons))))));
-    }
-
-    /** The office: Admin and Super admin. */
-    public static function isOffice(?User $u): bool
-    {
-        return (bool) ($u && ($u->is_admin || $u->hasRole('super_admin')));
-    }
-
-    /** What this person needs to bypass the rule: free, reason, or office (ask the office). */
-    public static function need(string $rule, ?User $u, ?int $tripId = null, ?int $invoiceId = null): string
-    {
-        if (! static::ready()) {
-            return 'free';
-        }
-        if ($tripId && $invoiceId && static::isApproved($rule, $tripId, $invoiceId)) {
-            return 'free';
-        }
-
-        return match (static::level($rule)) {
-            'off' => 'free',
-            'office' => static::isOffice($u) ? 'reason' : 'office',
-            default => 'reason',
-        };
-    }
-
-    public static function isApproved(string $rule, ?int $tripId, ?int $invoiceId): bool
-    {
-        return static::ready() && $tripId && $invoiceId
-            && TripOverride::where('rule', $rule)->where('trip_id', $tripId)->where('invoice_id', $invoiceId)->where('status', 'approved')->exists();
-    }
-
-    /** A bypass with a reason (allowed now). */
-    public static function record(string $rule, ?User $u, ?string $reason, array $ctx = [], string $status = 'allowed'): ?TripOverride
-    {
-        if (! static::ready()) {
-            return null;
-        }
-
-        return TripOverride::create([
-            'rule' => $rule, 'trip_kind' => $ctx['kind'] ?? 'delivery', 'trip_id' => $ctx['trip_id'] ?? null, 'trip_number' => $ctx['trip_number'] ?? null,
-            'invoice_id' => $ctx['invoice_id'] ?? null, 'box' => $ctx['box'] ?? null, 'user_id' => $u?->id,
-            'reason' => $reason ? Str::limit($reason, 115, '') : null, 'note' => isset($ctx['note']) ? Str::limit($ctx['note'], 195, '') : null,
-            'data' => $ctx['data'] ?? null, 'status' => $status,
-        ]);
-    }
-
-    /** Office only: the request waits; the office gets it in the bell. */
-    public static function ask(string $rule, ?User $u, ?string $reason, array $ctx = []): ?TripOverride
-    {
-        $existing = static::ready() && ($ctx['trip_id'] ?? null) && ($ctx['invoice_id'] ?? null)
-            ? TripOverride::where('rule', $rule)->where('trip_id', $ctx['trip_id'])->where('invoice_id', $ctx['invoice_id'])->where('status', 'pending')->first() : null;
-        $o = $existing ?? static::record($rule, $u, $reason, $ctx, 'pending');
-        if ($o && ! $existing) {
-            try {
-                $office = User::where('is_admin', true)->get()->merge(User::role('super_admin')->get())->unique('id');
-                Notification::make()->title('Approve: '.self::RULES[$rule][0])
-                    ->body(collect([$o->box, $o->trip_number ? 'trip '.$o->trip_number : null, $u?->first_name, $reason])->filter()->join(' · '))
-                    ->warning()->sendToDatabase($office);
-            } catch (\Throwable $e) {
-                report($e);
-            }
-        }
-
-        return $o;
-    }
-
-    public static function decide(TripOverride $o, bool $yes, ?User $by): void
-    {
-        $o->update(['status' => $yes ? 'approved' : 'refused', 'decided_by' => $by?->id, 'decided_at' => now()]);
-        // an approved split is written as the reason the box stays behind
-        if ($yes && $o->rule === 'split_set' && $o->invoice_id && $o->trip_id) {
-            $key = $o->data['split'] ?? null;
-            SetSplit::updateOrCreate(['invoice_id' => $o->invoice_id, 'deliverylog_id' => $o->trip_id],
-                ['reason' => array_key_exists((string) $key, SetSplit::REASONS) ? $key : 'held', 'user_id' => $o->user_id, 'set_key' => Invoice::whereKey($o->invoice_id)->value('set_key')]);
-        }
-        if ($o->user) {
-            try {
-                Notification::make()->title(self::RULES[$o->rule][0].': '.($yes ? 'approved' : 'refused'))
-                    ->body(($o->box ? $o->box.' · ' : '').($yes ? 'Scan it again to load it.' : 'Keep it off the truck.'))
-                    ->{$yes ? 'success' : 'danger'}()->sendToDatabase($o->user);
-            } catch (\Throwable $e) {
-                report($e);
-            }
-        }
-    }
-
-    /** The rule behind a "load it anyway" warning. */
-    public static function ruleOf(?array $early, ?array $wrongHub): string
-    {
-        if ($early) {
-            return 'load_order';
-        }
-
-        return match ($wrongHub['kind'] ?? null) {
-            'city' => 'topup_other',
-            'full' => 'truck_full',
-            'hub' => 'direct_hub',
-            default => 'wrong_hub',
-        };
-    }
-
-    public static function pendingCount(): int
-    {
-        return static::ready() ? TripOverride::where('status', 'pending')->count() : 0;
-    }
-}
-DISPATCH_FILE_END_22
-
-# ---------------------------------------------------------------- database/migrations/2026_11_20_000042_create_hub_areas.php
+# ---------------------------------------------------------------- database/migrations/2026_11_20_000043_add_made_by_to_deliverylogs.php
 mkdir -p 'database/migrations'
-cat > 'database/migrations/2026_11_20_000042_create_hub_areas.php' <<'DISPATCH_FILE_END_23'
+cat > 'database/migrations/2026_11_20_000043_add_made_by_to_deliverylogs.php' <<'DISPATCH_FILE_END_9'
 <?php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-/**
- * Hub areas: which partner hub delivers each place (province, city or barangay), one owner per place.
- * Also: where a hub is, its phone, hub requests for a place, the change log,
- * "deliver direct instead" on a trip city, and "no SMS" for one trip.
- */
+/** How a trip was made: ai (Plan trips with an AI request), plan (Plan trips), changed (plan changed before Create), manual (by hand). */
 return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('logistichubs', function (Blueprint $t) {
-            if (! Schema::hasColumn('logistichubs', 'province')) {
-                $t->string('province', 120)->nullable();
-                $t->string('city', 120)->nullable();
-                $t->string('barangay', 120)->nullable();
-                $t->string('phone', 40)->nullable();
-            }
-        });
-        if (! Schema::hasTable('hub_areas')) {
-            Schema::create('hub_areas', function (Blueprint $t) {
-                $t->id();
-                $t->foreignId('logistichub_id')->index();
-                $t->string('province', 120);
-                $t->string('city', 120)->nullable();
-                $t->string('barangay', 120)->nullable();
-                $t->string('p_key', 120);
-                $t->string('c_key', 120)->default('');
-                $t->string('b_key', 120)->default('');
-                $t->timestamps();
-                $t->unique(['p_key', 'c_key', 'b_key']);
+        if (! Schema::hasColumn('deliverylogs', 'made_by')) {
+            Schema::table('deliverylogs', function (Blueprint $t) {
+                $t->string('made_by', 12)->nullable()->index();
+                $t->string('made_note', 300)->nullable();
             });
-        }
-        if (! Schema::hasTable('hub_area_requests')) {
-            Schema::create('hub_area_requests', function (Blueprint $t) {
-                $t->id();
-                $t->foreignId('logistichub_id')->index();
-                $t->string('province', 120);
-                $t->string('city', 120)->nullable();
-                $t->string('barangay', 120)->nullable();
-                $t->string('reason', 300)->nullable();
-                $t->foreignId('now_hub_id')->nullable();
-                $t->foreignId('user_id')->nullable();
-                $t->string('status', 12)->default('pending')->index();
-                $t->foreignId('decided_by')->nullable();
-                $t->timestamp('decided_at')->nullable();
-                $t->timestamps();
-            });
-        }
-        if (! Schema::hasTable('hub_area_log')) {
-            Schema::create('hub_area_log', function (Blueprint $t) {
-                $t->id();
-                $t->foreignId('logistichub_id')->nullable()->index();
-                $t->string('text', 300);
-                $t->foreignId('user_id')->nullable();
-                $t->timestamps();
-            });
-        }
-        if (Schema::hasTable('trip_cities') && ! Schema::hasColumn('trip_cities', 'hub_id')) {
-            Schema::table('trip_cities', fn (Blueprint $t) => $t->foreignId('hub_id')->nullable()->index());
-        }
-        if (! Schema::hasColumn('deliverylogs', 'no_sms')) {
-            Schema::table('deliverylogs', fn (Blueprint $t) => $t->boolean('no_sms')->default(false));
         }
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('hub_area_log');
-        Schema::dropIfExists('hub_area_requests');
-        Schema::dropIfExists('hub_areas');
-        if (Schema::hasColumn('logistichubs', 'province')) {
-            Schema::table('logistichubs', fn (Blueprint $t) => $t->dropColumn(['province', 'city', 'barangay', 'phone']));
-        }
-        if (Schema::hasColumn('trip_cities', 'hub_id')) {
-            Schema::table('trip_cities', fn (Blueprint $t) => $t->dropColumn('hub_id'));
-        }
-        if (Schema::hasColumn('deliverylogs', 'no_sms')) {
-            Schema::table('deliverylogs', fn (Blueprint $t) => $t->dropColumn('no_sms'));
+        if (Schema::hasColumn('deliverylogs', 'made_by')) {
+            Schema::table('deliverylogs', fn (Blueprint $t) => $t->dropColumn(['made_by', 'made_note']));
         }
     }
 };
-DISPATCH_FILE_END_23
+DISPATCH_FILE_END_9
 
 # ---------------------------------------------------------------- resources/css/filament/admin/theme.css
 mkdir -p 'resources/css/filament/admin'
-cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_24'
+cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_10'
 @import '../../../../vendor/filament/filament/resources/css/theme.css';
 
 /* The Archivo font comes with the app (no internet needed): pages open fast even on a slow connection. */
@@ -9223,1078 +6945,167 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-ha__add .ds-te__btn { justify-self: start; }
 .ds-wc__towns .ds-wc__chips { justify-content: flex-start; }
 .ds-ph__truck.is-none { background: #eef1f4; color: #6b7b88; }
-DISPATCH_FILE_END_24
+.ds-tp__lock { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 14px; background: #f6f8fa; }
+.ds-tp__lock.is-ok { background: #eefaf4; box-shadow: inset 0 0 0 1px #bfe6d4; }
+.ds-tp__lockhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.ds-tp__lockhead small, .ds-tp__lock > small { color: #6b7b88; font-size: 12px; }
+.ds-tp__check { display: flex; gap: 10px; align-items: center; font-size: 14px; }
+.ds-tp__check i { width: 22px; height: 22px; border-radius: 50%; background: #fde8e8; color: #8a1f1f; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 12px; font-weight: 900; flex: none; }
+.ds-tp__check.is-ok i { background: #e6f6ef; color: #17895e; }
+.ds-tp__check > span { display: flex; flex-direction: column; }
+.ds-tp__check small { color: #6b7b88; font-size: 12px; }
+.ds-tl__trip { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.ds-tl__trip b { font-size: 15px; color: #0e2433; }
+.ds-tl__trip small, .ds-tl__goes small, .ds-tl__truck small, .ds-tl__boxes small, .ds-tl__status small { color: #6b7b88; font-size: 12px; }
+.ds-tl__made { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.ds-tl__made.is-ai { background: #fff0d1; color: #8a5a00; }
+.ds-tl__made.is-plan { background: #e6f4ff; color: #1d5f99; }
+.ds-tl__made.is-changed { background: #efeafd; color: #5b3fc4; }
+.ds-tl__made.is-manual { background: #eef1f4; color: #33424e; }
+.ds-tl__goes { display: flex; flex-direction: column; gap: 2px; min-width: 180px; }
+.ds-tl__goes > span { display: flex; align-items: center; gap: 6px; }
+.ds-tl__goes i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ds-tl__truck { display: flex; align-items: center; gap: 8px; }
+.ds-tl__truck > i { width: 32px; height: 32px; border-radius: 50%; background: #eef1f4; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; font-style: normal; flex: none; }
+.ds-tl__truck > span { display: flex; flex-direction: column; }
+.ds-tl__boxes { display: flex; flex-direction: column; gap: 5px; min-width: 190px; }
+.ds-tl__bar { height: 8px; border-radius: 999px; background: #e8ecef; display: flex; overflow: hidden; }
+.ds-tl__bar i { background: #17895e; }
+.ds-tl__bar i.is-l { background: #8fd3b4; }
+.ds-tl__status { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.ds-tl__pill { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; background: #eef1f4; color: #33424e; }
+.ds-tl__pill.is-planned, .ds-tl__pill.is-ready { background: #eef6ff; color: #1d5f99; }
+.ds-tl__pill.is-loading, .ds-tl__pill.is-back { background: #fff4d6; color: #8a5a00; }
+.ds-tl__pill.is-road { background: #e6f4ff; color: #1d5f99; }
+.ds-tl__pill.is-closed { background: #e6f6ef; color: #17895e; }
+.ds-tl__det { display: flex; flex-direction: column; gap: 14px; }
+.ds-tl__detpills { display: flex; gap: 6px; }
+.ds-tl__how { display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 14px; background: #fff8e1; }
+.ds-tl__how.is-manual { background: #f6f8fa; }
+.ds-tl__how > span { display: flex; gap: 8px; font-size: 13px; color: #33424e; }
+.ds-tl__how em { width: 18px; flex: none; font-style: normal; }
+.ds-tl__facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ds-tl__facts > span { display: flex; flex-direction: column; padding: 10px 12px; border-radius: 12px; background: #f6f8fa; }
+.ds-tl__facts small { color: #6b7b88; font-size: 12px; }
+.ds-tl__facts b { font-size: 14px; }
+.ds-tl__cities { display: flex; flex-direction: column; gap: 6px; }
+.ds-tl__cities > span { display: flex; flex-wrap: wrap; gap: 6px; }
+.ds-tl__cities i { height: 28px; padding: 0 10px; border-radius: 999px; background: #eef6ff; color: #1d5f99; font-size: 13px; font-weight: 700; font-style: normal; display: flex; align-items: center; }
+.ds-tl__btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.ds-tl__hint { color: #6b7b88; font-size: 12px; }
+.ds-tl__no { font-size: 15px; font-weight: 800; color: #0e2433; text-decoration: none; }
+.ds-tl__no:hover { color: #1d6fb8; text-decoration: underline; }
+DISPATCH_FILE_END_10
 
-# ---------------------------------------------------------------- resources/views/filament/hubs/areas.blade.php
-mkdir -p 'resources/views/filament/hubs'
-cat > 'resources/views/filament/hubs/areas.blade.php' <<'DISPATCH_FILE_END_25'
-<x-filament-panels::page>
-<div class="ds-fl ds-wc">
-    <div class="ds-ad__top">
-        <span class="ds-te__title"><small>Settings › Hub areas · active partner hubs</small><h1>Which hub delivers each place</h1><small>One owner per place, never two. The smallest place wins: barangay, then city, then province. Places with no hub are delivered direct by the warehouse.</small></span>
-        @if ($setupUrl)<a href="{{ $setupUrl }}" class="ds-te__btn is-main">+ Add a hub</a>@endif
-    </div>
-    <div class="ds-ha__grid">
-        <div class="ds-ad__col">
-            @forelse ($hubs as $i => $c)
-                @php($h = $c['hub'])
-                @php($color = \App\Support\Hubs\HubAreas::color($h->id))
-                <section class="ds-cb__card ds-wc__card" wire:key="h-{{ $h->id }}" style="--hub: {{ $color }}">
-                    <span class="ds-wc__head">
-                        <span class="ds-ha__name"><i></i><span><b>{{ $h->hub_name }}</b><small>{{ $h->hub_code }}{{ $h->province ? ' · in '.collect([$h->city, $h->province])->filter()->join(', ') : ' · location not set' }}</small></span></span>
-                        <span class="ds-cb__pill is-muted">{{ $c['areas']->count() }} {{ Str::plural('place', $c['areas']->count()) }}</span>
-                    </span>
-                    <span class="ds-wc__chips">
-                        @forelse ($c['areas'] as $a)
-                            <span class="ds-wc__chip ds-ha__chip">{{ $a->label() }}<button type="button" wire:click="removeArea({{ $a->id }})" wire:confirm="Remove {{ $a->label() }} from {{ $h->hub_name }}? Its boxes go direct from the warehouse." aria-label="Remove {{ $a->label() }}">✕</button></span>
-                        @empty
-                            <small class="ds-te__hint">No places yet: its boxes go direct from the warehouse.</small>
-                        @endforelse
-                    </span>
-                    <form wire:submit="addPlace({{ $h->id }})" class="ds-ha__add">
-                        <input type="text" list="ha-provinces" wire:model="add.{{ $h->id }}.province" class="ds-te__input" placeholder="Province" aria-label="Province">
-                        <input type="text" wire:model="add.{{ $h->id }}.city" class="ds-te__input" placeholder="City (empty = whole province)" aria-label="City">
-                        <input type="text" wire:model="add.{{ $h->id }}.barangay" class="ds-te__input" placeholder="Barangay (optional)" aria-label="Barangay">
-                        <button type="submit" class="ds-te__btn">Add</button>
-                    </form>
-                    @if ($conflict && $conflict['hub'] === $h->id)
-                        <span class="ds-wc__conflict">
-                            <b>{{ $conflict['label'] }} already belongs to {{ \App\Support\Hubs\HubAreas::name($conflict['owner']) }}</b>
-                            <span>A place has one hub only. Move it to {{ $h->hub_name }}?</span>
-                            <span class="ds-wc__btns"><button type="button" class="ds-te__btn is-main" wire:click="moveIt">Move to {{ $h->hub_name }}</button><button type="button" class="ds-te__btn ds-wc__ghost" wire:click="cancel">Cancel</button></span>
-                        </span>
-                    @endif
-                </section>
-            @empty
-                <section class="ds-cb__card ds-wc__card"><b>No active partner hubs</b><small class="ds-te__hint">Add a hub first. Until a hub has places, every box goes direct from the warehouse.</small></section>
-            @endforelse
-            <datalist id="ha-provinces">@foreach ($provinces as $p)<option value="{{ $p }}">@endforeach</datalist>
-        </div>
-        <div class="ds-ad__col">
-            @foreach ($split as $s)
-                <section class="ds-cb__card ds-wc__card">
-                    <span class="ds-wc__head"><span><b>{{ $s['city'] }}, {{ $s['province'] }}</b><small>Split city · {{ $s['known'] }} barangays seen</small></span><span class="ds-cb__pill is-warn">{{ $s['byHub']->count() + ($s['main'] ? 1 : 0) }} hubs</span></span>
-                    @php($given = $s['byHub']->flatten()->count())
-                    <span class="ds-ha__split"><i style="width: {{ max(4, 100 - round($given / max(1, $s['known']) * 100)) }}%; background: {{ $s['main'] ? \App\Support\Hubs\HubAreas::color($s['main']) : '#c3ccd4' }}"></i>@foreach ($s['byHub'] as $hid => $g)<i style="width: {{ round($g->count() / max(1, $s['known']) * 100) }}%; background: {{ \App\Support\Hubs\HubAreas::color((int) $hid) }}"></i>@endforeach</span>
-                    <small>{{ $s['main'] ? \App\Support\Hubs\HubAreas::name($s['main']).' is the main hub: every barangay not listed below.' : 'No main hub: barangays not listed go direct.' }}</small>
-                    @foreach ($s['byHub'] as $hid => $g)
-                        <span class="ds-wc__towns"><b>Barangays for {{ \App\Support\Hubs\HubAreas::name((int) $hid) }}</b><span class="ds-wc__chips">@foreach ($g as $a)<span class="ds-wc__chip is-own">{{ $a->barangay }}</span>@endforeach</span></span>
-                    @endforeach
-                </section>
-            @endforeach
-            <section class="ds-cb__card ds-wc__card">
-                <b class="ds-ad__h">How a box finds its hub</b>
-                @foreach (['Barangay: if it is listed for a hub, that hub.', 'No barangay on the box: the barangay the AI filled in, or the one this receiver had before.', 'Still none: the city’s main hub, then the province’s hub.', 'No hub for the place: the warehouse delivers it direct.', 'Address too poor: Addresses to check (AI helps).'] as $n => $t)
-                    <span class="ds-pt__how"><b>{{ $n + 1 }}</b><span>{{ $t }}</span></span>
-                @endforeach
-            </section>
-        </div>
-        <div class="ds-ad__col">
-            @foreach ($orphans as $o)
-                <section class="ds-ha__off">
-                    <b>{{ $o['hub'] }} is off: {{ $o['places']->count() }} {{ Str::plural('place', $o['places']->count()) }} have no hub now</b>
-                    <span>{{ $o['places']->map->label()->join(', ') }}. New boxes there go direct from the warehouse. Trips already going to {{ $o['hub'] }} finish as planned.</span>
-                    <span class="ds-wc__btns">
-                        <button type="button" class="ds-te__btn ds-ha__btnbad" wire:click="keepDirect({{ $o['id'] }})">Keep direct</button>
-                        @foreach ($hubs->take(3) as $c)<button type="button" class="ds-te__btn ds-wc__ghost" wire:click="giveTo({{ $o['id'] }}, {{ $c['hub']->id }})" wire:confirm="Give these places to {{ $c['hub']->hub_name }}?">Give to {{ $c['hub']->hub_name }}</button>@endforeach
-                    </span>
-                </section>
-            @endforeach
-            <section class="ds-cb__card ds-wc__card">
-                <span class="ds-wc__head"><b class="ds-ad__h">Requests from hubs</b><span @class(['ds-cb__pill', 'is-warn' => $requests->isNotEmpty(), 'is-muted' => $requests->isEmpty()])>{{ $requests->isEmpty() ? 'None waiting' : $requests->count().' waiting' }}</span></span>
-                @foreach ($requests as $r)
-                    <span class="ds-ha__req" wire:key="r-{{ $r->id }}">
-                        <span class="ds-wc__head"><b>{{ $r->hub?->hub_name }} asks for {{ $r->label() }}</b><small>{{ $r->created_at->diffForHumans() }}</small></span>
-                        <small>{{ $r->now_hub_id ? 'Now '.\App\Support\Hubs\HubAreas::name($r->now_hub_id) : 'No hub now' }}</small>
-                        @if ($r->reason)<small>“{{ $r->reason }}”{{ $r->user ? ' · '.$r->user->first_name : '' }}</small>@endif
-                        <span class="ds-wc__btns"><button type="button" class="ds-te__btn is-main" wire:click="decide({{ $r->id }}, true)">Approve</button><button type="button" class="ds-te__btn ds-wc__ghost" wire:click="decide({{ $r->id }}, false)">Refuse</button></span>
-                    </span>
-                @endforeach
-                @foreach ($answered as $r)<small class="ds-te__hint">{{ $r->status === 'approved' ? '✓ Approved' : 'Refused' }}: {{ $r->label() }} → {{ $r->hub?->hub_name }}</small>@endforeach
-                <small class="ds-te__hint">New boxes follow the change. Boxes already on a trip stay on it.</small>
-            </section>
-            <section class="ds-cb__card ds-wc__card">
-                <b class="ds-ad__h">Check</b>
-                <span class="ds-ha__ok">✓ No place has two hubs</span>
-                @if ($split->isNotEmpty())<span class="ds-ha__ok">✓ Split cities: every barangay has one hub</span>@endif
-                @if ($unclear)<span class="ds-ha__warn">{{ $unclear }} {{ Str::plural('box', $unclear) }} in a split city: barangay unclear → main hub, or Addresses to check</span>@endif
-            </section>
-            <section class="ds-cb__card ds-wc__card">
-                <b class="ds-ad__h">Changes</b>
-                @forelse ($log as $l)<small class="ds-te__hint">{{ \Illuminate\Support\Carbon::parse($l->created_at)->format('M j') }} · {{ $l->text }}</small>
-                @empty<small class="ds-te__hint">No changes yet.</small>@endforelse
-            </section>
-        </div>
-    </div>
+# ---------------------------------------------------------------- resources/views/filament/trips/list/boxes.blade.php
+mkdir -p 'resources/views/filament/trips/list'
+cat > 'resources/views/filament/trips/list/boxes.blade.php' <<'DISPATCH_FILE_END_11'
+@php($r = $getRecord())
+@php($t = (int) ($r->boxes_total ?? 0))
+@php($l = (int) ($r->boxes_loaded ?? 0))
+@php($d = (int) ($r->boxes_done ?? 0))
+<div class="ds-tl__boxes">
+    <span class="ds-tl__bar"><i style="width: {{ $t ? round($d / $t * 100) : 0 }}%"></i><i class="is-l" style="width: {{ $t ? round(max(0, $l - $d) / $t * 100) : 0 }}%"></i></span>
+    <small>{{ $t ? $d.' delivered · '.$l.' loaded · '.$t.' '.Str::plural('box', $t) : 'No boxes yet' }}</small>
 </div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_25
+DISPATCH_FILE_END_11
 
-# ---------------------------------------------------------------- resources/views/filament/hubs/my-area.blade.php
-mkdir -p 'resources/views/filament/hubs'
-cat > 'resources/views/filament/hubs/my-area.blade.php' <<'DISPATCH_FILE_END_26'
-<x-filament-panels::page>
-<div class="ds-fl ds-wc">
-    <span class="ds-te__title"><small>{{ $hub->hub_name }} › My area</small><h1>My delivery area</h1><small>The places your hub delivers. Only the office can change them: ask here, the office approves.</small></span>
-    <div class="ds-ma__grid">
-        <section class="ds-cb__card ds-wc__card">
-            <span class="ds-wc__head"><b class="ds-ad__h">{{ $hub->hub_name }} delivers</b><small>{{ $provinces->count() }} {{ Str::plural('province', $provinces->count()) }} · {{ $cities->count() }} {{ Str::plural('city', $cities->count()) }} · {{ $brgys->count() }} split {{ Str::plural('city', $brgys->count()) }}</small></span>
-            @foreach ($provinces as $a)<span class="ds-ma__row is-prov"><b>{{ $a->province }}</b><span>whole province</span></span>@endforeach
-            @foreach ($cities as $a)<span class="ds-ma__row"><b>{{ $a->city }}, {{ $a->province }}</b><span>whole city</span></span>@endforeach
-            @foreach ($brgys as $city => $g)
-                <span class="ds-wc__towns"><span class="ds-wc__head"><b>{{ $city }}</b><small>only these barangays</small></span><span class="ds-wc__chips">@foreach ($g as $a)<span class="ds-wc__chip is-own">{{ $a->barangay }}</span>@endforeach @foreach ($requests->where('status', 'pending')->where('city', explode(', ', $city)[0]) as $r)<span class="ds-wc__chip">{{ $r->barangay }} · asked</span>@endforeach</span></span>
-            @endforeach
-            @if ($provinces->isEmpty() && $cities->isEmpty() && $brgys->isEmpty())<small class="ds-te__hint">No places yet. Ask the office for the places you deliver.</small>@endif
-            <span class="ds-wc__asked">You can only load and deliver boxes for these places. Other boxes stop with “Not for {{ $hub->hub_name }}”.</span>
-        </section>
-        <section class="ds-cb__card ds-wc__card">
-            <b class="ds-ad__h">Ask for a place</b>
-            <form wire:submit="send" class="ds-hs__form">
-                <label><small>Province</small><input type="text" list="ma-provinces" wire:model="ask.province" class="ds-te__input" placeholder="La Union"></label>
-                <label><small>City (empty = whole province)</small><input type="text" wire:model="ask.city" class="ds-te__input" placeholder="San Fernando"></label>
-                <label><small>Barangay (optional)</small><input type="text" wire:model="ask.barangay" class="ds-te__input" placeholder="Catbangen"></label>
-                <label><small>Why</small><textarea wire:model="ask.reason" class="ds-te__input" rows="3" placeholder="20 minutes from our hub"></textarea></label>
-                <button type="submit" class="ds-te__btn is-main">Send to the office</button>
-            </form>
-            <datalist id="ma-provinces">@foreach ($list as $p)<option value="{{ $p }}">@endforeach</datalist>
-            @foreach ($requests as $r)
-                <span @class(['ds-ha__ok' => $r->status === 'approved', 'ds-wc__asked' => $r->status === 'pending', 'ds-ha__warn' => $r->status === 'refused'])>{{ ['pending' => '⏳ Sent', 'approved' => '✓ Approved', 'refused' => 'Refused'][$r->status] }}: {{ $r->label() }}{{ $r->status === 'pending' && $r->now_hub_id ? '. Until the office answers, '.\App\Support\Hubs\HubAreas::name($r->now_hub_id).' keeps it.' : '' }}</span>
-            @endforeach
-            <small class="ds-te__hint">The office gets it in the bell.</small>
-        </section>
+# ---------------------------------------------------------------- resources/views/filament/trips/list/details.blade.php
+mkdir -p 'resources/views/filament/trips/list'
+cat > 'resources/views/filament/trips/list/details.blade.php' <<'DISPATCH_FILE_END_12'
+@php($k = \App\Filament\Tables\TripList::madeKey($trip))
+@php($st = \App\Filament\Tables\TripList::status($trip))
+@php($g = \App\Filament\Tables\TripList::goes($trip))
+@php($crew = \App\Filament\Tables\TripList::crew($trip))
+@php($rows = \App\Support\TripFlow::boxes($trip))
+@php($total = (clone $rows)->count())
+@php($loaded = (clone $rows)->where(fn ($q) => $q->where('is_loaded', true)->orWhere('is_loaded_hub', true))->count())
+@php($done = (clone $rows)->where('is_delivered', true)->count())
+@php($page = collect(\Filament\Facades\Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => is_subclass_of($p, \App\Filament\Shared\Trips\TripPage::class)))
+<div class="ds-tl__det">
+    <span class="ds-tl__detpills"><span class="ds-tl__pill is-{{ $st['tone'] }}">{{ $st['label'] }}</span><span class="ds-tl__made is-{{ $k }}">{{ \App\Filament\Tables\TripList::MADE[$k][0] }}</span></span>
+    <div @class(['ds-tl__how', 'is-manual' => $k === 'manual'])>
+        <b>How this trip was made</b>
+        @foreach (\App\Filament\Tables\TripList::how($trip) as [$i, $t])<span><em>{{ $i }}</em><span>{{ $t }}</span></span>@endforeach
     </div>
-</div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_26
-
-# ---------------------------------------------------------------- resources/views/filament/hubs/setup.blade.php
-mkdir -p 'resources/views/filament/hubs'
-cat > 'resources/views/filament/hubs/setup.blade.php' <<'DISPATCH_FILE_END_27'
-<x-filament-panels::page>
-<div class="ds-fl ds-wc">
-    <span class="ds-te__title"><small>@if ($areasUrl)<a href="{{ $areasUrl }}" class="ds-te__link">‹ Hub areas</a> · @endif Settings › Hubs</small><h1>{{ $record ? $record->hub_name.': where it is and its area' : 'Add a hub and its area' }}</h1><small>Tell the system where the hub is. It suggests the places nearby that have no hub yet. You confirm.</small></span>
-    <div class="ds-hs__grid">
-        <section class="ds-cb__card ds-wc__card">
-            <b class="ds-ad__h">1 · The hub</b>
-            <form wire:submit="save" class="ds-hs__form">
-                <label><small>Hub name</small><input type="text" wire:model="form.name" class="ds-te__input" placeholder="Dagupan Hub"></label>
-                <label><small>Code (trip numbers start with it)</small><input type="text" wire:model="form.code" class="ds-te__input" placeholder="DGP" maxlength="6"></label>
-                <label><small>Where is the hub? Province</small><input type="text" list="hs-provinces" wire:model="form.province" class="ds-te__input" placeholder="Pangasinan"></label>
-                <label><small>City</small><input type="text" wire:model="form.city" class="ds-te__input" placeholder="Dagupan City"></label>
-                <label><small>Barangay</small><input type="text" wire:model="form.barangay" class="ds-te__input" placeholder="Tapuac"></label>
-                <label><small>Hub phone (in texts to receivers)</small><input type="text" wire:model="form.phone" class="ds-te__input" placeholder="0917 …"></label>
-                <button type="submit" class="ds-te__btn is-main">{{ $record ? 'Save' : 'Add the hub' }}</button>
-            </form>
-            <datalist id="hs-provinces">@foreach ($provinces as $p)<option value="{{ $p }}">@endforeach</datalist>
-        </section>
-        <section class="ds-cb__card ds-wc__card">
-            <span class="ds-wc__head"><b class="ds-ad__h">2 · ✦ Suggested area</b>@if ($record)<small>{{ $picked }} {{ Str::plural('place', $picked) }} picked</small>@endif</span>
-            @if (! $record || ! $record->province)
-                <small class="ds-te__hint">Save the hub with its province first.</small>
-            @else
-                <small class="ds-te__hint">Only places with no hub now (the warehouse delivers them direct). Click to leave one out.</small>
-                @forelse ($free as $i => $g)
-                    <button type="button" wire:click="toggleLeave({{ $i }})" @class(['ds-hs__sug', 'is-off' => ! empty($leave[$i])])><i>{{ empty($leave[$i]) ? '✓' : '' }}</i><span><b>{{ $g['city'] ? $g['city'].', ' : '' }}{{ $g['province'] }}</b><small>{{ $g['sub'] }}</small></span><small>{{ $g['perWeek'] }} boxes/week</small></button>
-                @empty
-                    <small class="ds-te__hint">Every place near {{ $record->province }} already has a hub. Add places by hand in Hub areas.</small>
-                @endforelse
-                @foreach ($closer as $c)
-                    <span class="ds-wc__conflict" wire:key="c-{{ $c['area']->id }}">
-                        <b>Closer than its hub now</b>
-                        <span>{{ $c['sub'] }} Never moved without you.</span>
-                        @if (! isset($move[$c['area']->id]))
-                            <span class="ds-wc__btns"><button type="button" class="ds-te__btn is-main" wire:click="decideMove({{ $c['area']->id }}, 'yes')">Move to {{ $record->hub_name }}</button><button type="button" class="ds-te__btn ds-wc__ghost" wire:click="decideMove({{ $c['area']->id }}, 'no')">Keep with {{ \App\Support\Hubs\HubAreas::name($c['area']->logistichub_id) }}</button></span>
-                        @else
-                            <small><b>{{ $move[$c['area']->id] === 'yes' ? '✓ Moves to '.$record->hub_name.' when you approve' : 'Stays with '.\App\Support\Hubs\HubAreas::name($c['area']->logistichub_id) }}</b></small>
-                        @endif
-                    </span>
-                @endforeach
-                @if ($picked)<button type="button" class="ds-te__btn is-main" wire:click="approve">Approve {{ $picked }} {{ Str::plural('place', $picked) }} for {{ $record->hub_name }}</button>@endif
-                @if ($saved)<span class="ds-ha__ok">✓ {{ $record->hub_name }} has {{ $mine->count() }} {{ Str::plural('place', $mine->count()) }}. Its boxes go on “To hub” trips from the next plan.</span>@endif
-                <small class="ds-te__hint">Until the area is approved, no box goes to this hub: the warehouse keeps delivering direct.</small>
-            @endif
-        </section>
-        <section class="ds-cb__card ds-wc__card">
-            <b class="ds-ad__h">When a hub is switched off</b>
-            @if ($record)
-                <span class="ds-hs__switch"><span>{{ $record->hub_name }} active</span><button type="button" role="switch" aria-checked="{{ $record->is_active ? 'true' : 'false' }}" wire:click="toggleActive" @class(['ds-hs__sw', 'is-on' => $record->is_active])><i></i></button></span>
-                @if (! $record->is_active && $mine->isNotEmpty())
-                    <span class="ds-ha__off"><b>{{ $record->hub_name }} is off: {{ $mine->count() }} {{ Str::plural('place', $mine->count()) }} have no hub now</b><span>{{ $mine->map->label()->join(', ') }}. New boxes there go direct from the warehouse. Trips already going to {{ $record->hub_name }} finish as planned. Give them to another hub in Hub areas.</span></span>
-                @endif
-            @endif
-            <span class="ds-wc__asked">Only active hubs show in Hub areas and Plan trips. A hub switched on again gets its places back.</span>
-        </section>
+    <div class="ds-tl__facts">
+        @foreach ([
+            'Made by' => ($trip->user?->first_name ?? '—').' · '.($trip->created_at?->format('M j g:i A') ?? ''),
+            'Going to' => $g['to'],
+            'Truck' => $trip->truck?->plate_no ?? 'No truck yet',
+            'Crew' => $crew->isNotEmpty() ? $crew->map(fn ($c) => Str::before((string) $c->user?->full_name, ' '))->filter()->join(' · ') : 'No crew yet',
+            'Boxes' => $total.' · '.$loaded.' loaded',
+            'Delivered' => $done.' of '.$total,
+            'When' => $st['when'] ?: '—',
+            'Waybill' => $trip->waybill_number ?: '—',
+        ] as $label => $value)
+            <span><small>{{ $label }}</small><b>{{ $value }}</b></span>
+        @endforeach
     </div>
-</div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_27
-
-# ---------------------------------------------------------------- resources/views/filament/pages/scanload.blade.php
-mkdir -p 'resources/views/filament/pages'
-cat > 'resources/views/filament/pages/scanload.blade.php' <<'DISPATCH_FILE_END_28'
-<x-filament-panels::page>
-    @php($progress = $this->progress())
-
-    <x-scan.station :heading="$this->stationHeading()" :description="$this->stationDescription()" :icon="$this->stationIcon()">
-        <x-slot name="form">
-            {{ $this->form }}
-
-            <x-barcode-scanner method="scan" continuous :cooldown="1500" />
-        </x-slot>
-
-        <x-slot name="progress">
-            @if ($this->data['deliverylog_id'] ?? null)
-                @if (method_exists($this, 'loadNext') && ($next = $this->loadNext()))
-                    @include('filament.partials.load-next', ['next' => $next])
-                @endif
-                <x-scan.progress :loaded="$progress['loaded']" :total="$progress['total']" :label="$this->progressLabel()" :last="$progress['last'] ?? null" />
-            @endif
-        </x-slot>
-
-        <x-slot name="result">
-            <x-scan.result
-                :invoice="$this->lastInvoice()"
-                :status="$lastStatus"
-                :title="$lastMessage"
-                :meta="method_exists($this, 'lastReason') ? ['Driver said' => $this->lastReason()] : []"
-            />
-            @if (($fu = (property_exists($this, 'wrongHub') ? $this->wrongHub : null)) && ($fu['kind'] ?? null) === 'full')
-                <div class="ds-ld__early is-full"><strong>Truck full · {{ $fu['code'] }} does not fit</strong><span>{{ $fu['for'] }}. Put it back{{ $fu['section'] !== '—' ? ' in section '.$fu['section'] : '' }}.</span><x-filament::button size="sm" color="gray" wire:click="loadAnyway">It still fits · load anyway</x-filament::button></div>
-            @endif
-            @if (($wx = (property_exists($this, 'wrongHub') ? $this->wrongHub : null)) && ($wx['kind'] ?? null) === 'wh')
-                <div class="ds-ld__early is-full"><strong>Not for {{ $wx['trip'] }} · {{ $wx['code'] }} is for {{ $wx['for'] }}</strong><span>Delivered from {{ $wx['home'] }}: it stays here.</span><x-filament::button size="sm" color="gray" wire:click="loadAnyway">The office says load it</x-filament::button></div>
-            @endif
-            @if (($wh2 = (property_exists($this, 'wrongHub') ? $this->wrongHub : null)) && ($wh2['kind'] ?? null) === 'hub')
-                <div class="ds-ld__early is-full"><strong>Not for this trip · {{ $wh2['code'] }} ({{ $wh2['for'] }})</strong><span>It goes {{ str_contains($wh2['home'], 'own trucks') ? 'with '.$wh2['home'] : 'to '.$wh2['home'] }}. Put it back{{ $wh2['section'] !== '—' ? ' in section '.$wh2['section'] : '' }}.</span><x-filament::button size="sm" color="gray" wire:click="loadAnyway">Deliver it on this trip anyway</x-filament::button></div>
-            @endif
-            @if (property_exists($this, 'bypass') && $this->bypass)
-                <div class="ds-ld__bypass">
-                    @if ($this->bypass['need'] === 'office')
-                        <strong>{{ \App\Support\Trips\TripRules::RULES[$this->bypass['rule']][0] }}: office only</strong><span>Ask the office to allow {{ $this->bypass['code'] }}.</span>
-                        <span class="ds-ld__reasons"><x-filament::button size="sm" wire:click="askOffice">Ask the office</x-filament::button><x-filament::button size="sm" color="gray" wire:click="cancelBypass">Cancel</x-filament::button></span>
-                    @else
-                        <strong>Why? (the office sees this)</strong>
-                        <span class="ds-ld__reasons">@foreach (\App\Support\Trips\TripRules::reasons() as $r)<x-filament::button size="sm" color="gray" wire:click="bypassWith(@js($r))">{{ $r }}</x-filament::button>@endforeach<x-filament::button size="sm" color="gray" outlined wire:click="cancelBypass">Cancel</x-filament::button></span>
-                    @endif
-                </div>
-            @endif
-            @if (method_exists($this, 'cityTopUp') && ! $this->lastStatus && ($ctu = $this->cityTopUp()))
-                <div class="ds-ld__citytop"><strong>✦ Room for {{ $ctu['room'] }} more boxes</strong><span>{{ $ctu['same'] ? 'Same way' : 'Next province' }}: {{ $ctu['city'] }}, {{ $ctu['province'] }} · {{ $ctu['boxes'] }} boxes{{ $ctu['section'] ? ' · section '.$ctu['section'] : '' }}</span><x-filament::button size="sm" wire:click="addTopUpCity(@js($ctu['key']))">Add {{ $ctu['city'] }} to this trip</x-filament::button></div>
-            @endif
-            @if (($oc = (property_exists($this, 'wrongHub') ? $this->wrongHub : null)) && ($oc['kind'] ?? null) === 'city')
-                <div class="ds-ld__early"><strong>Other city · {{ $oc['code'] }} is for {{ $oc['for'] }}</strong><span>This trip goes to {{ $oc['trip'] }}. Put it back in section {{ $oc['section'] }}.</span><x-filament::button size="sm" color="gray" wire:click="loadAnyway">Add it to this trip anyway</x-filament::button></div>
-            @endif
-            @if ($early = (property_exists($this, 'early') ? $this->early : null))
-                <div class="ds-ld__early"><strong>Too early · stop {{ $early['stop'] }} goes in at the {{ $early['zone'] === 'back' ? 'door' : 'middle' }}</strong><span>Put it aside and load stop {{ $early['nextStop'] }} first.</span><x-filament::button size="sm" color="gray" wire:click="loadAnyway">Load it anyway</x-filament::button></div>
-            @endif
-            @include('filament.partials.scan-photo')
-        </x-slot>
-
-        <x-slot name="aside">
-            <x-scan.household :rows="$this->household()" done-label="on this trip" />
-        </x-slot>
-    </x-scan.station>
-</x-filament-panels::page>
-DISPATCH_FILE_END_28
-
-# ---------------------------------------------------------------- resources/views/filament/scan/app.blade.php
-mkdir -p 'resources/views/filament/scan'
-cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_29'
-@php
-    $ring = fn (int $done, int $total, int $len = 289) => $len - ($total > 0 ? round($len * min($done, $total) / $total) : 0);
-    $condOrder = array_keys($conditions);
-@endphp
-<x-filament-panels::page>
-<div class="ds-sa" x-data x-on:scan-app-result.window="if (navigator.vibrate) navigator.vibrate($event.detail.status === 'success' ? 60 : [80, 60, 80])">
-
-    {{-- ============================== start ============================== --}}
-    @if ($screen === 'home')
-        <section class="ds-sa__screen ds-sa__home" wire:key="home">
-            <header class="ds-sa__hello">
-                <span><small>{{ $place }}</small><strong>{{ $greeting }}, {{ $firstName }}</strong></span>
-                <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: 'scan-tips' })" aria-label="Help">?</button>
-                <span class="ds-sa__avatar">{{ $initials }}</span>
-            </header>
-
-            <div class="ds-sa__today">
-                <span class="ds-sa__ring">
-                    <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring(min($today['scans'], 500), 500) }}"/></svg>
-                    <span><strong>{{ $today['scans'] }}</strong><small>today</small></span>
-                </span>
-                <dl>
-                    <dt>Boxes scanned</dt><dd>{{ number_format($today['scans']) }}</dd>
-                    <dt>Photos</dt><dd>{{ number_format($today['photos']) }}</dd>
-                    <dt>Problems</dt><dd class="is-bad">{{ $today['problems'] }}</dd>
-                </dl>
-            </div>
-
-            @if ($modes)
-                <p class="ds-sa__label">Start scanning</p>
-                <div class="ds-sa__list">
-                    @foreach ($modes as $key => $m)
-                        <button type="button" class="ds-sa__row" wire:click="open('{{ $key }}')">
-                            <span class="ds-sa__chip">@include('filament.scan.icon', ['name' => $m['icon']])</span>
-                            <span class="ds-sa__rowtext"><strong>{{ $m['label'] }}</strong><small>{{ $m['sub'] }}</small></span>
-                            @php($w = $waiting[$key] ?? 0)
-                            <span @class(['ds-sa__waiting', 'is-none' => ! $w])>{{ $w ? $w.' waiting' : 'All done' }}</span>
-                            <span class="ds-sa__chev" aria-hidden="true">›</span>
-                        </button>
-                    @endforeach
-                </div>
-            @else
-                <div class="ds-sa__note">Your account can't scan here. Ask the office to set your account to Warehouse or Company.</div>
-            @endif
-
-            <footer class="ds-sa__foot">
-                <span class="ds-sa__online"><i></i>Online · every scan is saved</span>
-                <span class="ds-sa__footlinks">
-                    <button type="button" class="ds-pwa-install" onclick="window.dsInstallApp && window.dsInstallApp()">Install app</button>
-                    <form method="POST" action="{{ filament()->getLogoutUrl() }}">@csrf<button type="submit">Sign out</button></form>
-                </span>
-            </footer>
-        </section>
-    @endif
-
-    {{-- ============================== pick ============================== --}}
-    @if ($screen === 'pick' && $def)
-        <section class="ds-sa__screen ds-sa__pick" wire:key="pick-{{ $this->mode }}">
-            <button type="button" class="ds-sa__pill" wire:click="home"><span aria-hidden="true">‹</span> Back</button>
-            <header class="ds-sa__title ds-sa__title--help"><span><small>{{ $def['label'] }}</small><strong>Choose the {{ $def['kind'] }}</strong></span><button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button></header>
-
-            @forelse ($choices as $i => $c)
-                <button type="button" @class(['ds-sa__choice', 'is-finished' => $c['finished']]) style="animation-delay: {{ $i * 50 }}ms" wire:click="pick({{ $c['id'] }})" wire:key="c-{{ $c['id'] }}">
-                    <span class="ds-sa__choicetext">
-                        <strong>{{ $c['name'] }}</strong>
-                        @if ($c['sub'])<small>{{ $c['sub'] }}</small>@endif
-                        <small class="is-num">{{ $c['done'] }} of {{ $c['total'] }} scanned{{ $c['finished'] ? (($c['active'] ?? true) ? ' · finished' : ' · closed') : '' }}</small>
-                    </span>
-                    <span class="ds-sa__ring is-small">
-                        <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring($c['done'], $c['total']) }}"/></svg>
-                        <span><b>{{ $c['total'] ? round($c['done'] / $c['total'] * 100) : 0 }}%</b></span>
-                    </span>
-                </button>
-            @empty
-                <div class="ds-sa__note">Nothing left to scan for {{ strtolower($def['label']) }}. Everything open is 100% scanned.</div>
-            @endforelse
-
-            @if ($finishedCount)
-                <button type="button" class="ds-sa__more" wire:click="toggleFinished">
-                    {{ $showFinished ? 'Hide finished' : 'Show finished ('.$finishedCount.')' }}
-                </button>
-            @endif
-        </section>
-    @endif
-
-    {{-- ============================== scan ============================== --}}
-    @if ($screen === 'scan' && $def)
-        <section class="ds-sa__screen ds-sa__scan" wire:key="scan-{{ $this->mode }}-{{ $choice }}">
-            @if ($aiFlag)
-                <div class="ds-sa__aiflag" wire:key="aiflag-{{ $aiFlag->id }}">
-                    <span class="ds-sa__aibadge">AI</span>
-                    <span><b>{{ $aiFlag->invoice }} looks {{ strtolower($aiFlag->label()) }}?</b><small>{{ $aiFlag->note }}</small></span>
-                    <button type="button" wire:click="aiFlagAnswer({{ $aiFlag->id }}, true)">Yes, mark it</button>
-                    <button type="button" class="is-plain" wire:click="aiFlagAnswer({{ $aiFlag->id }}, false)">It's fine</button>
-                </div>
-            @elseif ($aiPending)
-                <span wire:poll.8s class="hidden"></span>
-            @endif
-            <div class="ds-sa__cam" wire:ignore
-                 x-data="barcodeScanner(@js(['method' => 'scan', 'formats' => ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'itf', 'qr_code'], 'autoStart' => true, 'continuous' => true, 'cooldown' => 2500, 'beep' => true]))">
-                <video x-ref="video" playsinline muted autoplay></video>
-                <div class="ds-sa__frame" x-bind:class="{ 'is-hit': flash }"><i></i><i></i><i></i><i></i><span x-show="scanning" class="ds-sa__sweep"></span></div>
-                <p class="ds-sa__camtext" x-show="loading" x-cloak>Starting camera…</p>
-                <p class="ds-sa__camtext" x-show="! scanning && ! loading && ! error">Camera is off · tap the round button</p>
-                <p class="ds-sa__camtext is-error" x-show="error" x-text="error" x-cloak></p>
-                <p class="ds-sa__camtext is-hint" x-show="hint && ! error" x-text="hint" x-cloak></p>
-
-                <div class="ds-sa__controls">
-                    <label class="ds-sa__type">
-                        <input type="text" x-model="manualCode" x-on:keydown.enter.prevent="submitManual()" placeholder="Type or use a handheld scanner" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go" aria-label="Box number">
-                        <button type="button" x-on:click="submitManual()" aria-label="Find">→</button>
-                    </label>
-                    <div class="ds-sa__buttons">
-                        <button type="button" class="ds-sa__round" x-show="torchSupported && scanning" x-on:click="toggleTorch()" x-bind:class="{ 'is-on': torchOn }" aria-label="Flashlight" x-cloak>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6l-1 6h-4zM10 8h4v12a2 2 0 0 1-4 0z"/></svg>
-                        </button>
-                        <button type="button" class="ds-sa__shutter" x-on:click="toggle()" x-bind:aria-label="scanning ? 'Stop camera' : 'Start camera'">
-                            <span x-bind:class="{ 'is-live': scanning }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></span>
-                        </button>
-                        <button type="button" class="ds-sa__round is-text" wire:click="finish">Done</button>
-                    </div>
-                </div>
-            </div>
-
-            <header class="ds-sa__bar">
-                <button type="button" class="ds-sa__back" wire:click="back" aria-label="Back">‹</button>
-                <span class="ds-sa__bartext"><small>{{ $def['label'] }}</small><strong>{{ $target['name'] ?? '' }}{{ ! empty($target['sub']) ? ' · '.$target['sub'] : '' }}</strong></span>
-                <span class="ds-sa__ring is-tiny">
-                    <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring($progress['loaded'] ?? 0, $progress['total'] ?? 0) }}"/></svg>
-                </span>
-                <span class="ds-sa__count"><strong>{{ $progress['loaded'] ?? 0 }}</strong><small>of {{ $progress['total'] ?? 0 }}</small>@if ($space)<small class="ds-sa__space">{{ \App\Support\BoxSizes::fmt($space['loaded']) }}{{ $space['cap'] ? ' / '.$space['cap'] : '' }} space</small>@endif</span>
-                <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button>
-            </header>
-
-            @if (count($team) > 1)
-                <div class="ds-sx__team" aria-label="Who scanned">
-                    @foreach (array_slice($team, 0, 4) as $m)<span @class(['is-me' => $m['me']])>{{ $m['name'] }} <b>{{ $m['n'] }}</b></span>@endforeach
-                </div>
-            @endif
-
-            @if ($this->mode === 'unload' && $trucks)
-                @foreach ($trucks as $tk)
-                    <div class="ds-sx__here"><b>🚚 Truck to {{ $tk['to'] }} is here</b><span>{{ $tk['onTruck'] }} on truck</span></div>
-                @endforeach
-            @endif
-
-            @if (! $status && $loadNext && $loadNext['stop'])
-                @include('filament.partials.load-next', ['next' => $loadNext, 'dark' => true])
-            @endif
-
-            @if (! $status && ! $bypass && $cityTopUp)
-                <div class="ds-sx__citytop" wire:key="citytop-{{ $cityTopUp['key'] }}">
-                    <b>✦ Room for {{ $cityTopUp['room'] }} more boxes</b>
-                    <span>{{ $cityTopUp['same'] ? 'Same way' : 'Next province' }}: <b>{{ $cityTopUp['city'] }}, {{ $cityTopUp['province'] }}</b> · {{ $cityTopUp['boxes'] }} {{ Str::plural('box', $cityTopUp['boxes']) }}{{ $cityTopUp['days'] ? ', '.$cityTopUp['days'].' '.Str::plural('day', $cityTopUp['days']).' old' : '' }}.@if ($cityTopUp['section']) In section <b>{{ $cityTopUp['section'] }}</b>.@endif</span>
-                    <button type="button" class="ds-sa__primary" wire:click="cityTopUpAdd(@js($cityTopUp['key']))">Scan them now</button>
-                    <button type="button" class="ds-sa__secondary" wire:click="cityTopUpSkip">No thanks, lock the trip</button>
-                </div>
-            @endif
-
-            @if ($bypass)
-                <div class="ds-sa__sheet is-warn" wire:key="bypass-{{ $bypass['code'] }}">
-                    <span class="ds-sa__grab"></span>
-                    @if ($bypass['need'] === 'office')
-                        <p class="ds-sa__msg"><b>{{ $bypass['title'] }}: office only.</b> Ask the office to allow {{ $bypass['code'] }}. Keep the box aside until they answer.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="askOffice">Ask the office</button>
-                    @else
-                        <span class="ds-sa__hit"><span><small class="ds-ld__kicker">{{ $bypass['title'] }} · load anyway</small><strong>{{ $bypass['code'] }}</strong></span></span>
-                        <p class="ds-sa__msg"><b>Why? (the office sees this)</b></p>
-                        <div class="ds-sx__reasons">@foreach ($bypassReasons as $r)<button type="button" wire:click="bypassWith(@js($r))">{{ $r }}</button>@endforeach</div>
-                    @endif
-                    <button type="button" class="ds-sa__secondary" wire:click="cancelBypass">Cancel</button>
-                </div>
-            @elseif ($status === 'success' && $box)
-                <div class="ds-sa__sheet is-ok" wire:key="ok-{{ $invoiceId }}-{{ $sessionScans }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit">
-                        <span class="ds-sa__mark is-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
-                        <span><strong>{{ $box->invoice }}</strong><small>{{ $def['ok'] }}</small></span>
-                        @if ($boxSize && $boxSize['space'] != 1)<em class="ds-sa__size">{{ $boxSize['name'] }} · takes {{ \App\Support\BoxSizes::fmt($boxSize['space']) }} space</em>@elseif ($box->boxtype)<em>{{ $box->boxtype }}</em>@endif
-                    </div>
-                    @if ($this->mode === 'count')<p class="ds-sa__msg">{{ $message }}</p>@endif
-                    @if ($route)
-                        <div @class(['ds-sx__tile', 'is-truck' => ($route['kind'] ?? '') === 'truck']) style="--sx: {{ $route['color'] ?? '#1d6fb8' }}">
-                            <small>{{ match ($route['kind'] ?? '') { 'truck' => 'Carry this box to', 'wrong' => 'Careful', default => 'Put this box in' } }}</small>
-                            <strong>{{ ($route['kind'] ?? '') === 'truck' ? 'TRUCK' : $route['code'] }}</strong>
-                            <span>{{ ($route['kind'] ?? '') === 'truck' ? $route['name'].(! empty($route['plate']) ? ' · '.$route['plate'] : '') : $route['name'] }}</span>
-                            @if (($route['kind'] ?? '') === 'truck')<em>✓ Already loaded on trip {{ $route['trip'] }}. No need to scan it again.</em>@endif
-                            @if (! empty($route['why']))<em>{{ $route['why'] }}</em>@endif
-                            @if (! empty($route['pending']))<em>Then scan the QR on section {{ $route['code'] }}.</em>@endif
-                        </div>
-                        @if (($route['kind'] ?? '') === 'truck')
-                            <button type="button" class="ds-sx__link" wire:click="putInSection">Put in section instead</button>
-                        @endif
-                    @endif
-                    @if ($setInfo)
-                        <div @class(['ds-sx__set', 'is-'.$setInfo['kind']])>
-                            <span><b>{{ $setInfo['name'] }}</b> · box {{ $setInfo['n'] }} of {{ $setInfo['of'] }}</span>
-                            <span class="ds-sx__dots">@for ($i = 1; $i <= min(12, $setInfo['of']); $i++)<i @class(['is-on' => $i <= $setInfo['n']])></i>@endfor</span>
-                            <small>{{ $setInfo['text'] }}</small>
-                            @if (! empty($setInfo['rows']))
-                                <ul class="ds-sx__setrows">@foreach ($setInfo['rows'] as $sr)<li><span>{{ $sr['i'] }}</span>{{ $sr['t'] }}</li>@endforeach</ul>
-                            @endif
-                            @foreach ($setInfo['add'] ?? [] as $sa)
-                                <button type="button" class="ds-sx__setadd" wire:click="addSetBox({{ $sa['id'] }})">Bring {{ $sa['invoice'] }} from section {{ $sa['section'] ?? '?' }} · add to truck</button>
-                            @endforeach
-                        </div>
-                    @endif
-                    @if ($spot)
-                        <div class="ds-ld__spot is-{{ $spot['zone'] }}"><strong>{{ \App\Models\Maps\TripStop::ZONES[$spot['zone']] ?? '' }}</strong><span>{{ ! empty($spot['hub']) ? $spot['hub'].' (stop '.$spot['stop'].')' : 'Stop '.$spot['stop'] }} · {{ ['front' => 'deep inside, next to the cab', 'middle' => 'in the middle', 'back' => 'near the door'][$spot['zone']] ?? '' }}</span></div>
-                    @endif
-                    <div class="ds-sa__who">
-                        <span>{{ mb_strtoupper(mb_substr($box->receiver_name ?? '?', 0, 2)) }}</span>
-                        <span><strong>{{ \Illuminate\Support\Str::title($box->receiver_name) }}</strong><small>{{ collect([$box->receiver_barangay, $box->receiver_city])->filter()->map(fn ($p) => \Illuminate\Support\Str::title($p))->join(', ') }}</small></span>
-                    </div>
-
-                    @if ($this->photosOn())
-                        @php($ci = max(0, (int) array_search($condition ?? 'good', $condOrder, true)))
-                        <div class="ds-sa__seg" role="group" aria-label="How does the box look?">
-                            <span class="ds-sa__segthumb is-{{ $condition ?? 'good' }}" style="left: calc(4px + {{ $ci }} * (100% - 8px) / 4)"></span>
-                            @foreach ($conditions as $key => $label)
-                                <button type="button" wire:click="setCondition('{{ $key }}')" @class(['is-on' => ($condition ?? 'good') === $key]) aria-pressed="{{ ($condition ?? 'good') === $key ? 'true' : 'false' }}"><i class="is-{{ $key }}"></i>{{ $label }}</button>
-                            @endforeach
-                        </div>
-                        @if (in_array($condition, ['damaged', 'wet', 'open'], true))
-                            <input type="text" class="ds-sa__note-in" wire:model.blur="note" maxlength="250" placeholder="What is wrong? (optional)" aria-label="What is wrong?">
-                        @endif
-
-                        <div class="ds-sa__photos"
-                             x-data="{ busy: false, failed: false, pct: 0,
-                                take() { this.failed = false; this.$refs.file.value = ''; this.$refs.file.click() },
-                                async send(e) {
-                                    const file = e.target.files[0]; if (! file) return;
-                                    this.busy = true; this.pct = 0; let out = file;
-                                    out = window.dsShrinkPhoto ? await window.dsShrinkPhoto(file) : file;
-                                    $wire.upload('boxPhoto', out, () => $wire.saveBoxPhoto().then(() => { this.busy = false }), () => { this.busy = false; this.failed = true }, (ev) => { this.pct = ev.detail.progress });
-                                } }">
-                            <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
-                            @foreach ($shots as $shot)
-                                <a href="{{ $shot->url() }}" target="_blank" class="ds-sa__shot"><img src="{{ $shot->url() }}" alt="Photo {{ $loop->iteration }}"></a>
-                            @endforeach
-                            <button type="button" class="ds-sa__addphoto" x-on:click="take()" x-bind:disabled="busy">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-                                <span x-show="! busy">{{ $shots->isEmpty() ? 'Add photo · optional' : 'Add another' }}</span>
-                                <span x-show="busy" x-cloak>Saving… <span x-text="pct + '%'"></span></span>
-                            </button>
-                            <p class="ds-sa__err" x-show="failed" x-cloak>The photo did not upload. Try again.</p>
-                        </div>
-                    @endif
-                    <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
-                </div>
-            @elseif ($status === 'success' && $route)
-                <div class="ds-sa__sheet is-ok" wire:key="placed-{{ $sessionScans }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sx__tile" style="--sx: {{ $route['color'] ?? '#1d6fb8' }}"><small>Saved in</small><strong>{{ $route['code'] }}</strong><span>{{ $route['name'] }}</span></div>
-                    <p class="ds-sa__msg">{{ $message }}</p>
-                    <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
-                </div>
-            @elseif ($status === 'warning' && $wrongHub)
-                <div class="ds-sa__sheet is-bad" wire:key="wronghub-{{ $sessionScans }}-{{ $wrongHub['code'] }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit is-shake">
-                        <span class="ds-sa__mark is-bad">⛔</span>
-                        <span><small class="ds-ld__kicker">{{ ['city' => 'Other city', 'wh' => 'Not for '.($wrongHub['trip'] ?? ''), 'full' => 'Truck full', 'hub' => 'Not for this trip'][$wrongHub['kind'] ?? ''] ?? 'Wrong hub' }}</small><strong>{{ ($wrongHub['kind'] ?? null) === 'full' ? $wrongHub['code'].' does not fit' : $wrongHub['code'].' is for '.$wrongHub['for'] }}</strong></span>
-                    </div>
-                    @if (($wrongHub['kind'] ?? null) === 'full')
-                        <p class="ds-sa__msg">{{ $wrongHub['for'] }}. This box takes {{ $wrongHub['space'] }} space: it waits for the next {{ $wrongHub['province'] }} trip. Put it back{{ $wrongHub['section'] !== '—' ? ' in section '.$wrongHub['section'] : '' }}.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">It still fits · load anyway</button>
-                    @elseif (($wrongHub['kind'] ?? null) === 'wh')
-                        <p class="ds-sa__msg">{{ $wrongHub['for'] }} is delivered from {{ $wrongHub['home'] }}. Not loaded: it stays here{{ $wrongHub['section'] !== '—' ? ', section '.$wrongHub['section'] : '' }}.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">The office says load it</button>
-                    @elseif (($wrongHub['kind'] ?? null) === 'hub')
-                        <p class="ds-sa__msg">{{ $wrongHub['for'] }} goes {{ str_contains($wrongHub['home'], 'own trucks') ? 'with '.$wrongHub['home'] : 'to '.$wrongHub['home'] }}. Not loaded on {{ $wrongHub['trip'] }}: put it back{{ $wrongHub['section'] !== '—' ? ' in section '.$wrongHub['section'] : '' }}.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">Deliver it on this trip anyway</button>
-                    @elseif (($wrongHub['kind'] ?? null) === 'city')
-                        <p class="ds-sa__msg">This trip goes to {{ $wrongHub['trip'] }}. Not loaded. Put it back in section {{ $wrongHub['section'] }}; it goes on a trip to its own city.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">Add it to this trip anyway</button>
-                    @else
-                    <p class="ds-sa__msg">This trip goes to {{ $wrongHub['trip'] }}. Not loaded. Put it back in section {{ $wrongHub['section'] }} and tell the office.</p>
-                    <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                    <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">The office says load it</button>
-                    @endif
-                </div>
-            @elseif ($status === 'warning' && $early)
-                <div class="ds-sa__sheet is-warn" wire:key="early-{{ $sessionScans }}-{{ $early['code'] }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit">
-                        <span class="ds-sa__mark is-warn">!</span>
-                        <span><small class="ds-ld__kicker">Too early</small><strong>{{ $early['code'] }} is for stop {{ $early['stop'] }}{{ $early['place'] ? ' ('.$early['place'].')' : '' }}</strong></span>
-                    </div>
-                    <p class="ds-sa__msg">It's delivered earlier, so it goes in later, {{ $early['zone'] === 'back' ? 'at the door' : 'in the middle' }}. Put it aside and load stop {{ $early['nextStop'] }} now.</p>
-                    <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put aside</button>
-                    <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">Load it anyway</button>
-                </div>
-            @elseif ($status === 'warning')
-                <div class="ds-sa__sheet is-warn" wire:key="warn-{{ $sessionScans }}-{{ md5($message) }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit">
-                        <span class="ds-sa__mark is-warn">!</span>
-                        <span><strong>{{ $box?->invoice ?? 'Check this box' }}</strong><small>{{ $message }}</small></span>
-                    </div>
-                    <button type="button" class="ds-sa__secondary" wire:click="dismiss">OK, scan next</button>
-                </div>
-            @elseif ($status === 'danger')
-                <div class="ds-sa__sheet is-bad" wire:key="bad-{{ $sessionScans }}-{{ md5($message) }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit is-shake">
-                        <span class="ds-sa__mark is-bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
-                        <span><strong>{{ $missing ?? $box?->invoice ?? 'Wrong box' }}</strong><small>Not on this {{ $def['kind'] }}</small></span>
-                    </div>
-                    <p class="ds-sa__msg">{{ $message }}</p>
-                    @if ($missing && $this->mode === 'unload')
-                        {{ $this->unmanifestedAction }}
-                    @endif
-                    <button type="button" class="ds-sa__secondary" wire:click="dismiss">Keep it aside, scan next</button>
-                </div>
-            @endif
-        </section>
-    @endif
-
-    {{-- ============================== done ============================== --}}
-    @if ($screen === 'done' && $def)
-        <section class="ds-sa__screen ds-sa__done" wire:key="done">
-            <span class="ds-sa__ring is-big">
-                <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="48" class="is-track"/><circle cx="55" cy="55" r="48" class="is-fill is-ok" style="stroke-dasharray: 302; stroke-dashoffset: {{ $ring($progress['loaded'] ?? 0, $progress['total'] ?? 0, 302) }}"/></svg>
-                <span><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></i></span>
-            </span>
-            @php($complete = ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total'])
-            <h2>{{ $complete ? $def['done'] : ($progress['loaded'] ?? 0).' of '.($progress['total'] ?? 0).' scanned' }}</h2>
-            <p>{{ $target['name'] ?? '' }}{{ ! empty($target['sub']) ? ' · '.$target['sub'] : '' }}</p>
-            <div class="ds-sa__totals">
-                <span><strong>{{ $sessionScans }}</strong><small>scanned now</small></span>
-                <span><strong>{{ $today['photos'] }}</strong><small>photos today</small></span>
-                <span><strong class="is-bad">{{ $today['problems'] }}</strong><small>problems today</small></span>
-            </div>
-            <p class="ds-sa__note">{{ $complete ? 'Everything on this '.$def['kind'].' is scanned. The office sees it right away.' : 'You can come back and finish later; every scan is already saved.' }}</p>
-            @if ($topUp && $topUp['room'] >= 1)
-                <div class="ds-sx__topup">
-                    <strong>Room for about {{ \App\Support\BoxSizes::fmt($topUp['room']) }} more on the truck</strong>
-                    @forelse ($topUp['boxes'] as $tb)
-                        <div class="ds-sx__toprow" wire:key="tu-{{ $tb['id'] }}">
-                            <span><b>{{ $tb['invoice'] }} · {{ $tb['name'] }}</b><small>{{ $tb['place'] }}{{ $tb['section'] ? ' · section '.$tb['section'] : '' }}{{ $tb['space'] != 1 ? ' · takes '.\App\Support\BoxSizes::fmt($tb['space']) : '' }}</small></span>
-                            <button type="button" wire:click="topUpAdd({{ $tb['id'] }})">Add</button>
-                        </div>
-                    @empty
-                        <small>No waiting boxes for these provinces.</small>
-                    @endforelse
-                    <small>Waiting boxes for the same provinces, oldest and priority first. Add one, then scan it onto the truck.</small>
-                </div>
-            @endif
-            @if ($receiveResult)
-                <div class="ds-sx__open">
-                    <strong>{{ $receiveResult['got'] }} of {{ $receiveResult['of'] }} boxes received</strong>
-                    @if (count($receiveResult['missing']))
-                        <span>{{ $receiveResult['of'] - $receiveResult['got'] }} not scanned:</span>
-                        @foreach ($receiveResult['missing'] as $rm)
-                            <span class="ds-sx__miss"><span>{{ $rm['code'] }} <small>{{ $rm['sub'] }}</small></span></span>
-                        @endforeach
-                        <small>Look in the truck once more. Found it? Keep scanning.</small>
-                    @else
-                        <span>✓ Every box arrived.</span>
-                    @endif
-                    @if ($receiveResult['finished'])
-                        <span>✓ Receiving finished.</span>
-                    @else
-                        <button type="button" class="ds-sa__secondary" wire:click="finishReceiving" wire:confirm="Finish receiving? Boxes not scanned get a Missing box issue each.">Finish receiving{{ ! empty($receiveResult['next']) ? ' · pass on to '.$receiveResult['next'] : '' }}</button>
-                    @endif
-                </div>
-            @endif
-            @if ($countResult)
-                <div class="ds-sx__open">
-                    <strong>Section {{ $countResult['code'] }}: {{ $countResult['found'] }} found{{ $countResult['moved'] ? ' · '.$countResult['moved'].' moved in' : '' }}</strong>
-                    @if (count($countResult['missing']))
-                        <span>{{ count($countResult['missing']) }} missing: {{ implode(', ', array_slice($countResult['missing'], 0, 12)) }}{{ count($countResult['missing']) > 12 ? '…' : '' }}</span>
-                    @else
-                        <span>✓ Nothing missing.</span>
-                    @endif
-                    <button type="button" class="ds-sa__secondary" wire:click="closeCount" wire:confirm="Close the count of section {{ $countResult['code'] }}?">Close the count</button>
-                </div>
-            @endif
-            @if (count($openSets))
-                @if ($noReason)<p class="ds-sx__stop">⛔ Not ready to leave: {{ $noReason }} {{ $noReason === 1 ? 'customer has' : 'customers have' }} boxes left behind with no reason.</p>@endif
-                <div class="ds-sx__open">
-                    <strong>{{ count($openSets) }} {{ count($openSets) === 1 ? 'customer is' : 'customers are' }} missing boxes</strong>
-                    @foreach ($openSets as $os)
-                        <div class="ds-sx__openrow" wire:key="os-{{ $os['key'] }}">
-                            <span><b>{{ $os['name'] }}</b> · {{ $os['have'] }} of {{ $os['of'] }} on the truck</span>
-                            @foreach ($os['missing'] as $mb)
-                                <span class="ds-sx__miss"><span>{{ $mb['invoice'] }} <small>{{ $mb['where'] }}</small></span>
-                                    <span class="ds-sx__why">@foreach ($splitReasons as $rk => $rl)<button type="button" wire:click="splitReason({{ $mb['id'] }}, '{{ $rk }}')" @class(['is-on' => $mb['reason'] === $rk])>{{ $rl }}</button>@endforeach</span>
-                                </span>
-                            @endforeach
-                        </div>
-                    @endforeach
-                    <small>Find the boxes, or pick why each one stays behind. The office sees it on the trip.</small>
-                </div>
-            @endif
-            <button type="button" class="ds-sa__primary" wire:click="pick({{ $choice }})">Keep scanning</button>
-            <button type="button" class="ds-sa__secondary" wire:click="home">Back to start</button>
-        </section>
-    @endif
-</div>
-<x-filament-actions::modals />
-</x-filament-panels::page>
-DISPATCH_FILE_END_29
-
-# ---------------------------------------------------------------- resources/views/filament/sms/settings.blade.php
-mkdir -p 'resources/views/filament/sms'
-cat > 'resources/views/filament/sms/settings.blade.php' <<'DISPATCH_FILE_END_30'
-<x-filament-panels::page>
-<div class="ds-mp">
-    <div class="ds-mp__badges">
-        <span @class(['is-ok' => $ready, 'is-warn' => ! $ready])>● {{ $ready ? 'Sending · '.$providers[$provider][0] : 'Not sending: no SMS key yet' }}</span>
-        <span><b>{{ number_format($used) }}</b> texts this month · limit {{ number_format((int) $limit) }}</span>
-        @if ($badNumbers)<span class="is-warn">{{ $badNumbers }} bad numbers this week · see the SMS log</span>@endif
-    </div>
-
-    <form wire:submit="saveSetup" class="ds-board__panel">
-        <div class="ds-board__panel-head"><h2>SMS provider</h2></div>
-        <div class="ds-mp__providers ds-sms__providers">
-            @foreach ($providers as $k => [$name, $text, $works])
-                <button type="button" wire:click="pick('{{ $k }}')" @class(['ds-mp__provider', 'is-picked' => $provider === $k])>
-                    <span class="ds-mp__provhead"><b>{{ $name }}</b><em @class(['is-on' => $provider === $k && $ready])>{{ ! $works ? 'Ask to connect' : ($provider === $k ? ($ready ? 'In use' : 'Chosen') : (\App\Support\Sms\SmsSettings::masked($k) ? 'Key saved' : 'No key')) }}</em></span>
-                    <small>{{ $text }}</small>
-                </button>
-            @endforeach
-        </div>
-        <div class="ds-sms__fields">
-            <label><span>{{ $provider === 'twilio' ? 'Account SID:Auth Token' : 'API key' }} @if ($masked)<small class="is-ok">saved ✓ {{ $masked }}</small>@endif</span><input type="password" wire:model="key" autocomplete="off" placeholder="{{ $masked ? 'Paste to replace' : 'Paste the key' }}"></label>
-            <label><span>Sender name {{ $provider === 'twilio' ? '(Twilio number or MG… SID)' : '' }}</span><input type="text" wire:model="sender" placeholder="e.g. DISPATCHPH (approved by the provider)"></label>
-            <label><span>Monthly limit (texts)</span><input type="number" min="0" wire:model="limit"></label>
-            <label><span>Office phone in texts {hub_phone}</span><input type="text" wire:model="officePhone" placeholder="0917 555 0101"></label>
-            <label><span>Language of the texts</span><select wire:model="language"><option value="auto">By province (Bisaya · Tagalog · English)</option><option value="en">Always English</option><option value="tl">Always Tagalog</option><option value="ceb">Always Bisaya</option></select></label>
-        </div>
-        @error('key')<p class="ds-ai__err">{{ $message }}</p>@enderror
-        <div class="ds-mp__keyrow">
-            <x-filament::button type="submit">Save</x-filament::button>
-            @if ($masked)<x-filament::button type="button" color="danger" outlined wire:click="removeKey" wire:confirm="Remove the key? No texts will be sent.">Remove key</x-filament::button>@endif
-            <span class="ds-sms__test"><input type="text" wire:model="testNumber" placeholder="Your number, 0917…"><x-filament::button type="button" color="gray" wire:click="test">Send a test text</x-filament::button></span>
-        </div>
-        @if ($testResult)<p @class(['ds-mp__result', 'is-ok' => $testOk])>{{ $testResult }}</p>@endif
-        <p class="ds-board__muted">Semaphore: sign up at semaphore.co, buy credits, copy the API key, and ask for your Sender Name (it takes a few days; until then texts come from "SEMAPHORE"). A receiver with 10 boxes gets one text, not 10. Bad numbers are skipped and listed in the SMS log.</p>
-    </form>
-
-    <div class="ds-sms__grid">
-        <section class="ds-board__panel">
-            <div class="ds-board__panel-head"><h2>Messages</h2><span class="ds-board__muted">switch each on or off · click to edit</span></div>
-            @foreach ($kinds as $k => [$title, $when])
-                <div wire:key="k-{{ $k }}" @class(['ds-sms__kind', 'is-sel' => $kind === $k])>
-                    <button type="button" wire:click="toggle('{{ $k }}')" @class(['ds-sms__switch', 'is-on' => $enabled[$k] ?? false]) aria-label="Switch {{ $title }}"><i></i></button>
-                    <button type="button" class="ds-sms__kindtext" wire:click="edit('{{ $k }}')"><b>{{ $title }}</b><small>{{ $when }}</small></button>
-                    <small>{{ ($enabled[$k] ?? false) ? number_format($counts[$k] ?? 0).' this month' : 'off' }}</small>
-                </div>
-                @if ($k === 'out_for_delivery')
-                    <small class="ds-sms__follow">Plan trips follows this switch: {{ ($enabled[$k] ?? false) ? '“SMS to receivers when the trip is locked”' : '“No SMS (off in SMS settings)”' }}. One trip only: “Send SMS for this trip” on its card.</small>
-                @endif
-            @endforeach
-        </section>
-
-        <section class="ds-board__panel">
-            <div class="ds-board__panel-head"><h2>Edit · {{ $kinds[$kind][0] }}</h2>
-                <span class="ds-tm__tabs">@foreach ($langs as $l => $ln)<button type="button" wire:click="edit('{{ $kind }}', '{{ $l }}')" @class(['is-on' => $lang === $l])>{{ $ln }}</button>@endforeach</span></div>
-            <textarea wire:model.live.debounce.400ms="text" rows="4" class="ds-sms__text"></textarea>
-            @error('text')<p class="ds-ai__err">{{ $message }}</p>@enderror
-            <span class="ds-sms__blanks">@foreach ($blanks as $b)<em>{{ $b }}</em>@endforeach</span>
-
-            @if ($aiOn)
-                <span class="ds-sms__ai">
-                    <button type="button" wire:click="ai('short')" wire:loading.attr="disabled">✨ Make it 1 text</button>
-                    <button type="button" wire:click="ai('friendly')" wire:loading.attr="disabled">✨ Friendlier</button>
-                    @foreach ($langs as $l => $ln)@if ($l !== $lang)<button type="button" wire:click="ai('{{ $l }}')" wire:loading.attr="disabled">✨ Translate to {{ $ln }}</button>@endif @endforeach
-                    <small wire:loading wire:target="ai">The AI is writing…</small>
-                </span>
-            @else
-                <p class="ds-board__muted">✨ AI writer: {{ $aiSwitched ? 'add the AI key in Settings → AI' : 'switch on "SMS writer" in Settings → AI' }} to shorten, make friendlier and translate texts.</p>
-            @endif
-            @if ($aiNote)
-                <div class="ds-sms__ainote"><span>✨ {{ $aiNote }}</span><button type="button" wire:click="undoAi">Back to mine</button></div>
-            @endif
-            @if ($aiError)<p class="ds-ai__err">{{ $aiError }}</p>@endif
-
-            <div class="ds-sms__checks">
-                <span @class(['is-ok' => $parts === 1, 'is-warn' => $parts > 1])>{{ $parts === 1 ? '✓ 1 text per receiver' : '⚠ '.$parts.' texts per receiver ('.$chars.' characters)'.($aiOn ? ': press "Make it 1 text" to save money' : '') }}</span>
-                <span @class(['is-ok' => ! $unknown, 'is-warn' => (bool) $unknown])>{{ $unknown ? '⚠ Unknown blank: '.implode(', ', $unknown) : '✓ All blanks are known' }}</span>
-                <span @class(['is-ok' => ! $emoji, 'is-warn' => $emoji])>{{ $emoji ? '⚠ Emojis make texts cost more' : '✓ No emojis' }}</span>
-            </div>
-
-            <b class="ds-sms__label">Preview</b>
-            <div class="ds-sms__phone"><small>{{ \App\Support\Sms\SmsSettings::sender() ?: 'SEMAPHORE' }} · now</small><span>{{ $preview }}</span></div>
-
-            <span class="ds-mp__keyrow"><x-filament::button wire:click="saveText">Save message</x-filament::button><x-filament::button color="gray" wire:click="resetText">Back to default</x-filament::button></span>
-
-            <b class="ds-sms__label">Other languages</b>
-            @foreach ($others as $l => $t)
-                <button type="button" class="ds-sms__other" wire:click="edit('{{ $kind }}', '{{ $l }}')"><b>{{ $langs[$l] }}</b><span>{{ $t }}</span></button>
-            @endforeach
-        </section>
-    </div>
-</div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_30
-
-# ---------------------------------------------------------------- resources/views/filament/trips/plan-hubs.blade.php
-mkdir -p 'resources/views/filament/trips'
-cat > 'resources/views/filament/trips/plan-hubs.blade.php' <<'DISPATCH_FILE_END_31'
-{{-- Plan trips › To hubs: one trip per partner hub (more when the boxes do not fit one truck). The hub delivers with its own trucks. --}}
-@php($tips = collect($hubPlan)->reject(fn ($h) => ($hubState[$h['hub']] ?? null) || ! empty($h['open']))->take(3))
-<section class="ds-ph__ai">
-    <span class="ds-pt__spark" aria-hidden="true">✦</span>
-    <span class="ds-ph__aitext">
-        <b>Suggested for today</b>
-        @forelse ($tips as $h)
-            <span>• <b>{{ $h['name'] }}:</b> {{ $h['tip'] }}</span>
-        @empty
-            <span>Nothing waits for a hub right now.</span>
-        @endforelse
+    <div class="ds-tl__cities"><b>Cities</b><span>@foreach (array_filter(explode(', ', preg_replace('/ \+\d+$/', '', $g['cities']))) as $c)<i>{{ $c }}</i>@endforeach</span></div>
+    <span class="ds-tl__btns">
+        @if ($page)<x-filament::button tag="a" :href="$page::getUrl(['trip' => $trip->id])" icon="heroicon-m-arrow-top-right-on-square">Open the trip</x-filament::button>@endif
+        @if (class_exists(\App\Filament\Pages\TripStops::class))<x-filament::button tag="a" color="gray" :href="\App\Filament\Pages\TripStops::getUrl(['trip' => $trip->id])" icon="heroicon-m-map">Stops & loading</x-filament::button>@endif
     </span>
-</section>
-@if ($askDirect)
-    <section class="ds-ph__why">
-        @php([$ah, $ap, $ac] = array_pad(explode('|', $askDirect, 3), 3, ''))
-        <b>{{ Str::title($ac) }} → direct instead of {{ \App\Support\Hubs\HubAreas::name((int) $ah) }}. Why? (the office sees this)</b>
-        <span class="ds-ph__reasons">@foreach (\App\Support\Trips\TripRules::reasons() as $r)<button type="button" wire:click="directWith(@js($r))">{{ $r }}</button>@endforeach<button type="button" class="is-cancel" wire:click="cancelDirect">Cancel</button></span>
-    </section>
-@endif
-<div class="ds-ph__grid">
-    @forelse ($hubPlan as $n => $h)
-        @php($state = $hubState[$h['hub']] ?? null)
-        @php($when = $hubWhen[$h['hub']] ?? 'now')
-        @php($multi = count($h['trips']) > 1)
-        <section class="ds-cb__card ds-ph__card" wire:key="hub-{{ $h['hub'] }}" style="--hub: {{ \App\Support\Hubs\HubAreas::color($h['hub']) }}">
-            <span class="ds-ph__head">
-                <span><b>⌂ {{ $h['name'] }}</b><small>{{ $h['boxes'] }} {{ Str::plural('box', $h['boxes']) }} · {{ count($h['cities']) }} {{ Str::plural('city', count($h['cities'])) }}{{ $multi ? ' · '.count($h['trips']).' trips' : '' }}</small></span>
-                <span @class(['ds-cb__pill', 'is-bad' => $h['days'] >= 4, 'is-warn' => $h['days'] === 3, 'is-muted' => $h['days'] < 3])>{{ $h['days'] ? 'Oldest '.$h['days'].' '.Str::plural('day', $h['days']) : 'Today' }}</span>
-            </span>
-            <span class="ds-ph__cities">
-                @foreach (collect($h['cities'])->take(5) as $c)
-                    <span><span><b>{{ $c['city'] }}</b> · {{ $c['boxes'] }} {{ Str::plural('box', $c['boxes']) }}{{ $c['prio'] ? ' · '.$c['prio'].' priority' : '' }}</span>
-                        @if (! $state && empty($h['open']))<button type="button" wire:click="askDirectCity({{ $h['hub'] }}, @js($c['key']))">Deliver direct instead</button>@endif</span>
-                @endforeach
-                @if (count($h['cities']) > 5)<small class="ds-pt__muted">+ {{ count($h['cities']) - 5 }} more {{ Str::plural('city', count($h['cities']) - 5) }}</small>@endif
-            </span>
-            @if (! empty($h['open']))
-                <span class="ds-ph__done is-made">On {{ implode(', ', $h['open']) }}: boxes join when scanned onto the truck.</span>
-            @elseif ($multi)
-                <span class="ds-fl__seg ds-ph__when">
-                    <button type="button" wire:click="setWhen({{ $h['hub'] }}, 'now')" @class(['is-on' => $when === 'now'])>Both now</button>
-                    <button type="button" wire:click="setWhen({{ $h['hub'] }}, 'later')" @class(['is-on' => $when === 'later'])>Trip 2{{ count($h['trips']) > 2 ? '+' : '' }} tomorrow</button>
-                </span>
-                @foreach ($h['trips'] as $ti => $t)
-                    @php($later = $ti > 0 && $when === 'later')
-                    <span class="ds-ph__part">
-                        <span class="ds-ph__head"><b>Trip {{ $ti + 1 }}</b><span @class(['ds-cb__pill', 'is-own' => ! $later, 'is-warn' => $later])>{{ $later ? 'Tomorrow' : 'Now' }}</span></span>
-                        <small>🚚 {{ $later ? 'next free truck' : ($t['plate'] ?? 'No truck yet') }} · {{ collect($t['cities'])->pluck('city')->unique()->join(', ') }}</small>
-                        <span class="ds-ph__bar"><i style="width: {{ min(100, round($t['load'] / max(1, $t['cap']) * 100)) }}%">About {{ $t['load'] }} of {{ $t['cap'] }} space</i></span>
-                        <small class="ds-pt__muted">✦ {{ $ti === 0 ? 'Priority, tried-before and oldest boxes first. Whole customers only.' : ($later ? 'Waits for a truck'.($h['coming'] ? ' and the next container ('.$h['coming'].' boxes on the way)' : '').'.' : 'Same cities kept together, so the hub splits them easily.') }}</small>
-                    </span>
-                @endforeach
-            @elseif ($h['trips'])
-                @php($t = $h['trips'][0])
-                <span @class(['ds-cb__pill', 'ds-ph__truck', 'is-own' => $t['plate'], 'is-none' => ! $t['plate']])>🚚 {{ $t['plate'] ?? 'No truck yet' }}{{ $t['plate'] ? ' · '.$t['cap'].' space' : '' }}</span>
-                <span class="ds-ph__bar"><i style="width: {{ min(100, round($t['load'] / max(1, $t['cap']) * 100)) }}%">About {{ $t['load'] }} of {{ $t['cap'] }} space</i></span>
-            @endif
-            <small class="ds-ph__tip">✦ {{ $h['tip'] }}</small>
-            @if ($state)
-                <span @class(['ds-ph__done', 'is-made' => $state === 'made'])>{{ $state === 'made' ? $hubMade[$h['hub']] ?? '✓ Created' : 'Waiting · shows again on the next plan' }}</span>
-            @elseif (empty($h['open']))
-                <span class="ds-ph__btns">
-                    <button type="button" class="ds-te__btn is-main" wire:click="makeHub({{ $h['hub'] }})" wire:loading.attr="disabled">{{ $multi ? ($when === 'later' ? 'Create Trip 1 to '.$h['name'] : 'Create '.count($h['trips']).' trips to '.$h['name']) : 'Create trip to '.$h['name'] }}</button>
-                    <button type="button" class="ds-te__btn ds-wc__ghost" wire:click="waitHub({{ $h['hub'] }})">Wait</button>
-                </span>
-            @endif
-        </section>
-    @empty
-        <p class="ds-cb__card ds-cb__muted">No boxes wait for a hub. Places get a hub in Settings › Hub areas.</p>
-    @endforelse
+    <small class="ds-tl__hint">Lock, crew, release and edit are on the trip’s page.</small>
 </div>
-<span class="ds-wc__asked">One trip per hub, not split by city: the hub splits the boxes into its own trips. Boxes join when scanned onto the truck. No SMS from here; the hub texts the receivers when it locks its own trip.</span>
-DISPATCH_FILE_END_31
+DISPATCH_FILE_END_12
 
-# ---------------------------------------------------------------- resources/views/filament/trips/plan.blade.php
-mkdir -p 'resources/views/filament/trips'
-cat > 'resources/views/filament/trips/plan.blade.php' <<'DISPATCH_FILE_END_32'
-<x-filament-panels::page>
-<div class="ds-pt">
-    <header class="ds-pt__top">
-        <span class="ds-pt__title">
-            <span class="ds-pt__h"><span class="ds-pt__logo" aria-hidden="true">✦</span><h1>Plan trips</h1></span>
-            @if ($atHub)
-                <small>{{ $hubName }}: direct to customers in your area only. Your trucks, your trip numbers. The boxes at your hub go on the trip when you press Create.</small>
-            @else
-                <small>The AI makes trips by city: nearby cities of one province fill one truck. Boxes join when scanned onto the truck, so new containers are always included.</small>
-            @endif
-        </span>
-        {{-- the day only matters when you press Create: switching it happens in the browser, no wait --}}
-        <span class="ds-pt__days" x-data="{ day: $wire.entangle('day'), date: $wire.entangle('date') }">
-            <span class="ds-fl__seg">
-                @foreach (['today' => [__('Today'), today()->toDateString()], 'tomorrow' => [__('Tomorrow'), today()->addDay()->toDateString()], 'date' => [__('Pick a date'), null]] as $k => [$l, $d])
-                    <button type="button" x-on:click="day = '{{ $k }}'{{ $d ? "; date = '".$d."'" : '' }}" :class="{ 'is-on': day === '{{ $k }}' }" @class(['is-on' => $day === $k])>{{ $l }}</button>
-                @endforeach
-            </span>
-            <input type="date" x-show="day === 'date'" x-model="date" @style(['display: none' => $day !== 'date']) class="ds-te__input ds-pt__date" aria-label="Trip date">
-        </span>
-    </header>
-
-    @if ($hubsOn)
-        <nav class="ds-pt__tabs" role="tablist">
-            <button type="button" role="tab" wire:click="setTab('direct')" @class(['is-on' => $tab === 'direct']) aria-selected="{{ $tab === 'direct' ? 'true' : 'false' }}">Direct to customers <span>{{ $directBoxes }}</span></button>
-            <button type="button" role="tab" wire:click="setTab('hubs')" @class(['is-on' => $tab === 'hubs']) aria-selected="{{ $tab === 'hubs' ? 'true' : 'false' }}">To hubs <span>{{ count($hubPlan) }} {{ Str::plural('hub', count($hubPlan)) }} · {{ $hubBoxes }}</span></button>
-        </nav>
-    @endif
-
-    @if ($tab === 'hubs' && $hubsOn)
-        @include('filament.trips.plan-hubs')
-    @else
-    <section class="ds-cb__card ds-pt__ask">
-        <span class="ds-pt__spark" aria-hidden="true">✦</span>
-        <span class="ds-pt__asktext">
-            <b>What matters today?</b>
-            <span class="ds-pt__chips">
-                @foreach (array_filter(['oldest' => 'Oldest boxes first', 'first' => $top ? $top.' first' : null, 'keep' => 'Keep a truck free', 'full' => 'Only full trucks']) as $k => $l)
-                    <button type="button" wire:click="setAsk('{{ $k }}')" @class(['ds-pt__chip', 'is-on' => $ask === $k && $instruction === ''])>{{ $l }}</button>
-                @endforeach
-            </span>
-        </span>
-        <form wire:submit="askAi" class="ds-pt__type">
-            <input type="text" wire:model="instruction" class="ds-te__input" placeholder="Or type it: “{{ $top ?? 'Bulacan' }} first, keep one truck”" @disabled(! $aiOn) title="{{ $aiOn ? '' : 'Switch on the AI trip helper in Settings → AI' }}">
-        </form>
-    </section>
-
-    <div class="ds-pt__grid">
-        <section class="ds-cb__card ds-pt__left">
-            <span class="ds-pt__lhead"><b>{{ $atHub ? 'Arrived, by city' : 'Waiting, by city' }}</b><small>{{ number_format($waitTotal) }} boxes</small></span>
-            @if ($notMine)<span class="ds-pt__transfer is-bad"><span>{{ $notMine }} {{ Str::plural('box', $notMine) }} here {{ $notMine === 1 ? 'belongs' : 'belong' }} to another hub’s area: not planned. Tell the office.</span></span>@endif
-            <small class="ds-pt__muted">Click a province to see its cities</small>
-            <span class="ds-pt__provs" x-data="{ open: $wire.entangle('open') }">
-            @forelse ($provinces as $p)
-                <span @class(['ds-pt__prov', 'is-planned' => $p['planned']]) wire:key="p-{{ $p['key'] }}">
-                    <button type="button" class="ds-pt__provhead" x-on:click="open = open === @js($p['key']) ? '' : @js($p['key'])" :aria-expanded="open === @js($p['key'])"><b><span x-text="open === @js($p['key']) ? '▾' : '▸'">{{ $open === $p['key'] ? '▾' : '▸' }}</span> {{ $p['name'] }}</b><span>{{ $p['boxes'] }} boxes</span></button>
-                    <span class="ds-pt__bar"><i style="width: {{ round($p['boxes'] / $max * 100) }}%" @class(['is-old' => $p['days'] >= 4, 'is-mid' => $p['days'] === 3])></i></span>
-                    <span class="ds-pt__provfoot"><span>{{ $p['days'] ? 'Oldest '.$p['days'].' '.Str::plural('day', $p['days']) : 'Today' }}</span><b @class(['is-in' => $p['planned']])>{{ $p['trip'] ? 'On '.$p['trip'] : ($p['planned'] ? 'In a trip' : 'Not planned') }}</b></span>
-                    <span class="ds-pt__cities" x-show="open === @js($p['key'])" @style(['display: none' => $open !== $p['key']])>
-                            @foreach ($p['cities'] as $c)
-                                <span><span>{{ $c['city'] }}@if (isset($covered[$c['key']])) <em>· {{ $covered[$c['key']] }}</em>@elseif (isset($draft[$c['key']])) <em>· in a trip</em>@endif</span><span class="ds-pt__muted">{{ $c['boxes'] }} · {{ $c['days'] ? $c['days'].' '.Str::plural('day', $c['days']) : 'today' }}</span></span>
-                            @endforeach
-                    </span>
-                </span>
-            @empty
-                <p class="ds-cb__muted">No boxes are waiting for a trip.</p>
-            @endforelse
-            </span>
-            @foreach ($transferOut as $t)
-                <a href="{{ $trUrl }}" class="ds-pt__transfer"><span>{{ $t['n'] }} {{ Str::plural('box', $t['n']) }} → transfer to {{ $t['name'] }} (not planned here)</span><b>Open ›</b></a>
-            @endforeach
-            @if ($arriving)<span class="ds-pt__transfer"><span>{{ $arriving }} {{ Str::plural('box', $arriving) }} arriving on a transfer: planned when received</span></span>@endif
-            @if ($unclear)
-                @if ($addrUrl)<a href="{{ $addrUrl }}" class="ds-pt__unclear"><span>📍 {{ $unclear }} {{ Str::plural('box', $unclear) }}: city not clear</span><b>Addresses to check ›</b></a>
-                @else<span class="ds-pt__unclear"><span>📍 {{ $unclear }} {{ Str::plural('box', $unclear) }}: city not clear</span></span>@endif
-            @endif
-            <small class="ds-pt__muted">No barangay is fine: the box goes by its city, the barangay only sets the stop order.</small>
-        </section>
-
-        <section class="ds-pt__mid">
-            <span class="ds-pt__lhead"><b class="ds-pt__big">Suggested trips</b><small>{{ $ai ? '✦ ' : '' }}{{ $note }}</small></span>
-            @if ($made)
-                <span class="ds-pt__made">✓ {{ count($made) }} {{ Str::plural('trip', count($made)) }} created: {{ collect($made)->pluck('number')->join(', ') }}. Boxes join when they are scanned onto the truck.</span>
-            @endif
-            @forelse ($cards as $t)
-                <article @class(['ds-cb__card', 'ds-pt__trip', 'is-off' => ! $t['on']]) wire:key="t-{{ $t['i'] }}-{{ $t['province'] }}">
-                    <span class="ds-pt__trow">
-                        <button type="button" role="switch" aria-checked="{{ $t['on'] ? 'true' : 'false' }}" aria-label="Include this trip" wire:click="toggleTrip({{ $t['i'] }})" @class(['ds-te__switch', 'ds-ad__smswitch', 'is-on' => $t['on']])><i></i></button>
-                        <span class="ds-pt__tname"><b>{{ $t['province'] }} <span>› {{ $t['path'] }}</span></b><small>New trip · number given when you press Create</small></span>
-                        <button type="button" wire:click="cycleTruck({{ $t['i'] }})" @class(['ds-pt__truck', 'is-free' => $t['truck'] && $t['truck']['state'] === 'free', 'is-busy' => $t['truck'] && $t['truck']['state'] === 'busy'])>🚚 {{ $t['truck'] ? $t['truck']['plate'] : 'No truck yet' }}@if ($t['truck'] && $t['truck']['state'] === 'busy') · after {{ $t['truck']['on'] }}@endif <span>▾</span></button>
-                    </span>
-                    <span class="ds-pt__stops">
-                        @foreach ($t['cities'] as $n => $c)
-                            <span class="ds-pt__stop"><span class="ds-pt__dot"></span><small><b>{{ $c['city'] }}</b></small><small class="ds-pt__muted">{{ $c['boxes'] }} {{ Str::plural('box', $c['boxes']) }}</small></span>
-                            @if (! $loop->last)<span class="ds-pt__line"></span>@endif
-                        @endforeach
-                    </span>
-                    <span class="ds-pt__fillrow">
-                        <span class="ds-pt__fill"><i style="width: {{ $t['pct'] }}%" @class(['is-full' => $t['pct'] >= 100])></i><span>About {{ $t['load'] }} of {{ $t['cap'] }} space{{ $t['pct'] >= 100 ? ' · full' : '' }}</span></span>
-                        <span @class(['ds-pt__age', 'is-old' => $t['days'] >= 4, 'is-mid' => $t['days'] === 3])>{{ $t['days'] ? 'Oldest '.$t['days'].' '.Str::plural('day', $t['days']) : 'Today' }}</span>
-                    </span>
-                    <span class="ds-pt__why"><span aria-hidden="true">✦</span><span>{{ $t['why'] }}</span></span>
-                    @if ($tops[$t['i']] ?? [])
-                        @php($pick = $t['topPick'] ?? $tops[$t['i']][0]['key'])
-                        <span class="ds-pt__top">
-                            <b><span aria-hidden="true">✦</span> Room for {{ $t['cap'] - $t['load'] }} more · top up with</b>
-                            @foreach ($tops[$t['i']] as $o)
-                                <button type="button" wire:click="pickTop({{ $t['i'] }}, @js($o['key']))" @class(['ds-pt__topopt', 'is-on' => $pick === $o['key']])><i class="ds-te__radio"></i><span><b>{{ $o['city'] }}, {{ $o['province'] }}</b><small>{{ $o['same'] ? 'Same province' : 'Next province' }} · {{ $o['days'] ? $o['days'].' '.Str::plural('day', $o['days']).' old' : 'today' }}</small></span><span class="ds-cb__pill">{{ $o['boxes'] }} {{ Str::plural('box', $o['boxes']) }}</span></button>
-                            @endforeach
-                            <span class="ds-pt__topbtns"><button type="button" class="ds-te__btn is-main" wire:click="addTop({{ $t['i'] }})">Add to this trip</button><button type="button" class="ds-te__btn ds-wc__ghost" wire:click="skipTop({{ $t['i'] }})">No thanks</button></span>
-                        </span>
-                    @endif
-                    @if (! empty($t['topped']))<small class="ds-pt__ok">✓ {{ $t['topped'] }}</small>@elseif (! empty($t['noTop']))<small class="ds-pt__muted">No top-up · {{ $t['cap'] - $t['load'] }} space stays free</small>@endif
-                    @if ($t['on'])
-                        <button type="button" wire:click="toggleSms({{ $t['i'] }})" @disabled(! $smsOn) @class(['ds-pt__sms', 'is-on' => $smsOn && ($t['sms'] ?? true)])><i>{{ $smsOn && ($t['sms'] ?? true) ? '✓' : '' }}</i>Send SMS for this trip <small>· {{ ! $smsOn ? 'off for all trips in SMS settings' : (($t['sms'] ?? true) ? 'receivers get a text when it is locked' : 'no text for this trip only') }}</small></button>
-                    @endif
-                    @if ($sets[$t['i']] ?? [])
-                        <span class="ds-pt__sets">
-                            <span class="ds-pt__lhead"><b>Kept together on this trip</b><small>customers with 2+ boxes</small></span>
-                            @foreach ($sets[$t['i']] as $st)
-                                <span class="ds-pt__set"><span><b>{{ $st['name'] }}</b> · {{ $st['city'] }}</span><span @class(['ds-cb__pill', 'is-own' => ! $st['missing'], 'is-warn' => $st['missing']])>{{ $st['missing'] ? $st['n'].' here · '.$st['missing'].' not unloaded yet' : $st['n'].' of '.$st['n'].' together' }}</span></span>
-                            @endforeach
-                        </span>
-                    @endif
-                </article>
-            @empty
-                <p class="ds-cb__card ds-cb__muted">Nothing to plan: every waiting city is already on a trip, or no boxes are waiting.</p>
-            @endforelse
-            <span class="ds-pt__sum">
-                <span><b>{{ $onTrips->count() }} {{ Str::plural('trip', $onTrips->count()) }} · about {{ $onTrips->sum('load') }} boxes</b><small>{{ $atHub ? 'Trip numbers with your hub code · the boxes go on the trip when you press Create' : 'Trip numbers now · boxes join when scanned onto the truck' }} · @if ($smsOn)SMS to receivers when the trip is locked{{ ($noSms = $onTrips->filter(fn ($t) => ! ($t['sms'] ?? true))->count()) ? ', except '.$noSms.' '.Str::plural('trip', $noSms) : '' }}@else No SMS (off in @if ($smsUrl)<a href="{{ $smsUrl }}" class="ds-pt__smslink">SMS settings ›</a>@else SMS settings @endif)@endif</small></span>
-                @if ($changedAny && $needPlan === 'reason')
-                    <select wire:model="planReason" class="ds-wc__sel" aria-label="Why did you change the AI plan?"><option value="">Why did you change the plan?</option>@foreach ($reasons as $r)<option value="{{ $r }}">{{ $r }}</option>@endforeach</select>
-                @endif
-                <button type="button" wire:click="create" wire:loading.attr="disabled" @disabled(! $onTrips->count())>{{ $made && ! $onTrips->count() ? '✓ Created' : 'Create '.$onTrips->count().' '.Str::plural('trip', $onTrips->count()) }}</button>
-            </span>
-        </section>
-
-        <aside class="ds-pt__side">
-            <section class="ds-cb__card ds-pt__card">
-                <b class="ds-pt__h3">Trucks</b>
-                @forelse ($trucks as $k)
-                    @php($st = $k['id'] === $kept ? 'kept' : $k['state'])
-                    <span class="ds-pt__trk"><i class="is-{{ $st }}"></i><span><b>{{ $k['plate'] }}</b><small>{{ $st === 'kept' ? 'Kept free today' : $k['sub'] }}</small></span><small class="is-{{ $st }}">{{ $st === 'kept' ? 'Kept' : $k['label'] }}</small></span>
-                @empty
-                    <p class="ds-cb__muted">No trucks in this hub yet.</p>
-                @endforelse
-            </section>
-            <section class="ds-pt__free">
-                @if ($given)
-                    <span class="ds-pt__fhead"><span aria-hidden="true">✦</span><b>{{ $given }}</b></span>
-                    <span>Crew copied from the truck team. Load from the sections of its cities, oldest first.</span>
-                @elseif ($freeTruck && $waitingTrips->isNotEmpty())
-                    @php($w = $waitingTrips->first())
-                    <span class="ds-pt__fhead"><span aria-hidden="true">✦</span><b>{{ $freeTruck['plate'] }} is free</b></span>
-                    <span>Best next trip: {{ $w['province'] }} ({{ $w['trip']->trip_number }} · {{ $w['cities'] }}). {{ $w['days'] ? 'Its boxes are the oldest ('.$w['days'].' '.Str::plural('day', $w['days']).').' : '' }}</span>
-                    <button type="button" class="ds-te__btn is-main" wire:click="give({{ $w['trip']->id }}, {{ $freeTruck['id'] }})">Give {{ $w['province'] }} to {{ $freeTruck['plate'] }}</button>
-                @elseif ($waitingTrips->isNotEmpty())
-                    <span class="ds-pt__fhead"><span aria-hidden="true">✦</span><b>{{ $waitingTrips->count() }} {{ Str::plural('trip', $waitingTrips->count()) }} wait for a truck</b></span>
-                    <span>When a truck is free, it shows here with the most urgent trip to give it.</span>
-                @elseif ($freeTruck)
-                    <span class="ds-pt__fhead"><span aria-hidden="true">✦</span><b>{{ $freeTruck['plate'] }} is free</b></span>
-                    <span>Create the trips: the most urgent one gets this truck.</span>
-                @else
-                    <span class="ds-pt__fhead"><span aria-hidden="true">✦</span><b>No free truck right now</b></span>
-                    <span>Trips without a truck wait; the next free truck gets the most urgent one.</span>
-                @endif
-            </section>
-            <section class="ds-cb__card ds-pt__card">
-                <b class="ds-pt__h3">How the top-up is picked</b>
-                @foreach (['Same province first, then the next province.', 'Only cities that fit the room left.', 'Oldest and priority boxes first; whole customers only.', 'Never over the truck space; the reserve stays free.'] as $n => $h)
-                    <span class="ds-pt__how"><b>{{ $n + 1 }}</b><span>{{ $h }}</span></span>
-                @endforeach
-            </section>
-            @if (! $atHub)
-            <section class="ds-cb__card ds-pt__card">
-                <span class="ds-pt__lhead"><b class="ds-pt__h3">Unloading now</b><small>{{ $unload['container'] ?? 'Nothing today' }}</small></span>
-                @foreach ($unload['rows'] as [$a, $b, $here])
-                    <span class="ds-pt__un"><span>{{ $a }}</span><b @class(['is-here' => $here])>{{ $b }}</b></span>
-                @endforeach
-                <small class="ds-pt__muted">Boxes for a truck that is here go straight on it. The rest wait in their section.</small>
-            </section>
-            @endif
-        </aside>
-    </div>
-    @endif
+# ---------------------------------------------------------------- resources/views/filament/trips/list/goes.blade.php
+mkdir -p 'resources/views/filament/trips/list'
+cat > 'resources/views/filament/trips/list/goes.blade.php' <<'DISPATCH_FILE_END_13'
+@php($g = \App\Filament\Tables\TripList::goes($getRecord()))
+<div class="ds-tl__goes">
+    <span><i style="background: {{ $g['dot'] }}"></i><b>{{ $g['to'] }}</b></span>
+    <small>{{ $g['cities'] }}</small>
 </div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_32
+DISPATCH_FILE_END_13
 
-# ---------------------------------------------------------------- tests/Feature/HubAreasTest.php
+# ---------------------------------------------------------------- resources/views/filament/trips/list/status.blade.php
+mkdir -p 'resources/views/filament/trips/list'
+cat > 'resources/views/filament/trips/list/status.blade.php' <<'DISPATCH_FILE_END_14'
+@php($s = \App\Filament\Tables\TripList::status($getRecord()))
+<div class="ds-tl__status">
+    <span class="ds-tl__pill is-{{ $s['tone'] }}">{{ $s['label'] }}</span>
+    @if ($s['when'])<small>{{ $s['when'] }}</small>@endif
+</div>
+DISPATCH_FILE_END_14
+
+# ---------------------------------------------------------------- resources/views/filament/trips/list/trip.blade.php
+mkdir -p 'resources/views/filament/trips/list'
+cat > 'resources/views/filament/trips/list/trip.blade.php' <<'DISPATCH_FILE_END_15'
+@php($r = $getRecord())
+@php($k = \App\Filament\Tables\TripList::madeKey($r))
+@php($page = collect(\Filament\Facades\Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => is_subclass_of($p, \App\Filament\Shared\Trips\TripPage::class)))
+<div class="ds-tl__trip">
+    @if ($page)<a href="{{ $page::getUrl(['trip' => $r->id]) }}" x-on:click.stop class="ds-tl__no" title="Open the trip">{{ $r->trip_number }}</a>@else<b>{{ $r->trip_number }}</b>@endif
+    <span class="ds-tl__made is-{{ $k }}">{{ \App\Filament\Tables\TripList::MADE[$k][0] }}</span>
+    <small>{{ $r->user?->first_name ?? '—' }} · {{ $r->created_at?->isToday() ? $r->created_at->format('g:i A') : $r->created_at?->format('M j') }}</small>
+</div>
+DISPATCH_FILE_END_15
+
+# ---------------------------------------------------------------- resources/views/filament/trips/list/truck.blade.php
+mkdir -p 'resources/views/filament/trips/list'
+cat > 'resources/views/filament/trips/list/truck.blade.php' <<'DISPATCH_FILE_END_16'
+@php($r = $getRecord())
+@php($crew = \App\Filament\Tables\TripList::crew($r))
+@php($lead = $crew->first())
+<div class="ds-tl__truck">
+    <i>{{ $lead ? collect(explode(' ', (string) $lead->user?->full_name))->map(fn ($w) => mb_substr($w, 0, 1))->take(2)->join('') : '—' }}</i>
+    <span><b>{{ $r->truck?->plate_no ?? 'No truck yet' }}</b><small>{{ $crew->isNotEmpty() ? $crew->map(fn ($c) => Str::before((string) $c->user?->full_name, ' '))->filter()->join(' · ') : 'No crew yet' }}</small></span>
+</div>
+DISPATCH_FILE_END_16
+
+# ---------------------------------------------------------------- tests/Feature/TripListTest.php
 mkdir -p 'tests/Feature'
-cat > 'tests/Feature/HubAreasTest.php' <<'DISPATCH_FILE_END_33'
+cat > 'tests/Feature/TripListTest.php' <<'DISPATCH_FILE_END_17'
 <?php
 
-use App\Filament\Company\Pages\MyArea;
-use App\Filament\Company\Pages\PlanTrips as HubPlanTrips;
-use App\Filament\Pages\HubAreas as HubAreasSettings;
-use App\Filament\Pages\HubSetup;
-use App\Filament\Pages\PlanTrips;
+use App\Filament\Resources\Deliverylogs\Pages\ListDeliverylogs;
 use App\Models\Deliverylog;
-use App\Models\Hubs\HubArea;
-use App\Models\Hubs\HubAreaRequest;
 use App\Models\Invoice;
-use App\Models\Logistichub;
-use App\Models\TripCity;
-use App\Models\Tripinvoice;
 use App\Models\Truck;
 use App\Models\User;
-use App\Support\Hubs\HubAreas;
 use App\Support\Trips\CityTrips;
 use Database\Seeders\DemoSeeder;
 use Filament\Facades\Filament;
@@ -10310,158 +7121,37 @@ beforeEach(function () {
     Filament::setCurrentPanel(Filament::getPanel('admin'));
     Invoice::query()->update(['is_assigned' => true]);
     Truck::query()->update(['is_assigned' => false, 'capacity' => 20]);
-    $mk = fn (string $name, string $code, string $prov) => tap(new Logistichub, fn ($h) => $h->forceFill(['hub_name' => $name, 'hub_code' => $code, 'is_company' => true, 'is_active' => true, 'trip_counter' => 0, 'province' => $prov, 'user_id' => $this->admin->id])->save());
-    $this->baguio = $mk('Baguio Hub', 'BGO', 'Benguet');
-    $this->vigan = $mk('Vigan Hub', 'VGN', 'Ilocos Sur');
     $base = Invoice::firstOrFail();
-    $this->box = function (string $prov, string $city, string $brgy, string $no, int $days = 2) use ($base) {
+    foreach (range(1, 8) as $n) {
         $i = $base->replicate();
-        $i->forceFill(['invoice' => $no, 'receiver_province' => $prov, 'receiver_city' => $city, 'receiver_barangay' => $brgy, 'is_verified' => true, 'is_assigned' => false,
-            'is_delivered' => false, 'verified_at' => now()->subDays($days), 'receiver_mobile_no' => '09'.random_int(100000000, 999999999), 'set_key' => null, 'is_priority' => false])->save();
-
-        return $i;
-    };
-});
-
-it('finds the hub of a box: barangay, then city, then province; one owner per place', function () {
-    HubAreas::add($this->baguio->id, 'Benguet', null, null, $this->admin);
-    HubAreas::add($this->baguio->id, 'La Union', 'San Fernando', null, $this->admin);
-    HubAreas::add($this->vigan->id, 'La Union', 'San Fernando', 'Sevilla', $this->admin);
-    $conflict = HubAreas::add($this->vigan->id, 'benguet', null, null, $this->admin);
-    expect($conflict['ok'])->toBeFalse()->and($conflict['conflict']->logistichub_id)->toBe($this->baguio->id);
-
-    expect(HubAreas::hubOf(($this->box)('Benguet', 'La Trinidad', 'Pico', 'B1')))->toBe($this->baguio->id)
-        ->and(HubAreas::hubOf(($this->box)('La Union', 'San Fernando City', 'Brgy. Sevilla', 'B2')))->toBe($this->vigan->id)
-        ->and(HubAreas::hubOf(($this->box)('La Union', 'San Fernando', 'Poro', 'B3')))->toBe($this->baguio->id)
-        ->and(HubAreas::hubOf(($this->box)('La Union', 'Agoo', 'X', 'B4')))->toBeNull()
-        ->and(HubAreas::hubOf(($this->box)('Pampanga', 'San Fernando', 'Sevilla', 'B5')))->toBeNull(); // same city name, other province
-
-    // a switched-off hub has no area: its boxes go direct
-    $this->vigan->forceFill(['is_active' => false])->save();
-    expect(HubAreas::hubOf(Invoice::where('invoice', 'B2')->first()))->toBe($this->baguio->id)
-        ->and(HubAreas::orphans()->first()['hub'])->toBe('Vigan Hub');
-});
-
-it('lets the admin move a place and a hub ask for one; the office approves', function () {
-    HubAreas::add($this->baguio->id, 'La Union', 'San Fernando', null, $this->admin);
-    Livewire::test(HubAreasSettings::class)->assertSee('Which hub delivers each place')->assertSee('Baguio Hub')
-        ->set('add.'.$this->vigan->id.'.province', 'La Union')->set('add.'.$this->vigan->id.'.city', 'San Fernando')
-        ->call('addPlace', $this->vigan->id)->assertSee('already belongs to Baguio Hub')->call('moveIt');
-    expect(HubAreas::owner('La Union', 'San Fernando')->logistichub_id)->toBe($this->vigan->id);
-
-    $hubUser = User::factory()->create(['logistichub_id' => $this->baguio->id, 'is_admin' => false, 'first_name' => 'Liza']);
-    $this->actingAs($hubUser);
-    Filament::setCurrentPanel(Filament::getPanel('company'));
-    Livewire::test(MyArea::class)->assertSee('My delivery area')
-        ->set('ask.province', 'La Union')->set('ask.city', 'San Fernando')->set('ask.barangay', 'Catbangen')->set('ask.reason', '20 minutes from our hub')
-        ->call('send')->assertSee('Sent: Brgy. Catbangen, San Fernando, La Union');
-    $r = HubAreaRequest::firstOrFail();
-    expect($r->status)->toBe('pending')->and(HubAreas::pendingCount())->toBe(1);
-
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
-    Livewire::test(HubAreasSettings::class)->assertSee('Baguio Hub asks for Brgy. Catbangen')->call('decide', $r->id, true);
-    expect(HubAreas::hubOf(($this->box)('La Union', 'San Fernando', 'Catbangen', 'C1')))->toBe($this->baguio->id)
-        ->and($r->fresh()->status)->toBe('approved');
-});
-
-it('suggests the area of a new hub: its province and the free provinces of its region', function () {
-    HubAreas::add($this->vigan->id, 'Ilocos Sur', null, null, $this->admin);
-    HubAreas::add($this->baguio->id, 'Pangasinan', 'Rosales', null, $this->admin);
-    Livewire::test(HubSetup::class)->assertSee('Add a hub and its area')
-        ->set('form.name', 'Dagupan Hub')->set('form.code', 'dgp')->set('form.province', 'Pangasinan')->set('form.city', 'Dagupan City')
-        ->call('save')->assertSee('Suggested area')->assertSee('Whole province · the hub is here')->assertSee('Closer than its hub now')
-        ->call('toggleLeave', 1) // leave Ilocos Norte or La Union out
-        ->call('approve');
-    $dgp = Logistichub::where('hub_code', 'DGP')->firstOrFail();
-    expect(HubAreas::owner('Pangasinan')->logistichub_id)->toBe($dgp->id)
-        ->and(HubAreas::owner('Ilocos Sur')->logistichub_id)->toBe($this->vigan->id) // never taken from another hub
-        ->and(HubAreas::owner('Pangasinan', 'Rosales')->logistichub_id)->toBe($this->baguio->id); // "closer" moves only when you say so
-});
-
-it('plans one trip per hub, more when the boxes do not fit one truck, and keeps hub boxes off direct trips', function () {
-    HubAreas::add($this->baguio->id, 'Benguet', null, null, $this->admin);
-    foreach (range(1, 14) as $n) {
-        ($this->box)('Benguet', 'La Trinidad', 'Pico', 'LT'.$n, 4);
+        $i->forceFill(['invoice' => 'TAR'.$n, 'receiver_province' => 'Tarlac', 'receiver_city' => 'Capas', 'receiver_barangay' => 'X', 'is_verified' => true, 'is_assigned' => false,
+            'is_delivered' => false, 'verified_at' => now()->subDays(4), 'receiver_mobile_no' => '0917'.random_int(1000000, 9999999), 'set_key' => null])->save();
     }
-    foreach (range(1, 12) as $n) {
-        ($this->box)('Benguet', 'Itogon', 'X', 'IT'.$n, 2);
-    }
-    foreach (range(1, 6) as $n) {
-        ($this->box)('Tarlac', 'Capas', 'X', 'CAP'.$n, 3);
-    }
+});
+
+it('saves how each trip was made and shows it in the list, with tabs, filters and details', function () {
     $c = new CityTrips($this->admin);
-    expect($c->places()->pluck('city')->all())->toBe(['Capas']);
-    $hubs = $c->planHubs();
-    expect($hubs)->toHaveCount(1)->and($hubs[0]['name'])->toBe('Baguio Hub')->and($hubs[0]['boxes'])->toBe(26)
-        ->and($hubs[0]['trips'])->toHaveCount(2)
-        ->and(collect($hubs[0]['trips'][0]['cities'])->pluck('city')->all())->toBe(['La Trinidad']);
+    $c->made = ['ai' => true, 'instruction' => 'Tarlac first, keep one truck free'];
+    $made = $c->create($c->plan()['trips'], today());
+    $ai = Deliverylog::findOrFail($made[0]['id']);
+    expect($ai->made_by)->toBe('ai')->and($ai->made_note)->toBe('Tarlac first, keep one truck free');
 
-    $page = Livewire::test(PlanTrips::class)->assertSee('To hubs')->call('setTab', 'hubs')->assertSee('Baguio Hub')->assertSee('Suggested for today')
-        ->call('makeHub', $this->baguio->id)->assertSee('to Baguio Hub');
-    $trips = Deliverylog::where('assigned_to', $this->baguio->id)->get();
-    expect($trips)->not->toBeEmpty()
-        ->and(TripCity::whereIn('deliverylog_id', $trips->pluck('id'))->pluck('hub_id')->unique()->all())->toBe([$this->baguio->id]);
+    $c2 = new CityTrips($this->admin);
+    $trips = $c2->plan()['trips'];
+    $trips[0]['changed'] = true;
+    $trips[0]['changedNote'] = 'Truck NAB 2210 → AAX 120';
+    $c2->made = ['reason' => 'Truck problem'];
+    expect(Deliverylog::find($c2->create($trips, today())[0]['id'] ?? 0)?->made_by)->toBeIn(['changed', null]);
 
-    // scanning: a Baguio box joins the Baguio trip; a Capas box does not, and a Baguio box does not join a direct trip
-    $hubTrip = $trips->first();
-    [$joined] = CityTrips::join($hubTrip, 'LT1');
-    expect($joined?->logistichub_id)->toBe($this->baguio->id);
-    expect(CityTrips::join($hubTrip, 'CAP1')[1])->toBe('hub:0');
-    $page->call('setTab', 'direct')->call('create');
-    $direct = Deliverylog::whereHas('cities', fn ($q) => $q->where('city', 'Capas'))->firstOrFail();
-    expect(CityTrips::join($direct, 'LT2')[1])->toBe('hub:'.$this->baguio->id)
-        ->and(CityTrips::join($direct, 'LT2', false, true)[0])->not->toBeNull(); // with a reason: delivered direct
+    $page = Livewire::test(ListDeliverylogs::class)->assertSee('Delivery trips')->assertSee('✦ AI')->assertSee('✎ By hand')
+        ->assertSee('Trip · made by')->assertSee('Going to');
+    $page->set('tableFilters.made.v', 'ai')->assertSee($ai->trip_number)->assertDontSee(Deliverylog::where('made_by', null)->value('trip_number') ?? 'zzz');
+    $page->assertTableActionExists('details');
+    $html = view('filament.trips.list.details', ['trip' => $ai])->render();
+    expect($html)->toContain('How this trip was made')->toContain('Plan trips with the AI: “Tarlac first, keep one truck free”');
+    expect(\App\Filament\Tables\TripList::madeKey(Deliverylog::whereNull('made_by')->firstOrFail()))->toBe('manual');
 });
-
-it('delivers a hub city direct instead, with a reason saved in Overrides', function () {
-    HubAreas::add($this->baguio->id, 'Benguet', null, null, $this->admin);
-    foreach (range(1, 4) as $n) {
-        ($this->box)('Benguet', 'Itogon', 'X', 'IT'.$n, 5);
-    }
-    Livewire::test(PlanTrips::class)->call('setTab', 'hubs')->call('askDirectCity', $this->baguio->id, 'benguet|itogon')->assertSee('Why?')
-        ->call('directWith', 'Priority box')->call('setTab', 'direct')->assertSee('Itogon')->call('create');
-    $trip = Deliverylog::whereHas('cities', fn ($q) => $q->where('city', 'Itogon'))->firstOrFail();
-    expect(TripCity::where('deliverylog_id', $trip->id)->pluck('hub_id')->all())->toContain($this->baguio->id)
-        ->and(CityTrips::join($trip, 'IT1')[0])->not->toBeNull()
-        ->and(\App\Models\TripOverride::where('rule', 'direct_hub')->value('reason'))->toBe('Priority box');
-});
-
-it('lets a partner hub plan its own trips with its trucks and trip numbers', function () {
-    HubAreas::add($this->baguio->id, 'Benguet', null, null, $this->admin);
-    HubAreas::add($this->vigan->id, 'Ilocos Sur', null, null, $this->admin);
-    $truck = Truck::firstOrFail()->replicate();
-    $truck->forceFill(['plate_no' => 'BGO 001', 'logistichub_id' => $this->baguio->id, 'is_active' => true, 'is_assigned' => false, 'capacity' => 5])->save();
-    $toHub = Deliverylog::create(['trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'logistichub_id' => $this->admin->logistichub_id, 'assigned_to' => $this->baguio->id, 'user_id' => $this->admin->id]);
-    foreach (['Benguet|La Trinidad|LT1', 'Benguet|La Trinidad|LT2', 'Benguet|Itogon|IT1', 'Ilocos Sur|Vigan|VG1'] as $row) {
-        [$p, $c, $no] = explode('|', $row);
-        $inv = ($this->box)($p, $c, 'X', $no);
-        Tripinvoice::create(['deliverylog_id' => $toHub->id, 'logistichub_id' => $this->baguio->id, 'invoice' => $no, 'invoice_id' => $inv->id, 'is_loaded' => true]);
-        $inv->update(['is_assigned' => true]);
-    }
-    $hubUser = User::factory()->create(['logistichub_id' => $this->baguio->id, 'is_admin' => false]);
-    $this->actingAs($hubUser);
-    Filament::setCurrentPanel(Filament::getPanel('company'));
-    Livewire::test(HubPlanTrips::class)->assertSee('Arrived, by city')->assertSee('La Trinidad')->assertDontSee('To hubs')
-        ->assertSee('1 box here belongs to another hub')->call('create');
-    $own = Deliverylog::where('logistichub_id', $this->baguio->id)->firstOrFail();
-    expect($own->trip_number)->toStartWith('BGO')->and($own->truck_id)->toBe($truck->id)
-        ->and(Tripinvoice::where('deliveryloghub_id', $own->id)->count())->toBe(3)
-        ->and(Tripinvoice::where('invoice', 'VG1')->value('deliveryloghub_id'))->toBeNull();
-});
-
-it('follows the SMS switches: hub texts have their own switch, one trip can skip the text', function () {
-    expect(\App\Support\Sms\SmsSettings::KINDS)->toHaveKey('out_for_delivery_hub');
-    $trip = Deliverylog::create(['trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'logistichub_id' => $this->admin->logistichub_id, 'assigned_to' => $this->admin->logistichub_id, 'user_id' => $this->admin->id, 'no_sms' => true]);
-    expect(\App\Support\Sms\SmsEvents::outForDelivery($trip))->toBe(0);
-    \App\Models\AppSetting::put('sms.on.out_for_delivery', '0');
-    ($this->box)('Tarlac', 'Capas', 'X', 'CAP1', 3);
-    Livewire::test(PlanTrips::class)->assertSee('No SMS (off in');
-    // the old AI trip helper is out of the menu
-    expect(\App\Filament\Pages\Ai\AiTrips::shouldRegisterNavigation())->toBeFalse()
-        ->and(\App\Support\Ai\AiFeatures::ALL['trips'][0])->toBe('Trip helper');
-});
-DISPATCH_FILE_END_33
+DISPATCH_FILE_END_17
 
 echo "▶ Updating the database (keeps your data)"
 php artisan migrate --force

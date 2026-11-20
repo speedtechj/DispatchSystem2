@@ -5,6 +5,7 @@ namespace App\Filament\Warehouse\Resources\Deliverylogs\RelationManagers;
 use App\Filament\Actions\BulkPrintReceipts;
 use App\Filament\Exports\TripinvoiceExporter;
 use App\Filament\Tables\DeliveryAttemptColumns;
+use App\Filament\Tables\TripBoxes;
 use App\Filament\Tables\TruckSpotColumn;
 use App\Filament\Warehouse\Pages\Hubroute;
 use App\Models\Consolidator;
@@ -40,6 +41,14 @@ use Illuminate\Support\Facades\Auth;
 class TripinvoicesRelationManager extends RelationManager
 {
     protected static string $relationship = 'tripinvoices';
+
+    protected static ?string $title = TripBoxes::TITLE;
+
+    /** All / Loaded / Not loaded / Delivered / Problems (board 44b). */
+    public function getTabs(): array
+    {
+        return TripBoxes::tabs('is_loaded', fn () => $this->getRelationship()->getQuery());
+    }
 
     public function form(Schema $schema): Schema
     {
@@ -170,6 +179,7 @@ class TripinvoicesRelationManager extends RelationManager
             ])->deferFilters(false)
             ->headerActions([
                 Action::make('Assign Invoice')
+                    ->label('+ Assign invoice')->color('warning')
                     ->url(fn ($livewire) => Hubroute::getUrl(['ownerRecord' => $livewire->ownerRecord->getKey()])),
                 ExportAction::make()
                     ->label('Export')
@@ -237,6 +247,8 @@ class TripinvoicesRelationManager extends RelationManager
             ], position: RecordActionsPosition::BeforeColumns)
             ->toolbarActions([
                 BulkPrintReceipts::make(),
+                TripBoxes::priority(true),
+                TripBoxes::priority(false),
                 BulkActionGroup::make([
                     // BulkAction::make('update_status')
                     //     ->label('Update Status')

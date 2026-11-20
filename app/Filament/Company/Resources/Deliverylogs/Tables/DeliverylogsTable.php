@@ -2,18 +2,23 @@
 
 namespace App\Filament\Company\Resources\Deliverylogs\Tables;
 
-use App\Filament\Company\Pages\TripStops;
 use App\Filament\Company\Pages\TripFuel;
+use App\Filament\Company\Pages\TripStops;
+use App\Filament\Shared\Trips\TripActions;
 use App\Filament\Tables\TripBoardColumns;
+use App\Filament\Tables\TripList;
 use App\Models\Deliverylog;
 use App\Models\Tripinvoice;
+use App\Support\Fuel\Fuel;
 use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
-use Filament\Notifications\Notification;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\FiltersLayout;
+use Filament\Tables\Enums\RecordActionsPosition;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
@@ -23,14 +28,14 @@ class DeliverylogsTable
     public static function configure(Table $table): Table
     {
         return $table
+            // board 42: one clear row per trip; click a trip for its details on the side
+            ->recordUrl(null)
+            ->recordAction('details')
+            ->defaultSort('created_at', 'desc')
             ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
             ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'hub'))
-            ->columns([
-                \App\Filament\Shared\Trips\TripActions::stageColumn(),
-                TextColumn::make('trip_number')
-                    ->searchable()
-                    ->color('primary')->weight('bold')
-                    ->url(fn ($record) => \App\Filament\Company\Pages\Trip::urlFor($record)),
+            ->columns([...TripList::columns(), ...collect([
+                TripActions::stageColumn(),
                 TripBoardColumns::status('hub'),
                 TripBoardColumns::progress('hub'),
                 TextColumn::make('truck.plate_no')
@@ -83,11 +88,13 @@ class DeliverylogsTable
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
-            ])
+            ])->map(fn ($c) => $c->toggleable(isToggledHiddenByDefault: true))->all()])
             ->filters([
+                // a partner hub's own trips always go direct, so only Made by
+                TripList::filters()[0],
                 TripBoardColumns::filter('hub'),
-                //
-            ])
+            ])->deferFilters(false)
+            ->filtersLayout(FiltersLayout::AboveContent)->filtersFormColumns(4)
             ->recordActions([
                 Action::make('stops')
                     ->label('Stops & loading')
@@ -100,12 +107,15 @@ class DeliverylogsTable
                     ->icon('heroicon-o-beaker')
                     ->button()
                     ->color('gray')
-                    ->visible(fn (): bool => \App\Support\Fuel\Fuel::ready())
+                    ->visible(fn (): bool => Fuel::ready())
                     ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
-                \App\Filament\Shared\Trips\TripActions::release(),
-                \App\Filament\Shared\Trips\TripActions::crew(),
-                EditAction::make(),
-            ])
+                ActionGroup::make([
+                    TripActions::release(),
+                    TripActions::crew(),
+                    EditAction::make()->label('Edit')->icon(Heroicon::PencilSquare)->hidden(fn ($record) => (bool) $record->is_lock),
+                ]),
+                TripList::details(),
+            ], position: RecordActionsPosition::AfterColumns)
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make(),

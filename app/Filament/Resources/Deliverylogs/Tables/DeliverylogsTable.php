@@ -29,15 +29,14 @@ class DeliverylogsTable
     public static function configure(Table $table): Table
     {
         return $table
-            ->recordUrl(fn ($record) => \App\Filament\Pages\Trip::urlFor($record))
+            // board 42: one clear row per trip; click a trip for its details on the side
+            ->recordUrl(null)
+            ->recordAction('details')
+            ->defaultSort('created_at', 'desc')
             ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
             ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'delivery'))
-            ->columns([
+            ->columns([...\App\Filament\Tables\TripList::columns(), ...collect([
                 \App\Filament\Shared\Trips\TripActions::stageColumn(),
-                TextColumn::make('trip_number')
-                    ->searchable()
-                    ->color('primary')->weight('bold')
-                    ->url(fn ($record) => \App\Filament\Pages\Trip::urlFor($record)),
 
                 TripBoardColumns::status('delivery'),
 
@@ -186,27 +185,17 @@ class DeliverylogsTable
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
-            ])
+            ])->map(fn ($c) => $c->toggleable(isToggledHiddenByDefault: true))->all()])
             ->filters([
+                ...\App\Filament\Tables\TripList::filters(),
                 TripBoardColumns::filter('delivery'),
-                SelectFilter::make('is_lock')
-                    ->label('Is Locked')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ]),
-                SelectFilter::make('is_active')
-                    ->label('Is Active')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ])->default(1),
                 SelectFilter::make('assigned_to')
-                    ->label('Going To')
+                    ->label('Which hub')
                     ->options(Logistichub::query()->pluck('hub_name', 'id'))
                     ->searchable()
                     ->preload(),
             ])->deferFilters(false)
+            ->filtersLayout(\Filament\Tables\Enums\FiltersLayout::AboveContent)->filtersFormColumns(5)
             ->recordActions([
                 Action::make('stops')
                     ->label('Stops & loading')
@@ -264,7 +253,8 @@ class DeliverylogsTable
                         }),
 
                 ]),
-            ], position: RecordActionsPosition::BeforeColumns)
+                \App\Filament\Tables\TripList::details(),
+            ], position: RecordActionsPosition::AfterColumns)
             ->toolbarActions([
                 BulkActionGroup::make([
                     //    DeleteBulkAction::make(),

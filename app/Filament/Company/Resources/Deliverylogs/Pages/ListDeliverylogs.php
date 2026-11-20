@@ -3,20 +3,15 @@
 namespace App\Filament\Company\Resources\Deliverylogs\Pages;
 
 use App\Filament\Company\Resources\Deliverylogs\DeliverylogResource;
+use App\Filament\Shared\Trips\ListsTrips;
 use App\Filament\Shared\Widgets\TripBoard;
-use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
 
 class ListDeliverylogs extends ListRecords
 {
-    protected static string $resource = DeliverylogResource::class;
+    use ListsTrips;
 
-    protected function getHeaderActions(): array
-    {
-        return [
-            CreateAction::make(),
-        ];
-    }
+    protected static string $resource = DeliverylogResource::class;
 
     protected function getHeaderWidgets(): array
     {

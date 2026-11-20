@@ -156,6 +156,7 @@ class PlanTripsPage extends Page
         }
         $trips = ($this->hubWhen[$hub] ?? 'now') === 'later' ? array_slice($h['trips'], 0, 1) : $h['trips'];
         try {
+            $this->city()->made = [];
             $made = $this->city()->createHub($hub, $trips, Carbon::parse($this->date ?: today()), $h['tip']);
         } catch (\Throwable $e) {
             report($e);
@@ -254,6 +255,7 @@ class PlanTripsPage extends Page
         if (isset($this->trips[$i]) && $this->mayChange()) {
             $this->trips[$i]['on'] = ! $this->trips[$i]['on'];
             $this->trips[$i]['changed'] = true;
+            $this->trips[$i]['changedNote'] = $this->trips[$i]['on'] ? 'Switched off, then on again' : 'Switched off';
             $this->made = [];
         }
     }
@@ -322,6 +324,8 @@ class PlanTripsPage extends Page
         $at = $options->search($this->trips[$i]['truck_id'], true);
         $n = ($at === false ? -1 : $at) + 1;
         $next = $options->has($n) ? $options[$n] : $options[0];
+        $plate = fn ($id) => $id ? ($trucks->firstWhere('id', $id)['plate'] ?? '#'.$id) : 'no truck';
+        $this->trips[$i]['changedNote'] = 'Truck '.$plate($this->trips[$i]['changedFrom'] ??= $this->trips[$i]['truck_id']).' → '.$plate($next);
         $this->trips[$i]['truck_id'] = $next;
         $this->trips[$i]['cap'] = $next ? ($trucks->firstWhere('id', $next)['capacity'] ?? CityTrips::DEFAULT_CAPACITY) : CityTrips::DEFAULT_CAPACITY;
         $this->made = [];
@@ -341,6 +345,7 @@ class PlanTripsPage extends Page
                 \App\Support\Trips\TripRules::record('change_plan', Auth::user(), $this->planReason, ['note' => $t['province'].' › '.collect($t['cities'])->pluck('city')->join(', ').($t['on'] ? '' : ' (switched off)')]);
             }
         }
+        $this->city()->made = ['ai' => $this->ai, 'instruction' => trim($this->instruction), 'reason' => $this->planReason];
         try {
             $this->made = $this->city()->create($this->trips, $date);
         } catch (\Throwable $e) {

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Dispatch System — Part 22c: lock trip only when ready
+# Dispatch System — Part 22e: same Delivery trips, New trip and Edit trip in all 3 panels
 # Only the files changed in this step; the rest of your project is left as it is.
 #
 #   cd ~/Desktop/Project/DispatchSystem
-#   bash ~/Desktop/Project/part22c-lock-when-ready.sh
+#   bash ~/Desktop/Project/part22e-trip-forms-all-panels.sh
 
 set -euo pipefail
 [ -f artisan ] || { echo "Run this from inside your DispatchSystem project folder (the one with 'artisan')."; exit 1; }
@@ -14,596 +14,997 @@ BACKUP="../DispatchSystem-backup-$STAMP.tar.gz"
 echo "▶ Backing up the project to $BACKUP"
 tar -czf "$BACKUP" --exclude=vendor --exclude=node_modules --exclude=storage/logs .
 
-echo "▶ Writing 14 files"
+echo "▶ Writing 26 files"
 
-# ---------------------------------------------------------------- app/Filament/Delivery/Pages/Dashboard.php
-mkdir -p 'app/Filament/Delivery/Pages'
-cat > 'app/Filament/Delivery/Pages/Dashboard.php' <<'DISPATCH_FILE_END_0'
+# ---------------------------------------------------------------- app/Filament/Company/Resources/Deliverylogs/Pages/CreateDeliverylog.php
+mkdir -p 'app/Filament/Company/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Company/Resources/Deliverylogs/Pages/CreateDeliverylog.php' <<'DISPATCH_FILE_END_0'
 <?php
 
-namespace App\Filament\Delivery\Pages;
+namespace App\Filament\Company\Resources\Deliverylogs\Pages;
 
-use App\Enums\FailedDeliveryReason;
-use App\Enums\UndoDeliveryReason;
-use App\Models\Maps\GeoPlace;
-use App\Models\Maps\TripStop;
-use App\Models\Tripinvoice;
-use App\Services\TripAssignment;
-use App\Support\Ai\Ai;
-use App\Support\Ai\AiUnavailable;
-use App\Support\Ai\Risk;
-use App\Support\Ai\VoiceNote;
-use App\Support\DriverTrip;
-use App\Support\Photos\PhotoShrinker;
-use App\Support\Tracking\TrackSettings;
-use BackedEnum;
-use Filament\Actions\Action;
-use Filament\Forms\Components\Radio;
-use Filament\Forms\Components\Textarea;
-use Filament\Notifications\Notification;
-use Filament\Pages\Dashboard as BaseDashboard;
-use Filament\Schemas\Components\Utilities\Get;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
-use Livewire\Attributes\Locked;
-use Livewire\Attributes\Url;
-use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use App\Filament\Company\Pages\Routeinvoice;
+use App\Filament\Company\Resources\Deliverylogs\DeliverylogResource;
+use App\Filament\Shared\Trips\NewTripRecord;
 
-/**
- * The Driver app: one phone screen. Today (trip, progress, where to go next),
- * Boxes (to deliver / delivered / not delivered), and Scan → deliver with
- * several proof photos, or can't deliver with a reason. Delivering, not-delivered
- * and undo go through App\Services\TripAssignment like everywhere else.
- */
-class Dashboard extends BaseDashboard
+/** New trip by hand (board 44). */
+class CreateDeliverylog extends NewTripRecord
 {
-    protected string $view = 'filament.delivery.pages.driver-app';
+    protected static string $resource = DeliverylogResource::class;
 
-    /** home, list, scan */
-    #[Url(as: 'view')]
-    public string $screen = 'home';
+    protected static ?string $assignPage = Routeinvoice::class;
 
-    /** Boxes list: todo, delivered, missed */
-    public string $tab = 'todo';
-
-    public string $search = '';
-
-    /** The scanned box (tripinvoice id) and what the bottom sheet shows: found, deliver, miss, wrong */
-    #[Locked]
-    public ?int $boxId = null;
-
-    #[Locked]
-    public ?string $sheet = null;
-
-    #[Locked]
-    public ?string $wrongText = null;
-
-    /** Photos already uploaded for the open sheet (paths on the public disk). */
-    #[Locked]
-    public array $photos = [];
-
-    /** @var TemporaryUploadedFile|null */
-    public $upload = null;
-
-    public ?string $reason = null;
-
-    public string $note = '';
-
-    /** Just delivered: shows the green bar with Undo. */
-    #[Locked]
-    public ?int $justDelivered = null;
-
-    #[Locked]
-    public int $justPhotos = 0;
-
-    public function mount(): void
-    {
-        if (request()->boolean('scan')) {
-            $this->screen = 'scan';
-        } elseif (request()->boolean('list')) {
-            $this->screen = 'list';
-        }
-        if (! in_array($this->screen, ['home', 'list', 'scan'], true)) {
-            $this->screen = 'home';
-        }
-    }
-
-    protected function driverTrip(): DriverTrip
-    {
-        return once(fn () => DriverTrip::for(Auth::user()));
-    }
-
-    // ------------------------------------------------------------------ moving around
-
-    public function go(string $screen): void
-    {
-        if (in_array($screen, ['home', 'list', 'scan'], true)) {
-            $this->screen = $screen;
-            $this->closeSheet();
-            $this->justDelivered = null;
-        }
-    }
-
-    /** Tap an area on Today: open the boxes list filtered to it. */
-    public function area(string $term): void
-    {
-        $this->search = $term;
-        $this->tab = 'todo';
-        $this->go('list');
-    }
-
-    public function setTab(string $tab): void
-    {
-        $this->tab = in_array($tab, ['todo', 'delivered', 'missed'], true) ? $tab : 'todo';
-    }
-
-    public function closeSheet(): void
-    {
-        $this->deleteUnusedPhotos();
-        $this->reset('boxId', 'sheet', 'wrongText', 'photos', 'upload', 'reason', 'note');
-    }
-
-    /** The open box, re-checked to be on this driver's trip. */
-    protected function box(): ?Tripinvoice
-    {
-        return $this->boxId ? $this->driverTrip()->boxes()->with('invdata')->find($this->boxId) : null;
-    }
-
-    // ------------------------------------------------------------------ scan
-
-    /** Called by the camera, the typed box number, or a tap on a box in the list. */
-    public function scan(string $code): void
-    {
-        $code = trim(preg_replace('/[\x00-\x1F\x7F]+/u', '', $code));
-        if ($code === '') {
-            return;
-        }
-
-        $this->closeSheet();
-        $this->justDelivered = null;
-        $this->screen = 'scan';
-
-        if (! $this->driverTrip()->trip) {
-            $this->wrongText = "You're not on a trip right now.";
-            $this->sheet = 'wrong';
-
-            return;
-        }
-
-        $box = $this->driverTrip()->boxes()->with('invdata')
-            ->where(fn ($q) => $q->where('invoice', $code)->orWhereHas('invdata', fn ($r) => $r->where('invoice', $code)))
-            ->latest('id')->first();
-
-        if (! $box) {
-            $this->wrongText = "{$code} is not on your truck. Keep it aside and tell the office.";
-            $this->sheet = 'wrong';
-            $this->dispatch('driver-app-buzz', ok: false);
-
-            return;
-        }
-        if ($box->is_delivered) {
-            $this->wrongText = "{$code} is already delivered.";
-            $this->sheet = 'wrong';
-            $this->dispatch('driver-app-buzz', ok: false);
-
-            return;
-        }
-
-        $this->boxId = $box->id;
-        $this->sheet = 'found';
-        $this->dispatch('driver-app-buzz', ok: true);
-    }
-
-    public function openBox(int $id): void
-    {
-        $box = $this->driverTrip()->boxes()->find($id);
-        if ($box) {
-            $this->scan($box->invoice);
-        }
-    }
-
-    public function startDeliver(): void
-    {
-        if ($this->box() && ! $this->box()->is_delivered) {
-            $this->sheet = 'deliver';
-            $this->photos = [];
-        }
-    }
-
-    public function startMiss(): void
-    {
-        if ($this->box() && ! $this->box()->is_delivered) {
-            $this->sheet = 'miss';
-            $this->photos = [];
-            $this->reason = FailedDeliveryReason::NoOneHome->value;
-        }
-    }
-
-    /** Driver voice note: what the driver said becomes the reason and the note. */
-    public function voiceFill(string $said): void
-    {
-        $said = trim($said);
-        if ($said === '' || $this->sheet !== 'miss') {
-            return;
-        }
-        try {
-            $out = VoiceNote::parse($said);
-            if ($out['reason']) {
-                $this->reason = $out['reason'];
-            }
-            $this->note = $out['note'] ?: $said;
-        } catch (AiUnavailable $e) {
-            $this->note = Str::limit($said, 480, '');
-            Notification::make()->title('Saved what you said as the note')->body($e->getMessage())->warning()->send();
-        }
-    }
-
-    public function backToBox(): void
-    {
-        $this->deleteUnusedPhotos();
-        $this->photos = [];
-        $this->sheet = $this->box() ? 'found' : null;
-    }
-
-    // ------------------------------------------------------------------ photos
-
-    /** Called by the browser after a (shrunk) photo is uploaded. */
-    public function savePhoto(): void
-    {
-        $box = $this->box();
-        if (! $box || ! in_array($this->sheet, ['deliver', 'miss'], true)) {
-            $this->reset('upload');
-
-            return;
-        }
-        if ($this->sheet === 'miss' && count($this->photos) >= 3) {
-            $this->reset('upload');
-
-            return;
-        }
-
-        $this->validate(['upload' => 'required|image|max:12288'], ['upload.image' => 'That file is not a photo.']);
-
-        $dir = $this->sheet === 'deliver' ? $box->invoice : 'not-delivered/'.$box->invoice;
-        $path = $this->upload->store($dir, 'public');
-        PhotoShrinker::file('public', $path); // the phone could not make it smaller: do it here
-        $this->photos[] = $path;
-        $this->reset('upload');
-    }
-
-    public function removePhoto(int $index): void
-    {
-        if (isset($this->photos[$index])) {
-            Storage::disk('public')->delete($this->photos[$index]);
-            unset($this->photos[$index]);
-            $this->photos = array_values($this->photos);
-        }
-    }
-
-    protected function deleteUnusedPhotos(): void
-    {
-        foreach ($this->photos as $path) {
-            Storage::disk('public')->delete($path);
-        }
-    }
-
-    // ------------------------------------------------------------------ deliver / can't deliver
-
-    public function confirmDelivered(): void
-    {
-        $box = $this->box();
-        if (! $box || $box->is_delivered) {
-            $this->closeSheet();
-
-            return;
-        }
-        if ($this->photos === []) {
-            Notification::make()->title('Take at least one photo first')->warning()->send();
-
-            return;
-        }
-
-        // Delivering means the trip is on the road, even if nobody tapped "I take the trip".
-        if ($this->driverTrip()->trip) {
-            \App\Support\TripFlow::take($this->driverTrip()->trip, Auth::user());
-        }
-        app(TripAssignment::class)->markDelivered($box, $this->photos);
-
-        $this->justDelivered = $box->id;
-        $this->justPhotos = count($this->photos);
-        $this->photos = []; // they belong to the box now
-        $this->reset('boxId', 'sheet', 'reason', 'note', 'upload');
-        $this->dispatch('driver-app-buzz', ok: true);
-    }
-
-    /** Undo on the green bar right after delivering. */
-    public function undoJust(): void
-    {
-        $box = $this->justDelivered ? $this->driverTrip()->boxes()->find($this->justDelivered) : null;
-        $this->justDelivered = null;
-        if (! $box) {
-            return;
-        }
-
-        try {
-            app(TripAssignment::class)->undoDelivery($box, Auth::user(), UndoDeliveryReason::TappedByMistake);
-        } catch (\DomainException $e) {
-            Notification::make()->title($e->getMessage())->danger()->send();
-
-            return;
-        }
-
-        $this->boxId = $box->id;
-        $this->sheet = 'found';
-    }
-
-    public function saveMissed(): void
-    {
-        $box = $this->box();
-        $reason = FailedDeliveryReason::tryFrom((string) $this->reason);
-        if (! $box || ! $reason) {
-            return;
-        }
-        if ($this->driverTrip()->trip) {
-            \App\Support\TripFlow::take($this->driverTrip()->trip, Auth::user());
-        }
-
-        try {
-            app(TripAssignment::class)->recordFailedAttempt($box, Auth::user(), $reason, $this->note ?: null, $this->photos);
-        } catch (\DomainException $e) {
-            Notification::make()->title($e->getMessage())->warning()->send();
-
-            return;
-        }
-
-        $this->photos = [];
-        $this->closeSheet();
-        Notification::make()->title("{$box->invoice} stays on your truck")->body('The office has been told.')->warning()->send();
-    }
-
-    protected static ?string $navigationLabel = 'Today';
-
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedHome;
-
-    protected static ?int $navigationSort = 1;
-
-    // ------------------------------------------------------------------ trip steps
-
-    /** "I take the trip": the leadman confirms the box count; the trip is on the road. */
-    public function takeTrip(): void
-    {
-        $trip = $this->driverTrip()->trip;
-        if (! $trip || ! \App\Support\TripFlow::canTake($trip, Auth::user())) {
-            return;
-        }
-        // not locked yet: it locks by itself when every check is green (Trip rules); otherwise the office locks it
-        if (! $trip->is_lock) {
-            if (! \App\Support\Trips\TripLock::autoOnTake() || ! \App\Support\Trips\TripLock::isReady($trip)) {
-                Notification::make()->title('Trip not ready')->body('Not ready: '.\App\Support\Trips\TripLock::missing($trip).'. Call the office.')->warning()->send();
-
-                return;
-            }
-            \App\Support\Trips\TripLock::lock($trip, Auth::user());
-        }
-        \App\Support\TripFlow::take($trip, Auth::user());
-        Notification::make()->title('Trip '.$trip->trip_number.' is yours · '.$trip->fresh()->taken_boxes.' boxes')->body('Drive safe. Customers see you are on the way.')->success()->send();
-    }
-
-    /** "Back at the hub": boxes not delivered are scanned back; then the trip closes by itself. */
-    public function backAtHub(): void
-    {
-        $trip = $this->driverTrip()->trip;
-        if (! $trip) {
-            return;
-        }
-        \App\Support\TripFlow::back($trip);
-        $closed = ! $trip->fresh()->is_active;
-        Notification::make()->title($closed ? 'Trip done · truck released' : 'Back at the hub')
-            ->body($closed ? 'Every box is delivered or returned.' : 'Give the boxes not delivered to the hub: they are scanned back with Return boxes. Then the trip closes by itself.')->success()->send();
-    }
-
-    /** The card at the top of Today for the trip step (none while on the road). */
-    protected function stageCard(string $stage, array $p, bool $canTake, string $missing = ''): ?array
-    {
-        return [
-            'planned' => ['Your next trip', 'Planned. You will see the boxes when the truck is loaded.'],
-            'loading' => $canTake
-                ? ['Trip ready', 'Every box is loaded, the truck and crew are set. Tap when you take the trip: it locks by itself and you confirm '.$p['total'].' boxes.']
-                : ['Being loaded', $p['total'].' boxes on the trip so far.'.($missing ? ' Not ready: '.$missing.'.' : '').' Wait for “Trip ready”.'],
-            'ready' => ['Trip ready', 'Check the truck. '.($canTake ? 'Tap when you take the trip: you confirm '.$p['total'].' boxes.' : 'The leadman takes the trip.')],
-            'back' => ['Back at the hub', $p['left'] ? $p['left'].' not delivered: give them to the hub, they are scanned back with Return boxes. Then the trip closes by itself.' : 'The trip closes by itself.'],
-        ][$stage] ?? null;
-    }
-
-    public function getTitle(): string|Htmlable
-    {
-        return 'Today';
-    }
-
-    public function getHeading(): string|Htmlable
-    {
-        $hour = (int) now()->format('G');
-        $greeting = $hour < 12 ? 'Good morning' : ($hour < 18 ? 'Good afternoon' : 'Good evening');
-
-        return "{$greeting}, ".Auth::user()?->first_name;
-    }
-
-    public function getSubheading(): ?string
-    {
-        return now()->format('l, F j');
-    }
-
-    /** Undo one of today's deliveries (only the driver's own, within 30 minutes). */
-    public function undoDeliveryAction(): Action
-    {
-        return Action::make('undoDelivery')
-            ->label('Undo')
-            ->icon(Heroicon::OutlinedArrowUturnLeft)
-            ->color('gray')
-            ->outlined()
-            ->size('sm')
-            ->modalHeading(fn (array $arguments) => 'Undo delivery of '.$this->ownBox($arguments)?->invoice.'?')
-            ->modalDescription('The box goes back on your list. Your photo is kept.')
-            ->modalIcon(Heroicon::OutlinedArrowUturnLeft)
-            ->modalSubmitActionLabel('Undo delivery')
-            ->modalCancelActionLabel('Keep delivered')
-            ->modalWidth('md')
-            ->schema([
-                Radio::make('reason')
-                    ->label('Why?')
-                    ->options(UndoDeliveryReason::driverOptions())
-                    ->default(UndoDeliveryReason::WrongBox->value)
-                    ->required()
-                    ->live(),
-                Textarea::make('note')
-                    ->label('Note')
-                    ->rows(2)
-                    ->maxLength(500)
-                    ->required(fn (Get $get) => $get('reason') === UndoDeliveryReason::Other->value),
-            ])
-            ->action(function (array $data, array $arguments): void {
-                $box = $this->ownBox($arguments);
-
-                if (! $box) {
-                    Notification::make()->title('That box is not on your trip')->danger()->send();
-
-                    return;
-                }
-
-                try {
-                    app(TripAssignment::class)->undoDelivery($box, Auth::user(), UndoDeliveryReason::from($data['reason']), $data['note'] ?? null);
-                } catch (\DomainException $exception) {
-                    Notification::make()->title($exception->getMessage())->danger()->send();
-
-                    return;
-                }
-
-                Notification::make()->title('Delivery undone')->body("{$box->invoice} is back on your list.")->success()->send();
-            });
-    }
-
-    /** The box from the button, re-checked to be on this driver's own trip. */
-    protected function ownBox(array $arguments): ?Tripinvoice
-    {
-        return DriverTrip::for(Auth::user())->boxes()->find($arguments['tripinvoice'] ?? null);
-    }
-
-    /** Truck tracking: the driver agrees once to share their location during trips. */
-    public function agreeTracking(): void
-    {
-        Auth::user()->forceFill(['tracking_consent_at' => now()])->save();
-    }
-
-    /** "Can't find it" on a stop: the driver's pin, checked by the office in Maps & routes. */
-    public function suggestPin(int $stopId, float $lat, float $lng): void
-    {
-        $trip = $this->driverTrip()->trip;
-        $stop = $trip ? TripStop::where('deliverylog_id', $trip->id)->find($stopId) : null;
-        if (! $stop?->geo_place_id || abs($lat) > 90 || abs($lng) > 180) {
-            return;
-        }
-        GeoPlace::whereKey($stop->geo_place_id)->update([
-            'suggested_lat' => $lat, 'suggested_lng' => $lng, 'suggested_by' => Auth::id(), 'suggested_at' => now(),
-        ]);
-        Notification::make()->title('Pin sent')->body('The office will check it. Next time the map goes there.')->success()->send();
-    }
-
-    public function getWidgets(): array
-    {
-        return [];
-    }
-
-    protected function getViewData(): array
-    {
-        $trip = $this->driverTrip();
-        $has = (bool) $trip->trip;
-        $box = $this->box();
-
-        $household = null;
-        if ($box?->invdata) {
-            $same = $trip->boxes()->whereHas('invdata', fn ($q) => $q
-                ->where('receiver_name', $box->invdata->receiver_name)
-                ->where('receiver_address', $box->invdata->receiver_address))->get(['id', 'is_delivered']);
-            $household = ['count' => $same->count(), 'delivered' => $same->where('is_delivered', true)->count()];
-        }
-
-        $stage = $has && \App\Support\TripFlow::ready() ? \App\Support\TripFlow::stage($trip->trip) : null;
-
-        return [
-            'trip' => $trip->trip,
-            'stage' => $stage,
-            'canTake' => $canTake = ($stage === 'ready' || ($stage === 'loading' && (\App\Support\Trips\TripLock::autoOnTake() && \App\Support\Trips\TripLock::isReady($trip->trip))))
-                && \App\Support\TripFlow::canTake($trip->trip, Auth::user()),
-            'stageCard' => $has && $stage ? $this->stageCard($stage, $trip->progress(), $canTake, $stage === 'loading' ? \App\Support\Trips\TripLock::missing($trip->trip) : '') : null,
-            'nextTrip' => $has && \App\Support\TripFlow::queueReady() ? \App\Support\TripFlow::nextAfter($trip->trip) : null,
-            'closedTrip' => $closedTrip = ! $has && Auth::user() ? \App\Support\TripFlow::justClosedFor(Auth::user()) : null,
-            'closedDelivered' => $closedTrip ? \App\Support\TripFlow::boxes($closedTrip)->where('is_delivered', true)->count() : 0,
-            'progress' => $has ? $trip->progress() : null,
-            'finished' => $has && $trip->isFinished(),
-            'crew' => $trip->crewmates(),
-            'priority' => $has && $this->screen === 'home' ? $trip->priority() : collect(),
-            'areas' => $has && $this->screen === 'home' ? $trip->areas() : collect(),
-            'stops' => $has && $this->screen === 'home' ? $trip->stops() : collect(),
-            'tracking' => [
-                'trip' => $has && TrackSettings::source((int) $trip->trip->truck_id) !== 'tracker' ? $trip->trip->trip_number : null,
-                'consent' => (bool) Auth::user()?->tracking_consent_at,
-                'interval' => TrackSettings::int('interval'),
-            ],
-            'problems' => $has && $this->screen === 'home' ? $trip->problems() : collect(),
-            'delivered' => $has && $this->screen === 'home' ? $trip->deliveredToday() : collect(),
-            'rows' => $has && $this->screen === 'list' ? $this->listRows() : collect(),
-            'counts' => $has && $this->screen === 'list' ? $this->listCounts() : [],
-            'box' => $box,
-            'risk' => $box && ! $box->is_delivered && Ai::switchedOn('risky') ? Risk::of($box) : null,
-            'voiceOn' => Ai::enabled('voice'),
-            'household' => $household,
-            'reasons' => FailedDeliveryReason::cases(),
-            'reasonCase' => FailedDeliveryReason::tryFrom((string) $this->reason),
-            'photoUrls' => array_map(fn ($p) => Storage::disk('public')->url($p), $this->photos),
-            'just' => $this->justDelivered ? $trip->boxes()->find($this->justDelivered) : null,
-            'greeting' => (int) now()->format('G') < 12 ? 'Good morning' : ((int) now()->format('G') < 18 ? 'Good afternoon' : 'Good evening'),
-        ];
-    }
-
-    protected function listQuery()
-    {
-        $q = $this->driverTrip()->boxes()->with('invdata', 'latestDeliveryAttempt');
-        $term = trim($this->search);
-        if ($term !== '') {
-            $q->where(fn ($w) => $w->where('invoice', 'like', "%{$term}%")->orWhereHas('invdata', fn ($i) => $i
-                ->where('receiver_name', 'like', "%{$term}%")->orWhere('receiver_barangay', 'like', "%{$term}%")->orWhere('receiver_city', 'like', "%{$term}%")));
-        }
-
-        return $q;
-    }
-
-    protected function listRows()
-    {
-        $q = $this->listQuery();
-        match ($this->tab) {
-            'delivered' => $q->where('is_delivered', true)->orderByRaw('COALESCE(delivered_at, updated_at) DESC'),
-            'missed' => $q->where('is_delivered', false)->has('deliveryAttempts')->orderBy('invoice'),
-            default => $q->where('is_delivered', false)->orderBy('invoice'),
-        };
-
-        return $q->limit(200)->get();
-    }
-
-    protected function listCounts(): array
-    {
-        $p = $this->driverTrip()->progress();
-
-        return ['todo' => $p['left'], 'delivered' => $p['delivered'], 'missed' => $p['notDelivered']];
-    }
+    /** A partner hub's own trips go direct to its customers. */
+    protected static bool $atHub = true;
 }
 DISPATCH_FILE_END_0
 
+# ---------------------------------------------------------------- app/Filament/Company/Resources/Deliverylogs/Pages/EditDeliverylog.php
+mkdir -p 'app/Filament/Company/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Company/Resources/Deliverylogs/Pages/EditDeliverylog.php' <<'DISPATCH_FILE_END_1'
+<?php
+
+namespace App\Filament\Company\Resources\Deliverylogs\Pages;
+
+use App\Filament\Company\Resources\Deliverylogs\DeliverylogResource;
+use App\Filament\Shared\Trips\EditsTrip;
+use Filament\Actions\DeleteAction;
+use Filament\Notifications\Notification;
+use Filament\Resources\Pages\EditRecord;
+
+class EditDeliverylog extends EditRecord
+{
+    use EditsTrip;
+
+    protected function isHubTrip(): bool
+    {
+        return true;
+    }
+
+    protected static string $resource = DeliverylogResource::class;
+
+    protected function extraHeaderActions(): array
+    {
+        return [
+            DeleteAction::make()->label('Delete trip')
+                ->before(function (DeleteAction $action): void {
+                    $trip = $this->record;
+
+                    if ($trip->tripinvoices()->exists() || $trip->hubTripinvoices()->exists()) {
+                        Notification::make()
+                            ->title('This trip still has invoices')
+                            ->body('Remove its invoices first, then delete the trip.')
+                            ->danger()
+                            ->send();
+
+                        $action->cancel();
+                    }
+                }),
+        ];
+    }
+
+    protected function getRedirectUrl(): string
+    {
+        return $this->getResource()::getUrl('index');
+    }
+}
+DISPATCH_FILE_END_1
+
+# ---------------------------------------------------------------- app/Filament/Company/Resources/Deliverylogs/Pages/ListDeliverylogs.php
+mkdir -p 'app/Filament/Company/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Company/Resources/Deliverylogs/Pages/ListDeliverylogs.php' <<'DISPATCH_FILE_END_2'
+<?php
+
+namespace App\Filament\Company\Resources\Deliverylogs\Pages;
+
+use App\Filament\Company\Resources\Deliverylogs\DeliverylogResource;
+use App\Filament\Shared\Trips\ListsTrips;
+use App\Filament\Shared\Widgets\TripBoard;
+use Filament\Resources\Pages\ListRecords;
+
+class ListDeliverylogs extends ListRecords
+{
+    use ListsTrips;
+
+    protected static string $resource = DeliverylogResource::class;
+
+    protected function getHeaderWidgets(): array
+    {
+        return [
+            TripBoard::make(['kind' => 'hub', 'resource' => DeliverylogResource::class]),
+        ];
+    }
+
+    public function getWidgetData(): array
+    {
+        return ['activeCard' => data_get($this->tableFilters, 'board.value')];
+    }
+}
+DISPATCH_FILE_END_2
+
+# ---------------------------------------------------------------- app/Filament/Company/Resources/Deliverylogs/RelationManagers/TripinvoicesRelationManager.php
+mkdir -p 'app/Filament/Company/Resources/Deliverylogs/RelationManagers'
+cat > 'app/Filament/Company/Resources/Deliverylogs/RelationManagers/TripinvoicesRelationManager.php' <<'DISPATCH_FILE_END_3'
+<?php
+
+namespace App\Filament\Company\Resources\Deliverylogs\RelationManagers;
+
+use App\Filament\Actions\BulkPrintReceipts;
+use App\Filament\Company\Pages\Routeinvoice;
+use App\Filament\Exports\TripinvoiceExporter;
+use App\Filament\Tables\DeliveryAttemptColumns;
+use App\Filament\Tables\TripBoxes;
+use App\Filament\Tables\TruckSpotColumn;
+use App\Models\Consolidator;
+use App\Models\Deliverylog;
+use App\Models\Invoice;
+use App\Models\Tripinvoice;
+use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkAction;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\ExportAction;
+use Filament\Forms\Components\TextInput;
+use Filament\Notifications\Notification;
+use Filament\Resources\RelationManagers\RelationManager;
+use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Columns\Summarizers\Count;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\RecordActionsPosition;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Grouping\Group;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+
+class TripinvoicesRelationManager extends RelationManager
+{
+    protected static string $relationship = 'tripinvoices';
+
+    protected static ?string $title = TripBoxes::TITLE;
+
+    /** All / Loaded / Not loaded / Delivered / Problems (board 44b). */
+    public function getTabs(): array
+    {
+        return TripBoxes::tabs('is_loaded_hub', fn () => Tripinvoice::query()->where('deliveryloghub_id', $this->ownerRecord->id));
+    }
+
+    public function form(Schema $schema): Schema
+    {
+        return $schema
+            ->components([
+                TextInput::make('invoice')
+                    ->required()
+                    ->maxLength(255),
+            ]);
+    }
+
+    public function table(Table $table): Table
+    {
+        return $table
+            ->modifyQueryUsing(fn (Builder $query) => $query->withCount(['deliveryAttempts', 'deliveryReversals'])->with(DeliveryAttemptColumns::eagerLoad()))
+            //  ->poll('5s')
+            ->defaultGroup('invdata.receiver_name')
+            ->groups([
+                Group::make('invdata.receiver_name')
+                    ->label('Receiver Name'),
+                Group::make('invdata.boxtype')
+                    ->label('Box Type'),
+                Group::make('invdata.routearea.description')
+                    ->label('Route Area'),
+                Group::make('invdata.container.batch_no')
+                    ->label('Batch No'),
+                Group::make('invdata.receiver_barangay')
+                    ->label('Barangay'),
+                Group::make('invdata.receiver_city')
+                    ->label('City'),
+                Group::make('invdata.receiver_province')
+                    ->label('Province'),
+            ])
+            ->recordTitleAttribute('id')
+            ->deferLoading()
+            ->query(
+                Tripinvoice::query()
+                    ->where('deliveryloghub_id', $this->ownerRecord->id)
+                    ->with(['invdata', 'invoice', 'deliverylog', 'logistichub', 'route'])  // ✅ moved inside query()
+            )
+            ->paginated([10, 25, 50])        // ✅ v5 uses paginated() not paginationPageOptions()
+            ->defaultPaginationPageOption(10) //
+
+            ->columns([
+                TruckSpotColumn::make(),
+                TextColumn::make('company')
+                    ->label('Company')
+                    ->getStateUsing(function ($record) {
+                        return Consolidator::nameForCode($record->invdata->location_code);
+                        // return $record->invdata;
+                    }),
+                TextColumn::make('deliveryloghub_id')
+                    ->label('Trip Number')
+                    ->getStateUsing(function ($record) {
+                        return Deliverylog::find($record->deliveryloghub_id)->trip_number;
+                    })
+                    ->searchable(),
+                TextColumn::make('invdata.invoice')
+                    ->sortable()
+                    ->searchable(isIndividual: true)
+                    ->label('Invoice No'),
+                DeliveryAttemptColumns::column(),
+                TextColumn::make('invdata.container.batch_no')
+                    ->label('Batch No')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('invdata.container.batch_year')
+                    ->label('Batch Year')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('invdata.receiver_name')
+                    ->label('Receiver'),
+                TextColumn::make('invdata.receiver_address')
+                    ->label('Address'),
+                TextColumn::make('invdata.receiver_province')
+                    ->sortable()
+                    ->label('Province'),
+                TextColumn::make('invdata.receiver_city')
+                    ->label('City/Municipality'),
+                TextColumn::make('invdata.receiver_barangay')
+                    ->label('Barangay'),
+                TextColumn::make('invdata.boxtype')
+                    ->label('Box Type')
+                    ->summarize(Count::make()->label('Total')),
+                TextColumn::make('invdata.routearea.description')
+                    ->label('Route Area'),
+                IconColumn::make('is_loaded_hub')
+                    ->label('Loaded')
+                    ->color(fn (bool $state) => $state ? 'success' : 'danger')
+                    ->icon(fn (bool $state) => match ($state) {
+                        true => 'heroicon-o-check-circle',
+                        false => 'heroicon-o-x-circle',
+                    }),
+
+            ])
+            ->filters([
+
+                Filter::make('is_loaded')
+                    ->label('Not Loaded')
+                    ->toggle()
+                    ->query(fn (Builder $query): Builder => $query->where('is_loaded', false)),
+                SelectFilter::make('company')
+                    ->label('Company')
+                    ->multiple()
+                    ->searchable()
+                    ->options(
+                        Consolidator::orderBy('company_name')
+                            ->pluck('company_name', 'code')
+                    )
+                    ->query(function ($query, array $data) {
+                        if (! $data['values']) {
+                            return;
+                        }
+
+                        $query->whereHas('invoice', function ($q) use ($data) {
+                            $q->whereIn('location_code', $data['values']);
+                        });
+                    }),
+
+            ])->deferFilters(false)
+            ->headerActions([
+                Action::make('Assign Invoice')
+                    ->label('+ Assign invoice')->color('warning')
+                    ->url(fn ($livewire) => Routeinvoice::getUrl(['ownerRecord' => $livewire->ownerRecord->getKey()])),
+                ExportAction::make()
+                    ->label('Export')
+                    ->exporter(TripinvoiceExporter::class)
+                    ->color('info')
+                    ->icon('heroicon-o-arrow-down-tray'),
+
+            ])
+            ->recordActions([
+                ActionGroup::make([
+                    DeliveryAttemptColumns::action(),
+                    DeliveryAttemptColumns::undoAction(),
+                    // Print Function
+                    Action::make('Print')
+                        ->label('Print')
+                        ->color('primary')
+                        ->icon('heroicon-o-printer')
+                        ->url(fn (Model $record) => route('invoicepdf', $record->invoice_id))
+                        ->openUrlInNewTab(),
+                    // Export Function
+
+                    // Action::make('Export')
+                    // ->label('Export')
+                    //  ->requiresConfirmation()
+
+                    // Delete function
+                    Action::make('Delete')
+                        ->before(function ($record) {
+                            //  dd($record);
+                            $record->update([
+                                'hub_assigned' => 0,
+                                'deliveryloghub_id' => null,
+                                'is_loaded_hub' => 0,
+                            ]);
+                        })
+                        ->requiresConfirmation()
+                        ->color('danger')
+                        ->icon('heroicon-o-trash'),
+
+                ]),
+
+            ], position: RecordActionsPosition::BeforeColumns)
+            ->toolbarActions([
+                BulkPrintReceipts::make(),
+                TripBoxes::priority(true),
+                TripBoxes::priority(false),
+                BulkActionGroup::make([
+                    BulkAction::make('delete')
+                        ->label('Remove ')
+                        ->action(function ($records) {
+
+                            // dump($records);
+                            foreach ($records as $record) {
+                                Tripinvoice::find($record->id)?->update([
+                                    'hub_assigned' => 0,
+                                    'deliveryloghub_id' => null,
+                                    'is_loaded_hub' => 0,
+                                ]);
+                            }
+                            Notification::make()
+                                ->title('Invoice removed successfully')
+                                ->success()
+                                ->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('danger')
+                        ->icon('heroicon-o-trash'),
+                    BulkAction::make('Return')
+                        ->label('Return')
+                        ->icon(Heroicon::Backward)
+                        ->action(function ($records) {
+
+                            foreach ($records as $record) {
+                                Invoice::find($record->invoice_id)?->update([
+                                    'is_returned' => 1,
+                                    //     'is_assigned' => 0,
+                                ]);
+                                Tripinvoice::find($record->id)?->update([
+
+                                    'hub_assigned' => 0,
+                                    'deliveryloghub_id' => null,
+                                    'is_loaded_hub' => 0,
+
+                                ]);
+                                //  $record->delete();
+                            }
+                            Notification::make()
+                                ->title('Invoice returned successfully')
+                                ->success()
+                                ->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('warning'),
+                    // BulkAction::make('Loaded')
+                    //     ->color('success')
+                    //     ->label('Mark as Loaded')
+                    //     ->icon(Heroicon::Truck)
+                    //     ->action(function ($records) {
+                    //         foreach ($records as $record) {
+                    //             $record->update([
+                    //                 'is_loaded' => 1,
+                    //             ]);
+                    //         }
+                    //         Notification::make()
+                    //             ->title('Invoice Loaded successfully')
+                    //             ->success()
+                    //             ->send();
+
+                    //         $tripcount = Tripinvoice::where('deliverylog_id', $record->deliverylog_id)->count();
+                    //         $totalloaded = Tripinvoice::where('deliverylog_id', $record->deliverylog_id)->where('is_loaded', true)->count();
+                    //         if ($totalloaded > 0) {
+                    //             if ($tripcount == $totalloaded) {
+                    //                 $Deliverydata = Deliverylog::find($record->deliverylog_id);
+                    //                 $Deliverydata->truck->update([
+                    //                     'is_assigned' => true,
+                    //                 ]);
+                    //                 $Deliverydata->update([
+                    //                     'is_current' => true,
+
+                    //                 ]);
+                    //             }
+                    //         }
+                    //     })
+
+                ]),
+            ]);
+    }
+}
+DISPATCH_FILE_END_3
+
+# ---------------------------------------------------------------- app/Filament/Company/Resources/Deliverylogs/Tables/DeliverylogsTable.php
+mkdir -p 'app/Filament/Company/Resources/Deliverylogs/Tables'
+cat > 'app/Filament/Company/Resources/Deliverylogs/Tables/DeliverylogsTable.php' <<'DISPATCH_FILE_END_4'
+<?php
+
+namespace App\Filament\Company\Resources\Deliverylogs\Tables;
+
+use App\Filament\Company\Pages\TripFuel;
+use App\Filament\Company\Pages\TripStops;
+use App\Filament\Shared\Trips\TripActions;
+use App\Filament\Tables\TripBoardColumns;
+use App\Filament\Tables\TripList;
+use App\Models\Deliverylog;
+use App\Models\Tripinvoice;
+use App\Support\Fuel\Fuel;
+use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteBulkAction;
+use Filament\Actions\EditAction;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\FiltersLayout;
+use Filament\Tables\Enums\RecordActionsPosition;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
+
+class DeliverylogsTable
+{
+    public static function configure(Table $table): Table
+    {
+        return $table
+            // board 42: one clear row per trip; click a trip for its details on the side
+            ->recordUrl(null)
+            ->recordAction('details')
+            ->defaultSort('created_at', 'desc')
+            ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
+            ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'hub'))
+            ->columns([...TripList::columns(), ...collect([
+                TripActions::stageColumn(),
+                TripBoardColumns::status('hub'),
+                TripBoardColumns::progress('hub'),
+                TextColumn::make('truck.plate_no')
+                    ->sortable(),
+                TextColumn::make('trip_day')
+                    ->numeric()
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->sortable(),
+                TextColumn::make('Total Invoices')
+                    ->badge()
+                    ->color('success')
+                    ->label('Total Invoices')
+                    ->getStateUsing(function ($record) {
+
+                        return Tripinvoice::where('deliveryloghub_id', $record->id)->count();
+                    }),
+                TextColumn::make('Total Loaded')
+                    ->badge()
+                    ->color('success')
+                    ->label('Total Loaded')
+                    ->getStateUsing(function ($record) {
+
+                        return Tripinvoice::where('deliveryloghub_id', $record->id)->where('is_loaded_hub', 1)->count();
+                    }),
+
+                TextColumn::make('eta')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->date()
+                    ->sortable(),
+                TextColumn::make('departure_date')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->date()
+                    ->sortable(),
+                TextColumn::make('delivery_date')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->date()
+                    ->sortable(),
+                TextColumn::make('waybill_number')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('user.full_name')
+                    ->label('Created By')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->sortable(),
+                TextColumn::make('created_at')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('updated_at')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+            ])->map(fn ($c) => $c->toggleable(isToggledHiddenByDefault: true))->all()])
+            ->filters([
+                // a partner hub's own trips always go direct, so only Made by
+                TripList::filters()[0],
+                TripBoardColumns::filter('hub'),
+            ])->deferFilters(false)
+            ->filtersLayout(FiltersLayout::AboveContent)->filtersFormColumns(4)
+            ->recordActions([
+                Action::make('stops')
+                    ->label('Stops & loading')
+                    ->icon('heroicon-o-map')
+                    ->button()
+                    ->color('gray')
+                    ->url(fn ($record): string => TripStops::getUrl(['trip' => $record->id])),
+                Action::make('fuel')
+                    ->label('Fuel')
+                    ->icon('heroicon-o-beaker')
+                    ->button()
+                    ->color('gray')
+                    ->visible(fn (): bool => Fuel::ready())
+                    ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
+                ActionGroup::make([
+                    TripActions::release(),
+                    TripActions::crew(),
+                    EditAction::make()->label('Edit')->icon(Heroicon::PencilSquare)->hidden(fn ($record) => (bool) $record->is_lock),
+                ]),
+                TripList::details(),
+            ], position: RecordActionsPosition::AfterColumns)
+            ->toolbarActions([
+                BulkActionGroup::make([
+                    DeleteBulkAction::make(),
+                ]),
+            ]);
+    }
+}
+DISPATCH_FILE_END_4
+
+# ---------------------------------------------------------------- app/Filament/Resources/Deliverylogs/Pages/CreateDeliverylog.php
+mkdir -p 'app/Filament/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Resources/Deliverylogs/Pages/CreateDeliverylog.php' <<'DISPATCH_FILE_END_5'
+<?php
+
+namespace App\Filament\Resources\Deliverylogs\Pages;
+
+use App\Filament\Pages\Routeinvoice;
+use App\Filament\Resources\Deliverylogs\DeliverylogResource;
+use App\Filament\Shared\Trips\NewTripRecord;
+
+/** New trip by hand (board 44). */
+class CreateDeliverylog extends NewTripRecord
+{
+    protected static string $resource = DeliverylogResource::class;
+
+    protected static ?string $assignPage = Routeinvoice::class;
+}
+DISPATCH_FILE_END_5
+
+# ---------------------------------------------------------------- app/Filament/Resources/Deliverylogs/Pages/EditDeliverylog.php
+mkdir -p 'app/Filament/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Resources/Deliverylogs/Pages/EditDeliverylog.php' <<'DISPATCH_FILE_END_6'
+<?php
+
+namespace App\Filament\Resources\Deliverylogs\Pages;
+
+use App\Filament\Resources\Deliverylogs\DeliverylogResource;
+use App\Filament\Shared\Trips\EditsTrip;
+use App\Models\Tripinvoice;
+use App\Services\TripAssignment;
+use Filament\Resources\Pages\EditRecord;
+use Illuminate\Support\Facades\DB;
+
+class EditDeliverylog extends EditRecord
+{
+    use EditsTrip;
+
+    protected static string $resource = DeliverylogResource::class;
+
+    /** Truck on the trip before this save, so we only swap when it actually changed. */
+    protected ?int $previousTruckId = null;
+
+    protected function getRedirectUrl(): string
+    {
+        return $this->getResource()::getUrl('index');
+    }
+
+    protected function beforeSave(): void
+    {
+        $this->previousTruckId = $this->record->getOriginal('truck_id');
+    }
+
+    protected function afterSave(): void
+    {
+        DB::transaction(function (): void {
+            app(TripAssignment::class)->swapTruck($this->previousTruckId, $this->record->truck_id);
+
+            // Boxes on this trip now go to the (possibly new) destination hub.
+            Tripinvoice::where('deliverylog_id', $this->record->id)
+                ->update(['logistichub_id' => $this->record->assigned_to]);
+        });
+    }
+}
+DISPATCH_FILE_END_6
+
+# ---------------------------------------------------------------- app/Filament/Resources/Deliverylogs/Pages/ListDeliverylogs.php
+mkdir -p 'app/Filament/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Resources/Deliverylogs/Pages/ListDeliverylogs.php' <<'DISPATCH_FILE_END_7'
+<?php
+
+namespace App\Filament\Resources\Deliverylogs\Pages;
+
+use App\Filament\Resources\Deliverylogs\DeliverylogResource;
+use App\Filament\Shared\Trips\ListsTrips;
+use App\Filament\Shared\Widgets\TripBoard;
+use Filament\Resources\Pages\ListRecords;
+
+class ListDeliverylogs extends ListRecords
+{
+    use ListsTrips;
+
+    protected static string $resource = DeliverylogResource::class;
+
+    protected function getHeaderWidgets(): array
+    {
+        return [
+            TripBoard::make(['kind' => 'delivery', 'resource' => DeliverylogResource::class]),
+        ];
+    }
+
+    public function getWidgetData(): array
+    {
+        return ['activeCard' => data_get($this->tableFilters, 'board.value')];
+    }
+}
+DISPATCH_FILE_END_7
+
+# ---------------------------------------------------------------- app/Filament/Resources/Deliverylogs/RelationManagers/TripinvoicesRelationManager.php
+mkdir -p 'app/Filament/Resources/Deliverylogs/RelationManagers'
+cat > 'app/Filament/Resources/Deliverylogs/RelationManagers/TripinvoicesRelationManager.php' <<'DISPATCH_FILE_END_8'
+<?php
+
+namespace App\Filament\Resources\Deliverylogs\RelationManagers;
+
+use App\Filament\Actions\BulkPrintReceipts;
+use App\Filament\Exports\TripinvoiceExporter;
+use App\Filament\Pages\Routeinvoice;
+use App\Filament\Tables\DeliveryAttemptColumns;
+use App\Filament\Tables\TripBoxes;
+use App\Filament\Tables\TruckSpotColumn;
+use App\Models\Consolidator;
+use App\Models\Deliverylog;
+use App\Models\Invoice;
+use App\Models\Logistichub;
+use App\Models\Tripinvoice;
+use App\Services\TripAssignment;
+use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkAction;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\ExportAction;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TextInput;
+use Filament\Notifications\Notification;
+use Filament\Resources\RelationManagers\RelationManager;
+use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Columns\Summarizers\Count;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\RecordActionsPosition;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Grouping\Group;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
+
+class TripinvoicesRelationManager extends RelationManager
+{
+    protected static string $relationship = 'tripinvoices';
+
+    protected static ?string $title = TripBoxes::TITLE;
+
+    /** All / Loaded / Not loaded / Delivered / Problems (board 44b). */
+    public function getTabs(): array
+    {
+        return TripBoxes::tabs('is_loaded', fn () => $this->getRelationship()->getQuery());
+    }
+
+    public function form(Schema $schema): Schema
+    {
+        return $schema
+            ->components([
+                TextInput::make('trip_number')
+                    ->required()
+                    ->maxLength(255),
+            ]);
+    }
+
+    public function table(Table $table): Table
+    {
+        return $table
+            ->modifyQueryUsing(fn (Builder $query) => $query->withCount(['deliveryAttempts', 'deliveryReversals'])->with([...DeliveryAttemptColumns::eagerLoad(), 'invdata.consolidator:id,code,company_name', 'invdata.routearea', 'invdata.container', 'invoiceissue.boxissue', 'deliverylog']))
+            ->defaultGroup('invdata.receiver_name')
+            ->groups([
+                Group::make('invdata.receiver_name')
+                    ->label('Receiver Name'),
+                Group::make('invdata.boxtype')
+                    ->label('Box Type'),
+                Group::make('invdata.routearea.description')
+                    ->label('Route Area'),
+                Group::make('invdata.container.batch_no')
+                    ->label('Batch No'),
+                Group::make('invdata.receiver_barangay')
+                    ->label('Barangay'),
+                Group::make('invdata.receiver_city')
+                    ->label('City'),
+                Group::make('invdata.receiver_province')
+                    ->label('Province'),
+
+            ])
+            ->collapsedGroupsByDefault()
+            // ->poll('5s')
+            ->deferLoading()
+            ->recordTitleAttribute('id')
+            ->columns([
+                TruckSpotColumn::make(),
+                TextColumn::make('invdata.consolidator.company_name')
+                    ->label('Company'),
+                TextColumn::make('deliverylog.trip_number')
+                    ->label('Trip Number'),
+                //  ->searchable(),
+                TextColumn::make('invdata.invoice')
+                    ->sortable()
+                    ->searchable(isIndividual: true, isGlobal: false)
+                    ->label('Invoice No.'),
+                DeliveryAttemptColumns::column(),
+                TextColumn::make('problem')
+                    ->badge()
+                    ->color('danger')
+                    ->label('Problem')
+                    ->getStateUsing(fn ($record) => $record->invoiceissue->pluck('boxissue.issue_type')->filter()->unique()->join(', ') ?: null),
+                IconColumn::make('invdata.is_resolved')
+                    ->label('Resolved')
+                    ->icon(fn ($state) => $state ? 'heroicon-o-check-circle' : null)
+                    ->color('success'),
+                TextColumn::make('invdata.batchno')
+                    ->label('Batch No')
+                    ->sortable(),
+                TextColumn::make('invdata.is_priority')
+                    ->label('Priority')
+                    // ->badge()
+                    ->formatStateUsing(fn ($state) => $state ? 'PRIORITY' : null)
+                    ->color(fn ($state) => $state ? 'success' : null),
+                TextColumn::make('invdata.container.batch_year')
+                    ->label('Batch Year')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('invdata.sender_name')
+                    ->sortable()
+                    ->label('Sender'),
+                TextColumn::make('invdata.receiver_name')
+                    ->sortable()
+                    ->label('Receiver'),
+                TextColumn::make('invdata.receiver_address')
+                    ->label('Address'),
+                TextColumn::make('invdata.receiver_province')
+                    ->sortable()
+                    //   ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('Province'),
+                TextColumn::make('invdata.receiver_city')
+                    //     ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('City/Municipality'),
+                TextColumn::make('invdata.receiver_barangay')
+                    //        ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('Barangay'),
+                TextColumn::make('invdata.boxtype')
+                    ->label('Box Type')
+                    ->summarize(Count::make()->label('Total')),
+                // TextColumn::make('invoice.routearea.description')
+                //     ->label('Route Area'),
+                IconColumn::make('is_loaded')
+                    ->label('Loaded')
+                    ->color(fn (bool $state) => $state ? 'success' : 'danger')
+                    ->icon(fn (bool $state) => match ($state) {
+                        true => 'heroicon-o-check-circle',
+                        false => 'heroicon-o-x-circle',
+                    }),
+
+            ])->searchOnBlur()
+            ->persistSearchInSession()
+            ->persistColumnSearchesInSession()
+            ->filters([
+
+                Filter::make('is_loaded')
+                    ->label('Not Loaded')
+                    ->toggle()
+                    ->query(fn (Builder $query): Builder => $query->where('is_loaded', false)),
+                SelectFilter::make('company')
+                    ->label('Company')
+                    ->multiple()
+                    //  ->searchable()
+                    ->options(
+                        Consolidator::orderBy('company_name')
+                            ->pluck('company_name', 'code')
+                    )
+                    ->query(function ($query, array $data) {
+                        if (! $data['values']) {
+                            return;
+                        }
+
+                        $query->whereHas('invoice', function ($q) use ($data) {
+                            $q->whereIn('location_code', $data['values']);
+                        });
+                    }),
+
+            ])->deferFilters(false)
+            ->headerActions([
+                Action::make('Assign Invoice')
+                    ->label('+ Assign invoice')->color('warning')
+                    ->url(fn ($livewire) => Routeinvoice::getUrl(['ownerRecord' => $livewire->ownerRecord->getKey()])),
+                ExportAction::make()
+                    ->label('Export')
+                    ->exporter(TripinvoiceExporter::class)
+                    ->color('info')
+                    ->icon('heroicon-o-arrow-down-tray'),
+
+            ])
+            ->recordActions([
+                ActionGroup::make([
+                    DeliveryAttemptColumns::action(),
+                    DeliveryAttemptColumns::undoAction(),
+                    // Print Function
+                    Action::make('Priority')
+                        ->label('Mark as Priority')
+                        ->color('warning')
+                        ->icon(Heroicon::ExclamationTriangle)
+                        ->action(function ($record) {
+                            $record->invoice()->update([
+                                'is_priority' => true,
+                            ]);
+                            Notification::make()
+                                ->title('Invoice marked as priority')
+                                ->success()
+                                ->send();
+                        }),
+                    Action::make('Unpriority')
+                        ->label('Mark as Unpriority')
+                        ->color('danger')
+                        ->icon(Heroicon::ExclamationTriangle)
+                        ->action(function ($record) {
+                            $record->invoice()->update([
+                                'is_priority' => false,
+                            ]);
+                            Notification::make()
+                                ->title('Invoice marked as unpriority')
+                                ->success()
+                                ->send();
+                        }),
+                    Action::make('Print')
+                        ->label('Print')
+                        ->color('primary')
+                        ->icon('heroicon-o-printer')
+                        ->url(fn (Model $record) => route('invoicepdf', $record->invoice_id))
+                        ->openUrlInNewTab(),
+                    Action::make('Delete')
+                        ->label('Remove')
+                        ->action(function (Tripinvoice $record): void {
+                            try {
+                                app(TripAssignment::class)->removeFromDeliveryTrip($record);
+                            } catch (\DomainException $exception) {
+                                Notification::make()->title($exception->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            Notification::make()->title('Invoice removed from the trip')->success()->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('danger')
+                        ->icon('heroicon-o-trash'),
+
+                ]),
+
+            ], position: RecordActionsPosition::BeforeColumns)
+            ->toolbarActions([
+                BulkPrintReceipts::make(),
+                TripBoxes::priority(true),
+                TripBoxes::priority(false),
+                BulkActionGroup::make([
+                    BulkAction::make('delete')
+                        ->label('Remove ')
+                        ->action(function ($records) {
+                            try {
+                                foreach ($records as $record) {
+                                    app(TripAssignment::class)->removeFromDeliveryTrip($record, returned: false);
+                                }
+                            } catch (\DomainException $exception) {
+                                Notification::make()->title($exception->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            Notification::make()
+                                ->title('Invoices removed from the trip')
+                                ->success()
+                                ->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('danger')
+                        ->icon('heroicon-o-trash'),
+                    BulkAction::make('Return')
+                        ->label('Return')
+                        ->icon(Heroicon::Backward)
+                        ->action(function ($records) {
+                            try {
+                                foreach ($records as $record) {
+                                    app(TripAssignment::class)->removeFromDeliveryTrip($record, returned: true);
+                                }
+                            } catch (\DomainException $exception) {
+                                Notification::make()->title($exception->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            Notification::make()
+                                ->title('Invoices marked as returned')
+                                ->success()
+                                ->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('warning'),
+                    BulkAction::make('Move')
+                        ->label('Move to Another Trip')
+                        ->icon(Heroicon::ArrowRight)
+                        ->color('info')
+                        ->schema([
+                            Select::make('deliverylog_id')
+                                ->label('Select Target Trip')
+                                ->searchable()
+                                ->options(function () {
+                                    return Deliverylog::where('is_active', true)
+                                        ->where('logistichub_id', Auth::user()->logistichub_id)
+                                        ->get()
+                                        ->mapWithKeys(function ($record) {
+                                            //    dd($record->logistichub->hub_name);
+                                            $assignTo = $record->assigned_to ?? 'N/A';
+                                            $going_to = Logistichub::where('id', $assignTo)->value('hub_name') ?? 'N/A';
+
+                                            return [
+                                                $record->id => "{$record->trip_number} | {$going_to}",
+                                            ];
+                                        });
+                                })
+                                ->required(),
+
+                        ])
+                        ->action(function (Collection $records, array $data) {
+
+                            $deliverylogdata = Deliverylog::find($data['deliverylog_id']);
+                            if ($this->ownerRecord->assigned_to == $deliverylogdata->assigned_to) {
+                                foreach ($records as $record) {
+                                    $record->update([
+                                        'deliverylog_id' => $data['deliverylog_id'],
+                                    ]);
+                                }
+                                Notification::make()
+                                    ->title('Invoices moved successfully')
+                                    ->success()
+                                    ->send();
+                            } else {
+                                Notification::make()
+                                    ->title('Cannot move invoices to a trip assigned to a different Hub')
+                                    ->danger()
+                                    ->send();
+                            }
+                            //   $recordIds = $records->pluck('id')->toArray();
+
+                            // Redirect to the move page with the selected record IDs
+                            //  redirect()->route('filament.pages.movetripinvoice', ['recordIds' => implode(',', $recordIds)]);
+                        }),
+                ]),
+            ]);
+    }
+}
+DISPATCH_FILE_END_8
+
 # ---------------------------------------------------------------- app/Filament/Resources/Deliverylogs/Tables/DeliverylogsTable.php
 mkdir -p 'app/Filament/Resources/Deliverylogs/Tables'
-cat > 'app/Filament/Resources/Deliverylogs/Tables/DeliverylogsTable.php' <<'DISPATCH_FILE_END_1'
+cat > 'app/Filament/Resources/Deliverylogs/Tables/DeliverylogsTable.php' <<'DISPATCH_FILE_END_9'
 <?php
 
 namespace App\Filament\Resources\Deliverylogs\Tables;
@@ -635,15 +1036,14 @@ class DeliverylogsTable
     public static function configure(Table $table): Table
     {
         return $table
-            ->recordUrl(fn ($record) => \App\Filament\Pages\Trip::urlFor($record))
+            // board 42: one clear row per trip; click a trip for its details on the side
+            ->recordUrl(null)
+            ->recordAction('details')
+            ->defaultSort('created_at', 'desc')
             ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
             ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'delivery'))
-            ->columns([
+            ->columns([...\App\Filament\Tables\TripList::columns(), ...collect([
                 \App\Filament\Shared\Trips\TripActions::stageColumn(),
-                TextColumn::make('trip_number')
-                    ->searchable()
-                    ->color('primary')->weight('bold')
-                    ->url(fn ($record) => \App\Filament\Pages\Trip::urlFor($record)),
 
                 TripBoardColumns::status('delivery'),
 
@@ -792,27 +1192,17 @@ class DeliverylogsTable
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
-            ])
+            ])->map(fn ($c) => $c->toggleable(isToggledHiddenByDefault: true))->all()])
             ->filters([
+                ...\App\Filament\Tables\TripList::filters(),
                 TripBoardColumns::filter('delivery'),
-                SelectFilter::make('is_lock')
-                    ->label('Is Locked')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ]),
-                SelectFilter::make('is_active')
-                    ->label('Is Active')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ])->default(1),
                 SelectFilter::make('assigned_to')
-                    ->label('Going To')
+                    ->label('Which hub')
                     ->options(Logistichub::query()->pluck('hub_name', 'id'))
                     ->searchable()
                     ->preload(),
             ])->deferFilters(false)
+            ->filtersLayout(\Filament\Tables\Enums\FiltersLayout::AboveContent)->filtersFormColumns(5)
             ->recordActions([
                 Action::make('stops')
                     ->label('Stops & loading')
@@ -870,7 +1260,8 @@ class DeliverylogsTable
                         }),
 
                 ]),
-            ], position: RecordActionsPosition::BeforeColumns)
+                \App\Filament\Tables\TripList::details(),
+            ], position: RecordActionsPosition::AfterColumns)
             ->toolbarActions([
                 BulkActionGroup::make([
                     //    DeleteBulkAction::make(),
@@ -879,222 +1270,231 @@ class DeliverylogsTable
             ]);
     }
 }
-DISPATCH_FILE_END_1
+DISPATCH_FILE_END_9
 
-# ---------------------------------------------------------------- app/Filament/Shared/Trips/TripPage.php
+# ---------------------------------------------------------------- app/Filament/Shared/Trips/EditsTrip.php
 mkdir -p 'app/Filament/Shared/Trips'
-cat > 'app/Filament/Shared/Trips/TripPage.php' <<'DISPATCH_FILE_END_2'
+cat > 'app/Filament/Shared/Trips/EditsTrip.php' <<'DISPATCH_FILE_END_10'
+<?php
+
+namespace App\Filament\Shared\Trips;
+
+use App\Filament\Tables\TripBoxes;
+use App\Filament\Tables\TripList;
+use Filament\Actions\Action;
+use Filament\Facades\Filament;
+use Filament\Schemas\Components\Callout;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\View;
+use Filament\Schemas\Schema;
+use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\HtmlString;
+
+/**
+ * Edit trip (board 44b): status and made-by pills, a one-line summary, the trip's fields folded
+ * under "✎ Edit details", five tiles, then Boxes on this trip. Used by all three panels.
+ */
+trait EditsTrip
+{
+    /** A partner hub's own trip: its boxes are the hub-loaded ones. */
+    protected function isHubTrip(): bool
+    {
+        return false;
+    }
+
+    public function getTitle(): string|Htmlable
+    {
+        return 'Trip '.$this->record->trip_number;
+    }
+
+    public function getHeading(): string|Htmlable
+    {
+        $st = TripList::status($this->record);
+        $k = TripList::madeKey($this->record);
+
+        return new HtmlString(view('filament.trips.edit-head', [
+            'trip' => $this->record, 'st' => $st, 'made' => TripList::MADE[$k][0], 'k' => $k,
+            'listUrl' => static::getResource()::getUrl('index'),
+        ])->render());
+    }
+
+    public function getSubheading(): string|Htmlable|null
+    {
+        $t = $this->record;
+        $g = TripList::goes($t);
+        $lead = TripList::crew($t)->first();
+
+        return collect([
+            TripList::isHubTrip($t) ? $g['to'].' (the hub delivers)' : ($g['to'] === 'Not set yet' ? null : $g['to'].' (direct to customers)'),
+            $t->truck?->plate_no ?? 'No truck yet',
+            $lead?->user?->first_name,
+            $t->departure_date ? 'leaves '.Carbon::parse($t->departure_date)->format('M j') : null,
+        ])->filter()->join(' · ');
+    }
+
+    public function getBreadcrumbs(): array
+    {
+        return [];
+    }
+
+    protected function tripPageAction(): ?Action
+    {
+        $page = collect(Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => is_subclass_of($p, TripPage::class));
+
+        return $page ? Action::make('tripPage')->label('Open the trip page')->color('gray')->icon('heroicon-m-arrow-top-right-on-square')
+            ->url(fn () => $page::getUrl(['trip' => $this->record->id])) : null;
+    }
+
+    protected function getHeaderActions(): array
+    {
+        return array_values(array_filter([$this->tripPageAction(), ...$this->extraHeaderActions()]));
+    }
+
+    protected function extraHeaderActions(): array
+    {
+        return [];
+    }
+
+    public function form(Schema $schema): Schema
+    {
+        $schema = static::getResource()::form($schema);
+        $parts = collect($schema->getComponents(withHidden: true))->reject(fn ($c) => $c instanceof Callout)->values()->all();
+
+        return $schema->components($parts)->columns(['default' => 1, 'md' => 2, 'xl' => 4]);
+    }
+
+    protected function getSaveFormAction(): Action
+    {
+        return parent::getSaveFormAction()->label('Save changes');
+    }
+
+    public function content(Schema $schema): Schema
+    {
+        return $schema->components([
+            Section::make('✎ Edit details')
+                ->description('Truck, dates, going to, waybill, delivered date')
+                ->collapsible()->collapsed()->compact()
+                ->schema([$this->getFormContentComponent()]),
+            View::make('filament.trips.edit-tiles')->viewData(fn () => ['tiles' => TripBoxes::tiles($this->record, $this->isHubTrip())]),
+            $this->getRelationManagersContentComponent(),
+        ]);
+    }
+}
+DISPATCH_FILE_END_10
+
+# ---------------------------------------------------------------- app/Filament/Shared/Trips/ListsTrips.php
+mkdir -p 'app/Filament/Shared/Trips'
+cat > 'app/Filament/Shared/Trips/ListsTrips.php' <<'DISPATCH_FILE_END_11'
+<?php
+
+namespace App\Filament\Shared\Trips;
+
+use App\Filament\Tables\TripList;
+use App\Models\Deliverylog;
+use Filament\Actions\Action;
+use Filament\Actions\CreateAction;
+use Filament\Facades\Filament;
+use Illuminate\Support\Facades\Auth;
+
+/** Delivery trips list (board 42): title, Plan trips, New trip by hand and the stage tabs. All three panels. */
+trait ListsTrips
+{
+    protected function getHeaderActions(): array
+    {
+        $plan = collect(Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => is_subclass_of($p, PlanTripsPage::class));
+
+        return array_values(array_filter([
+            $plan ? Action::make('plan')->label('✦ Plan trips')->url(fn () => $plan::getUrl()) : null,
+            CreateAction::make()->label('+ New trip by hand')->color('gray'),
+        ]));
+    }
+
+    public function getTitle(): string
+    {
+        return 'Delivery trips';
+    }
+
+    public function getSubheading(): ?string
+    {
+        return 'Every trip, who made it and how far it is. Click a trip for the details.';
+    }
+
+    public function getBreadcrumbs(): array
+    {
+        return [];
+    }
+
+    public function getTabs(): array
+    {
+        return TripList::tabs(Deliverylog::query()->where('deliverylogs.logistichub_id', Auth::user()->logistichub_id));
+    }
+}
+DISPATCH_FILE_END_11
+
+# ---------------------------------------------------------------- app/Filament/Shared/Trips/NewTripRecord.php
+mkdir -p 'app/Filament/Shared/Trips'
+cat > 'app/Filament/Shared/Trips/NewTripRecord.php' <<'DISPATCH_FILE_END_12'
 <?php
 
 namespace App\Filament\Shared\Trips;
 
 use App\Models\Deliverylog;
-use App\Models\Tripinvoice;
-use App\Support\TripFlow;
-use App\Support\Tracking\Tracker;
-use Filament\Actions\Action;
+use App\Models\Logistichub;
+use App\Models\Truck;
+use App\Support\Hubs\HubAreas;
+use App\Support\Trips\CityTrips;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Filament\Support\Icons\Heroicon;
+use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
-use Livewire\Attributes\Url;
+use Illuminate\Support\Facades\Schema;
 
-/** One trip on one page: its step, truck, boxes, who took it, the crew, warnings, release and the next trip. */
-class TripPage extends Page
+/**
+ * New trip by hand (board 44): where it goes, the truck (cards with space and crew), when, paperwork,
+ * and a live summary. Used by the Admin, Warehouse and Partner hub panels.
+ */
+abstract class NewTripRecord extends CreateRecord
 {
-    protected string $view = 'filament.trips.trip';
+    protected string $view = 'filament.trips.new-trip';
 
-    protected static ?string $slug = 'trip';
+    /** A partner hub's own trips always go direct to its customers. */
+    protected static bool $atHub = false;
 
-    protected static bool $shouldRegisterNavigation = false;
+    /** The panel's Assign invoice page (Admin Routeinvoice, Warehouse Hubroute, Partner hub Routeinvoice). */
+    protected static ?string $assignPage = null;
 
-    #[Url(as: 'trip')]
-    public ?int $tripId = null;
+    public string $go = 'direct';
 
-    public static function canAccess(): bool
-    {
-        return TripFlow::ready() && Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()) !== false;
-    }
+    public ?int $hub = null;
 
-    public static function urlFor(Deliverylog $trip): ?string
-    {
-        return static::canAccess() ? static::getUrl(['trip' => $trip->id]) : null;
-    }
+    public ?int $truck = null;
+
+    public string $day = 'today';
+
+    public string $date = '';
+
+    public string $eta = '';
+
+    public int $tripDay = 1;
+
+    public string $waybill = '';
+
+    public string $container = '';
 
     public function mount(): void
     {
-        abort_unless($this->trip(), 404);
-    }
-
-    public function trip(): ?Deliverylog
-    {
-        $hub = Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId());
-        $trip = $this->tripId ? Deliverylog::with('truck', 'destination')->find($this->tripId) : null;
-        if (! $trip || $hub === false) {
-            return null;
-        }
-
-        return $hub === null || (int) $trip->logistichub_id === $hub || (int) $trip->assigned_to === $hub ? $trip : null;
+        parent::mount();
+        $this->date = today()->toDateString();
+        $this->eta = today()->addDay()->toDateString();
+        $this->truck = $this->trucks()->firstWhere('state', 'free')['id'] ?? null;
     }
 
     public function getTitle(): string|Htmlable
     {
-        $t = $this->trip();
-
-        return 'Trip '.$t?->trip_number;
-    }
-
-    protected function getHeaderActions(): array
-    {
-        $trip = $this->trip();
-        if (! $trip) {
-            return [];
-        }
-
-        return [
-            // Lock the trip: only here, and only when ready (all boxes loaded, truck here, lead man set); see Trip rules
-            Action::make('lock')
-                ->label(fn () => \App\Support\Trips\TripLock::isReady($trip) ? 'Lock trip' : 'Lock trip (not ready)')
-                ->color(fn () => \App\Support\Trips\TripLock::isReady($trip) ? 'primary' : 'gray')
-                ->icon(Heroicon::LockClosed)
-                ->visible(fn () => $trip->is_active && ! $trip->is_lock && in_array(TripFlow::stage($trip), ['planned', 'loading'], true))
-                ->requiresConfirmation()
-                ->modalHeading('Lock trip '.$trip->trip_number)
-                ->modalDescription(function () use ($trip): string {
-                    if (\App\Support\Trips\TripLock::isReady($trip)) {
-                        return 'Every check is green. The leadman sees "Trip ready" and takes the trip; no more boxes join.';
-                    }
-                    $need = \App\Support\Trips\TripRules::need(\App\Support\Trips\TripLock::RULE, Auth::user());
-
-                    return 'Not ready: '.\App\Support\Trips\TripLock::missing($trip).'. '.match ($need) {
-                        'office' => 'Only the office can lock it now: this asks Admin or Super admin.',
-                        'reason' => 'Pick why you lock it anyway (saved in Overrides).',
-                        default => 'You can lock it anyway.',
-                    };
-                })
-                ->schema(fn () => ! \App\Support\Trips\TripLock::isReady($trip) && \App\Support\Trips\TripRules::need(\App\Support\Trips\TripLock::RULE, Auth::user()) === 'reason'
-                    ? [\Filament\Forms\Components\Select::make('reason')->label('Why')->options(array_combine(\App\Support\Trips\TripRules::reasons(), \App\Support\Trips\TripRules::reasons()))->required()]
-                    : [])
-                ->modalSubmitActionLabel(fn () => ! \App\Support\Trips\TripLock::isReady($trip) && \App\Support\Trips\TripRules::need(\App\Support\Trips\TripLock::RULE, Auth::user()) === 'office' ? 'Ask the office' : 'Lock trip')
-                ->action(function (array $data) use ($trip): void {
-                    $r = \App\Support\Trips\TripLock::lock($trip, Auth::user(), $data['reason'] ?? null);
-                    $r === 'office'
-                        ? Notification::make()->title('Asked the office to lock '.$trip->trip_number)->body('It locks when an admin approves (Overrides).')->warning()->send()
-                        : Notification::make()->title('Trip '.$trip->trip_number.' is locked')->body('The leadman sees "Trip ready".')->success()->send();
-                }),
-            TripActions::crew()->record($trip),
-            TripActions::release()->record($trip),
-            Action::make('boxes')
-                ->label('Boxes & edit')
-                ->color('gray')
-                ->icon(Heroicon::PencilSquare)
-                ->url(fn () => $this->editUrl($trip)),
-        ];
-    }
-
-    protected function editUrl(Deliverylog $trip): ?string
-    {
-        $resource = collect(Filament::getCurrentPanel()?->getResources() ?? [])->first(fn ($r) => $r::getModel() === Deliverylog::class);
-
-        return $resource && $resource::hasPage('edit') ? $resource::getUrl('edit', ['record' => $trip]) : null;
-    }
-
-    protected function getViewData(): array
-    {
-        $trip = $this->trip();
-        $stage = TripFlow::stage($trip);
-        $rows = TripFlow::boxes($trip);
-        $total = (clone $rows)->count();
-        $loaded = Tripinvoice::where('deliverylog_id', $trip->id)->where('is_loaded', true)->count();
-        $delivered = (clone $rows)->where('is_delivered', true)->count();
-        $left = TripFlow::left($trip);
-        $before = TripFlow::waitsFor($trip);
-        $next = TripFlow::nextAfter($trip);
-        $taker = $trip->taken_by ? \App\Models\User::find($trip->taken_by) : null;
-
-        $warnings = [];
-        if ($before) {
-            $bl = TripFlow::left($before);
-            $warnings[] = ['tone' => 'warn', 'text' => 'Truck '.$trip->truck?->plate_no.' is still on trip '.$before->trip_number.($bl ? ' ('.$bl.' '.str('box')->plural($bl).' not delivered or returned)' : '').'. '.$trip->trip_number.' starts when it closes.'];
-        }
-        if ($stage === 'ready' && $trip->ready_at?->lt(now()->subMinutes(30))) {
-            $warnings[] = ['tone' => 'warn', 'text' => 'Ready since '.$trip->ready_at->format('g:i A').' · nobody took the trip yet.'];
-        }
-        if ($stage === 'back' && $left) {
-            $warnings[] = ['tone' => 'warn', 'text' => $left.' '.str('box')->plural($left).' not returned yet: scan them back with Return boxes. Then the trip closes by itself.'];
-        }
-        if ($stage === 'closed') {
-            $warnings[] = ['tone' => 'ok', 'text' => '✓ Closed'.($trip->closed_at ? ' '.$trip->closed_at->format('M j g:i A') : '').': '.($trip->release_reason === 'auto' ? 'every box delivered or returned. The truck was released by itself.' : 'released by the office · '.(TripFlow::RELEASE_REASONS[$trip->release_reason] ?? 'trip done').'.')];
-        }
-
-        $keys = array_keys(TripFlow::STAGES);
-        $flow = array_values(array_diff($keys, ['waiting']));
-        $at = array_search($stage === 'waiting' ? 'planned' : $stage, $flow, true);
-
-        return [
-            'trip' => $trip,
-            'stage' => $stage,
-            'steps' => collect($flow)->map(fn ($k, $i) => ['n' => $i + 1, 'label' => TripFlow::STAGES[$k][0], 'who' => TripFlow::STAGES[$k][1], 'state' => $stage === 'closed' || $i < $at ? 'done' : ($i === $at ? 'now' : 'todo')])->all(),
-            'truckState' => match ($stage) {
-                'waiting' => 'In use on '.$before?->trip_number,
-                'closed' => $next ? 'On the next trip '.$next->trip_number : 'Free',
-                'road' => 'On the road', 'back' => 'Back at the hub', default => 'On this trip',
-            },
-            'boxes' => match ($stage) {
-                'planned', 'waiting' => $total.' on the trip',
-                'loading', 'ready' => $loaded.' of '.$total.' loaded',
-                'road' => $delivered.' of '.$total.' delivered',
-                'back' => $delivered.' delivered · '.$left.' to return',
-                default => $delivered.' delivered',
-            },
-            'took' => $trip->taken_at ? ($taker?->first_name ?? 'Crew').' · '.$trip->taken_at->format('g:i A').($trip->taken_boxes !== null ? ' · '.$trip->taken_boxes.' boxes' : '') : null,
-            'crew' => TripFlow::crew($trip),
-            'lockChecks' => $trip->is_active && ! $trip->is_lock && in_array($stage, ['planned', 'loading'], true) ? \App\Support\Trips\TripLock::checks($trip) : null,
-            'autoLock' => \App\Support\Trips\TripLock::autoOnTake(),
-            'warnings' => $warnings,
-            'next' => $next,
-            'nextBoxes' => $next ? TripFlow::boxes($next)->count() : 0,
-            'stageInfo' => TripFlow::STAGES[$stage],
-            'rental' => $trip->truck?->isRental() ? [
-                'company' => $trip->truck->rentalCompany?->name, 'driver' => $trip->rental_driver,
-                'cost' => $trip->rental_cost, 'rate' => $trip->rental_rate,
-                'perBox' => $trip->rental_cost && $total ? round($trip->rental_cost / $total) : null,
-            ] : null,
-        ];
-    }
-}
-DISPATCH_FILE_END_2
-
-# ---------------------------------------------------------------- app/Filament/Shared/Trips/TripRulesPage.php
-mkdir -p 'app/Filament/Shared/Trips'
-cat > 'app/Filament/Shared/Trips/TripRulesPage.php' <<'DISPATCH_FILE_END_3'
-<?php
-
-namespace App\Filament\Shared\Trips;
-
-use App\Support\Trips\TripRules;
-use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\Auth;
-
-/** Settings → Trip rules: who can bypass each rule, and the reasons the crew picks from. */
-class TripRulesPage extends Page
-{
-    protected string $view = 'filament.trips.rules';
-
-    protected static ?string $slug = 'trip-rules';
-
-    protected static ?string $title = 'Trip rules';
-
-    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-scale';
-
-    public string $newReason = '';
-
-    public static function canAccess(): bool
-    {
-        return TripRules::ready() && TripRules::isOffice(Auth::user());
+        return 'New trip by hand';
     }
 
     public function getHeading(): string|Htmlable
@@ -1102,430 +1502,1215 @@ class TripRulesPage extends Page
         return '';
     }
 
-    public function setLevel(string $rule, string $level): void
+    public function getBreadcrumbs(): array
     {
-        TripRules::setLevel($rule, $level);
+        return [];
     }
 
-    public function toggleAutoLock(): void
+    protected function trucks()
     {
-        \App\Support\Trips\TripLock::setAutoOnTake(! \App\Support\Trips\TripLock::autoOnTake());
+        $kinds = Truck::where('logistichub_id', Auth::user()->logistichub_id)->pluck('category', 'id');
+
+        return (new CityTrips(Auth::user()))->trucks()->map(fn ($t) => $t + ['kind' => (string) ($kinds[$t['id']] ?? '')]);
     }
 
-    public function addReason(): void
+    public function pickGo(string $go): void
     {
-        if (trim($this->newReason) !== '') {
-            TripRules::setReasons(array_merge(TripRules::reasons(), [$this->newReason]));
-            $this->newReason = '';
+        $this->go = $go === 'hub' && ! static::$atHub ? 'hub' : 'direct';
+        if ($this->go === 'hub' && ! $this->hub) {
+            $this->hub = $this->hubs()->first()?->id;
         }
     }
 
-    public function removeReason(int $i): void
+    public function pickHub(int $id): void
     {
-        $r = TripRules::reasons();
-        unset($r[$i]);
-        TripRules::setReasons($r ?: TripRules::DEFAULT_REASONS);
+        $this->hub = $id;
+    }
+
+    public function pickTruck(int $id): void
+    {
+        $t = $this->trucks()->firstWhere('id', $id);
+        if ($t && $t['state'] !== 'off') {
+            $this->truck = $id;
+        }
+    }
+
+    public function setDay(string $day): void
+    {
+        $this->day = in_array($day, ['today', 'tomorrow', 'date'], true) ? $day : 'today';
+        if ($this->day !== 'date') {
+            $this->date = ($this->day === 'tomorrow' ? today()->addDay() : today())->toDateString();
+        }
+        $this->eta = Carbon::parse($this->date)->addDay()->toDateString();
+    }
+
+    public function updatedDate(): void
+    {
+        $this->day = 'date';
+        $this->eta = Carbon::parse($this->date ?: today())->addDay()->toDateString();
+    }
+
+    protected function hubs()
+    {
+        return Logistichub::query()->where('is_active', true)->where('id', '!=', Auth::user()->logistichub_id)
+            ->orderByDesc('is_company')->orderBy('hub_name')->get();
+    }
+
+    public function waybillOk(): ?bool
+    {
+        return $this->waybill === '' ? null : (bool) preg_match('/^[A-Z]{1,4}-?\d{3,}$/i', trim($this->waybill));
+    }
+
+    /** Create the trip; $addBoxes opens Assign invoice for it. */
+    public function createTrip(bool $addBoxes = false): void
+    {
+        $this->validate([
+            'date' => 'required|date', 'eta' => 'required|date', 'tripDay' => 'required|integer|min:1|max:9',
+            'truck' => static::$atHub ? 'required|integer' : 'nullable|integer',
+            'waybill' => 'nullable|string|max:60', 'container' => 'nullable|string|max:60',
+        ], ['truck.required' => 'Pick the truck.']);
+        $u = Auth::user();
+        $to = ! static::$atHub && $this->go === 'hub' && $this->hub ? $this->hub : $u->logistichub_id;
+        $paper = trim(collect([trim($this->waybill), trim($this->container)])->filter()->join(' / '));
+        $trip = Deliverylog::create([
+            'truck_id' => $this->truck, 'trip_day' => $this->tripDay, 'eta' => $this->eta, 'departure_date' => $this->date,
+            'assigned_to' => $to, 'logistichub_id' => $u->logistichub_id, 'user_id' => $u->id,
+            'waybill_number' => $paper ?: null,
+        ] + (Schema::hasColumn('deliverylogs', 'made_by') ? ['made_by' => 'manual'] : []));
+        if ($this->truck && ! static::$atHub) {
+            Truck::whereKey($this->truck)->update(['is_assigned' => 1]);
+        }
+        $this->record = $trip;
+        Notification::make()->title('Trip '.$trip->trip_number.' created')->success()->send();
+
+        $assign = static::$assignPage;
+        $this->redirect($addBoxes && $assign ? $assign::getUrl(['ownerRecord' => $trip->id]) : static::getResource()::getUrl('edit', ['record' => $trip]));
     }
 
     protected function getViewData(): array
     {
+        $trucks = $this->trucks();
+        $sel = $trucks->firstWhere('id', $this->truck);
+        $hubs = static::$atHub ? collect() : $this->hubs();
+        $plan = collect(Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => is_subclass_of($p, PlanTripsPage::class));
+
         return [
-            'rules' => collect(TripRules::RULES)->map(fn ($r, $k) => ['key' => $k, 'title' => $r[0], 'sub' => $r[1], 'level' => TripRules::level($k)]),
-            'levels' => TripRules::LEVELS, 'reasons' => TripRules::reasons(), 'autoLock' => \App\Support\Trips\TripLock::autoOnTake(),
+            'atHub' => static::$atHub, 'trucks' => $trucks, 'sel' => $sel, 'hubs' => $hubs,
+            'hubName' => Logistichub::whereKey(Auth::user()->logistichub_id)->value('hub_name'),
+            'toName' => $this->go === 'hub' ? ($hubs->firstWhere('id', $this->hub)?->hub_name ?? '—') : null,
+            'planUrl' => $plan ? $plan::getUrl() : null,
+            'listUrl' => static::getResource()::getUrl('index'),
+            'waybillOk' => $this->waybillOk(),
+            'color' => fn (int $id) => class_exists(HubAreas::class) ? HubAreas::color($id) : '#1d6fb8',
+            'fmt' => fn (?string $d) => $d ? Carbon::parse($d)->format('D, M j') : '—',
         ];
     }
 }
-DISPATCH_FILE_END_3
+DISPATCH_FILE_END_12
 
-# ---------------------------------------------------------------- app/Filament/Shared/Widgets/TripBoard.php
-mkdir -p 'app/Filament/Shared/Widgets'
-cat > 'app/Filament/Shared/Widgets/TripBoard.php' <<'DISPATCH_FILE_END_4'
+# ---------------------------------------------------------------- app/Filament/Tables/TripBoxes.php
+mkdir -p 'app/Filament/Tables'
+cat > 'app/Filament/Tables/TripBoxes.php' <<'DISPATCH_FILE_END_13'
 <?php
 
-namespace App\Filament\Shared\Widgets;
+namespace App\Filament\Tables;
 
-use App\Services\TripAssignment;
-use App\Support\TripBoard as Board;
-use Filament\Notifications\Notification;
-use Filament\Widgets\Widget;
-use Illuminate\Support\Facades\Auth;
-use Livewire\Attributes\Locked;
-use Livewire\Attributes\Reactive;
-
-/**
- * Today at a glance, trips that need attention, and two small charts, on top
- * of a trip list. Used by Delivery Log (Admin, Warehouse), the partner hub's
- * Delivery Log, and the warehouse-to-warehouse trip log.
- *
- *   TripBoard::make(['kind' => 'delivery', 'resource' => DeliverylogResource::class])
- */
-class TripBoard extends Widget
-{
-    protected string $view = 'filament.widgets.trip-board';
-
-    protected int|string|array $columnSpan = 'full';
-
-    protected static bool $isLazy = false;
-
-    /** delivery, hub or warehouse */
-    #[Locked]
-    public string $kind = 'delivery';
-
-    /** The trip resource, for links to the list and to each trip. */
-    #[Locked]
-    public string $resource = '';
-
-    /** The card the list is filtered by (from the list page). */
-    #[Reactive]
-    public ?string $activeCard = null;
-
-    public function board(): Board
-    {
-        $user = Auth::user();
-
-        return Board::make($this->kind, (int) ($this->kind === 'warehouse' ? $user->warehouse_id : $user->logistichub_id));
-    }
-
-    public function canLock(): bool
-    {
-        return match ($this->kind) {
-            'warehouse' => true,
-            'delivery' => (bool) Auth::user()?->hasRole('super_admin'),
-            default => false,
-        };
-    }
-
-    public function cardUrl(string $card): string
-    {
-        return $this->resource::getUrl('index', $this->activeCard === $card ? [] : ['filters' => ['board' => ['value' => $card]]]);
-    }
-
-    public function tripUrl(int $tripId): string
-    {
-        return $this->resource::getUrl('edit', ['record' => $tripId]);
-    }
-
-    /** The Trip page of this panel (where a trip is locked), or the edit page. */
-    public function tripPageUrl(int $tripId): string
-    {
-        $page = collect(\Filament\Facades\Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => is_subclass_of($p, \App\Filament\Shared\Trips\TripPage::class));
-
-        return $page ? $page::getUrl(['trip' => $tripId]) : $this->tripUrl($tripId);
-    }
-
-    public function releaseTruck(int $tripId): void
-    {
-        $trip = $this->board()->find($tripId);
-
-        if (! $trip || $this->kind === 'warehouse' || ! $trip->is_current) {
-            return;
-        }
-
-        \App\Support\TripFlow::release($trip, 'done');
-        Notification::make()->title("Truck released from trip {$trip->trip_number}")->success()->send();
-    }
-
-    protected function getViewData(): array
-    {
-        $board = $this->board();
-        $days = $board->perDay();
-        $breakdown = $board->breakdown();
-
-        return [
-            'board' => $board,
-            'cards' => $board->cards(),
-            'attention' => $board->attention(),
-            'days' => $days,
-            'dayMax' => max(1, $days->max('boxes')),
-            'breakdown' => $breakdown,
-            'breakdownMax' => max(1, $breakdown->max('count') ?? 0),
-        ];
-    }
-}
-DISPATCH_FILE_END_4
-
-# ---------------------------------------------------------------- app/Support/Trips/TripLock.php
-mkdir -p 'app/Support/Trips'
-cat > 'app/Support/Trips/TripLock.php' <<'DISPATCH_FILE_END_5'
-<?php
-
-namespace App\Support\Trips;
-
-use App\Models\AppSetting;
 use App\Models\Deliverylog;
+use App\Models\Invoice;
 use App\Models\Tripinvoice;
-use App\Models\User;
-use App\Support\TripFlow;
+use Filament\Actions\BulkAction;
+use Filament\Notifications\Notification;
+use Filament\Schemas\Components\Tabs\Tab;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 
 /**
- * Lock a trip only when it is ready: every box loaded, the truck here, a lead man on the crew.
- * The office locks it on the Trip page; the trip also locks by itself when the lead man takes it (Driver app).
+ * Boxes on this trip (board 44b): All / Loaded / Not loaded / Delivered / Problems tabs, bulk priority,
+ * and the tiles at the top of Edit trip. Shared by the Admin, Warehouse and Partner hub panels.
  */
-class TripLock
+class TripBoxes
 {
-    public const RULE = 'lock_ready';
+    public const TITLE = 'Boxes on this trip';
 
-    /**
-     * The three checks.
-     *
-     * @return list<array{key: string, ok: bool, title: string, sub: string}>
-     */
-    public static function checks(Deliverylog $trip): array
+    /** @param  string  $loaded  is_loaded (warehouse trips) or is_loaded_hub (a partner hub's own trips) */
+    public static function tabs(string $loaded = 'is_loaded', ?\Closure $base = null): array
     {
-        $main = Tripinvoice::where('deliverylog_id', $trip->id);
-        $own = Tripinvoice::where('deliveryloghub_id', $trip->id);
-        $total = (clone $main)->count() + (clone $own)->count();
-        $loaded = (clone $main)->where('is_loaded', true)->count() + (clone $own)->where('is_loaded_hub', true)->count();
-        $busy = TripFlow::ready() ? TripFlow::waitsFor($trip) : null;
-        $crew = TripFlow::ready() ? TripFlow::crew($trip) : collect();
-        $lead = $crew->first(fn ($c) => TripFlow::isLead($c));
-        $plate = (string) $trip->truck?->plate_no;
+        $problem = fn (Builder $q) => $q->where(fn ($w) => $w->whereHas('invoiceissue')->orWhereHas('deliveryAttempts'));
+        $q = [
+            'all' => ['All', fn (Builder $b) => $b],
+            'loaded' => ['Loaded', fn (Builder $b) => $b->where($loaded, true)],
+            'not_loaded' => ['Not loaded', fn (Builder $b) => $b->where(fn ($w) => $w->where($loaded, false)->orWhereNull($loaded))],
+            'delivered' => ['Delivered', fn (Builder $b) => $b->where('is_delivered', true)],
+            'problems' => ['Problems', $problem],
+        ];
+
+        return collect($q)->mapWithKeys(fn ($v, $k) => [$k => Tab::make($v[0])
+            ->badge($base ? fn () => $v[1]($base())->count() : null)
+            ->badgeColor($k === 'problems' ? 'danger' : 'gray')
+            ->modifyQueryUsing(fn (Builder $query) => $v[1]($query))])->all();
+    }
+
+    /** Mark the selected boxes as priority, or take priority off. */
+    public static function priority(bool $on): BulkAction
+    {
+        return BulkAction::make($on ? 'bulkPriority' : 'bulkUnpriority')
+            ->label($on ? 'Mark as priority' : 'Take off priority')
+            ->icon($on ? 'heroicon-o-star' : 'heroicon-o-minus-circle')
+            ->color($on ? 'warning' : 'gray')
+            ->requiresConfirmation()
+            ->modalHeading(fn (Collection $records) => ($on ? 'Mark ' : 'Take priority off ').$records->count().' box'.($records->count() === 1 ? '' : 'es').($on ? ' as priority?' : '?'))
+            ->action(function (Collection $records) use ($on) {
+                Invoice::whereIn('id', $records->pluck('invoice_id')->filter())->update(['is_priority' => $on]);
+                Notification::make()->title($records->count().' box'.($records->count() === 1 ? '' : 'es').($on ? ' marked as priority' : ' taken off priority'))->success()->send();
+            })
+            ->deselectRecordsAfterCompletion();
+    }
+
+    /** @return list<array{l: string, v: int|string, tone: string}> */
+    public static function tiles(Deliverylog $trip, bool $hub = false): array
+    {
+        $rows = $hub ? Tripinvoice::where('deliveryloghub_id', $trip->id) : Tripinvoice::where('deliverylog_id', $trip->id);
+        $loadedCol = $hub ? 'is_loaded_hub' : 'is_loaded';
+        $total = (clone $rows)->count();
+        $loaded = (clone $rows)->where($loadedCol, true)->count();
+        $done = (clone $rows)->where('is_delivered', true)->count();
+        $tried = (clone $rows)->where(fn ($w) => $w->where('is_delivered', false)->orWhereNull('is_delivered'))->whereHas('deliveryAttempts')->count();
+        $prio = Invoice::whereIn('id', (clone $rows)->select('invoice_id'))->where('is_priority', true)->count();
 
         return [
-            ['key' => 'boxes', 'ok' => $total > 0 && $loaded >= $total, 'title' => 'All boxes loaded',
-                'sub' => $total === 0 ? 'No boxes on the trip yet' : ($loaded >= $total ? $total.' of '.$total.' boxes' : $loaded.' of '.$total.': '.($total - $loaded).' still to load')],
-            ['key' => 'truck', 'ok' => $trip->truck_id && ! $busy, 'title' => 'Truck is here',
-                'sub' => ! $trip->truck_id ? 'No truck on the trip yet' : ($busy ? $plate.' is still on '.$busy->trip_number : $plate.' is free for this trip')],
-            ['key' => 'crew', 'ok' => (bool) $lead, 'title' => 'Crew is ready',
-                'sub' => $lead ? $crew->map(fn ($c) => \Illuminate\Support\Str::before((string) $c->user?->full_name, ' ').(TripFlow::isLead($c) ? ' (lead man)' : ''))->filter()->join(' · ') : 'No lead man on this trip: set it with Crew on this trip'],
+            ['l' => 'Boxes', 'v' => $total, 'tone' => 'ink'],
+            ['l' => 'Loaded', 'v' => $loaded.($total ? ' / '.$total : ''), 'tone' => $total && $loaded === $total ? 'ok' : 'ink'],
+            ['l' => 'Delivered', 'v' => $done, 'tone' => $done ? 'ok' : 'ink'],
+            ['l' => 'Not delivered', 'v' => $tried, 'tone' => $tried ? 'bad' : 'ink'],
+            ['l' => 'Priority', 'v' => $prio, 'tone' => $prio ? 'warn' : 'ink'],
         ];
     }
-
-    public static function isReady(Deliverylog $trip): bool
-    {
-        return collect(static::checks($trip))->every('ok');
-    }
-
-    /** What is missing, in words: "not every box is loaded, no lead man". */
-    public static function missing(Deliverylog $trip): string
-    {
-        $words = ['boxes' => 'not every box is loaded', 'truck' => 'the truck is not here', 'crew' => 'no lead man'];
-
-        return collect(static::checks($trip))->reject(fn ($c) => $c['ok'])->map(fn ($c) => $words[$c['key']])->join(', ');
-    }
-
-    /** The trip locks by itself when the lead man takes it (if every check is green). */
-    public static function autoOnTake(): bool
-    {
-        return (string) AppSetting::get('rules.lock_on_take', '1') === '1';
-    }
-
-    public static function setAutoOnTake(bool $on): void
-    {
-        AppSetting::put('rules.lock_on_take', $on ? '1' : '0');
-    }
-
-    /**
-     * Lock the trip. Not ready: allowed by the trip rules (off, or with a reason), else the office is asked.
-     *
-     * @return string locked | reason | office
-     */
-    public static function lock(Deliverylog $trip, ?User $by, ?string $reason = null): string
-    {
-        if ($trip->is_lock) {
-            return 'locked';
-        }
-        if (! static::isReady($trip)) {
-            $need = TripRules::need(self::RULE, $by);
-            if ($need === 'office') {
-                TripRules::ask(self::RULE, $by, $reason, ['trip_id' => $trip->id, 'trip_number' => $trip->trip_number, 'note' => 'Not ready: '.static::missing($trip)]);
-
-                return 'office';
-            }
-            if ($need === 'reason' && blank($reason)) {
-                return 'reason';
-            }
-            TripRules::record(self::RULE, $by, $reason ?: null, ['trip_id' => $trip->id, 'trip_number' => $trip->trip_number, 'note' => 'Locked not ready: '.static::missing($trip)]);
-        }
-        $trip->update(['is_lock' => true]);
-
-        return 'locked';
-    }
 }
-DISPATCH_FILE_END_5
+DISPATCH_FILE_END_13
 
-# ---------------------------------------------------------------- app/Support/Trips/TripRules.php
-mkdir -p 'app/Support/Trips'
-cat > 'app/Support/Trips/TripRules.php' <<'DISPATCH_FILE_END_6'
+# ---------------------------------------------------------------- app/Filament/Tables/TripList.php
+mkdir -p 'app/Filament/Tables'
+cat > 'app/Filament/Tables/TripList.php' <<'DISPATCH_FILE_END_14'
 <?php
 
-namespace App\Support\Trips;
+namespace App\Filament\Tables;
 
-use App\Models\AppSetting;
-use App\Models\Boxes\SetSplit;
-use App\Models\Invoice;
+use App\Models\Deliverylog;
+use App\Models\TripCity;
+use App\Models\TripCrew;
 use App\Models\TripOverride;
-use App\Models\User;
-use Filament\Notifications\Notification;
+use App\Support\Hubs\HubAreas;
+use App\Support\TripFlow;
+use App\Support\Trips\TripRules;
+use Filament\Actions\Action;
+use Filament\Forms\Components\ToggleButtons;
+use Filament\Schemas\Components\Tabs\Tab;
+use Filament\Tables\Columns\ViewColumn;
+use Filament\Tables\Filters\Filter;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
- * Trip rules and who can bypass them: off (no reason needed), anyone with a reason, or office only.
- * The office = Admin and Super admin. Every bypass is saved with who and why.
+ * Delivery trips list (board 42): one clear row per trip, who made it (✦ AI, ✦ Plan trips, changed, by hand),
+ * where it goes, truck and crew, boxes, status; tabs, Made by and Going to filters, details on the side.
  */
-class TripRules
+class TripList
 {
-    /** key => [title, what it stops, default level] */
-    public const RULES = [
-        'topup_other' => ['Top up with other cities', 'Add boxes of a city not on the trip', 'reason'],
-        'truck_full' => ['Truck full', 'Load more than the truck space', 'reason'],
-        'split_set' => ['Split a customer', 'A customer’s boxes on two trips', 'office'],
-        'wrong_hub' => ['Wrong hub or warehouse', 'Box for another partner hub or warehouse', 'office'],
-        'change_plan' => ['Change the AI plan', 'Switch off a trip or change its truck before Create', 'reason'],
-        'load_order' => ['Load out of order', 'Too early for its stop', 'off'],
-        'direct_hub' => ['Deliver direct instead of a hub', 'A hub’s boxes on our own trip, or the reverse', 'reason'],
-        'lock_ready' => ['Lock only when ready', 'All boxes loaded, truck here, lead man set', 'office'],
+    public const MADE = [
+        'ai' => ['✦ AI', 'ai'],
+        'plan' => ['✦ Plan trips', 'plan'],
+        'changed' => ['✦ Plan trips · changed', 'changed'],
+        'manual' => ['✎ By hand', 'manual'],
     ];
 
-    public const LEVELS = ['off' => 'Off', 'reason' => 'Anyone with a reason', 'office' => 'Office only'];
-
-    public const DEFAULT_REASONS = ['Customer called', 'Road closed', 'It still fits (small box)', 'Truck problem', 'Other'];
-
-    public static function ready(): bool
+    protected static function hasMade(): bool
     {
-        return Schema::hasTable('trip_overrides');
+        static $has = null;
+
+        return $has ??= Schema::hasColumn('deliverylogs', 'made_by');
     }
 
-    public static function level(string $rule): string
+    /** How the trip was made. Old trips: Plan trips when they have cities, else by hand. */
+    public static function madeKey(Model $trip): string
     {
-        $l = (string) AppSetting::get('rules.'.$rule, self::RULES[$rule][2] ?? 'reason');
-
-        return isset(self::LEVELS[$l]) ? $l : 'reason';
-    }
-
-    public static function setLevel(string $rule, string $level): void
-    {
-        if (isset(self::RULES[$rule], self::LEVELS[$level])) {
-            AppSetting::put('rules.'.$rule, $level);
-        }
-    }
-
-    /** @return list<string> */
-    public static function reasons(): array
-    {
-        $r = json_decode((string) AppSetting::get('rules.reasons', ''), true);
-
-        return is_array($r) && $r ? array_values($r) : self::DEFAULT_REASONS;
-    }
-
-    public static function setReasons(array $reasons): void
-    {
-        AppSetting::put('rules.reasons', json_encode(array_values(array_unique(array_filter(array_map(fn ($r) => Str::limit(trim((string) $r), 60, ''), $reasons))))));
-    }
-
-    /** The office: Admin and Super admin. */
-    public static function isOffice(?User $u): bool
-    {
-        return (bool) ($u && ($u->is_admin || $u->hasRole('super_admin')));
-    }
-
-    /** What this person needs to bypass the rule: free, reason, or office (ask the office). */
-    public static function need(string $rule, ?User $u, ?int $tripId = null, ?int $invoiceId = null): string
-    {
-        if (! static::ready()) {
-            return 'free';
-        }
-        if ($tripId && $invoiceId && static::isApproved($rule, $tripId, $invoiceId)) {
-            return 'free';
+        $m = static::hasMade() ? $trip->made_by : null;
+        if ($m && isset(self::MADE[$m])) {
+            return $m;
         }
 
-        return match (static::level($rule)) {
-            'off' => 'free',
-            'office' => static::isOffice($u) ? 'reason' : 'office',
-            default => 'reason',
+        return TripCity::where('deliverylog_id', $trip->id)->exists() ? 'plan' : 'manual';
+    }
+
+    public static function isHubTrip(Model $trip): bool
+    {
+        return $trip->assigned_to && (int) $trip->assigned_to !== (int) $trip->logistichub_id;
+    }
+
+    /** @return array{to: string, cities: string, dot: string} */
+    public static function goes(Model $trip): array
+    {
+        $cities = TripCity::where('deliverylog_id', $trip->id)->get();
+        if ($cities->isEmpty()) {
+            $rows = DB::table('tripinvoices')->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
+                ->where(fn ($q) => $q->where('tripinvoices.deliverylog_id', $trip->id)->orWhere('tripinvoices.deliveryloghub_id', $trip->id))
+                ->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
+                ->select('invoices.receiver_province as province', 'invoices.receiver_city as city')->distinct()->limit(6)->get();
+            $prov = Str::title((string) ($rows->first()->province ?? ''));
+            $list = $rows->pluck('city')->map(fn ($c) => Str::title($c))->unique();
+        } else {
+            $prov = (string) $cities->first()->province;
+            $list = $cities->pluck('city')->unique();
+        }
+        $cityText = $list->isEmpty() ? 'No boxes yet' : $list->take(3)->join(', ').($list->count() > 3 ? ' +'.($list->count() - 3) : '');
+        if (static::isHubTrip($trip)) {
+            $color = class_exists(HubAreas::class) ? HubAreas::color((int) $trip->assigned_to) : '#1d6fb8';
+
+            return ['to' => '→ '.($trip->destination?->hub_name ?? 'Hub'), 'cities' => $cityText, 'dot' => $color];
+        }
+
+        return ['to' => $prov ?: ($list->isEmpty() ? 'Not set yet' : 'Direct'), 'cities' => $cityText, 'dot' => '#17895e'];
+    }
+
+    public static function crew(Model $trip)
+    {
+        return TripCrew::with('user.workposition')->where('deliverylog_id', $trip->id)->get()->sortBy(fn ($c) => TripFlow::isLead($c) ? 0 : 1)->values();
+    }
+
+    /** @return array{label: string, tone: string, when: string} */
+    public static function status(Model $trip): array
+    {
+        $stage = TripFlow::ready() ? TripFlow::stage($trip) : ($trip->is_active ? 'loading' : 'closed');
+        $label = TripFlow::STAGES[$stage][0] ?? Str::title($stage);
+        $when = match ($stage) {
+            'road' => $trip->taken_at ? 'Left '.$trip->taken_at->format('g:i A') : 'On the road',
+            'back' => $trip->back_at ? 'Back '.$trip->back_at->format('g:i A') : 'Back at the hub',
+            'closed' => $trip->closed_at ? 'Done '.$trip->closed_at->format('M j g:i A') : 'Done',
+            'ready' => $trip->ready_at ? 'Locked '.$trip->ready_at->format('g:i A') : 'Locked',
+            'waiting' => 'Waits for the truck',
+            default => $trip->departure_date ? 'Leaves '.Carbon::parse($trip->departure_date)->format('M j') : '',
         };
+
+        return ['label' => $label, 'tone' => $stage, 'when' => $when];
     }
 
-    public static function isApproved(string $rule, ?int $tripId, ?int $invoiceId): bool
+    /** "How this trip was made" lines for the details panel. */
+    public static function how(Deliverylog $trip): array
     {
-        return static::ready() && $tripId && $invoiceId
-            && TripOverride::where('rule', $rule)->where('trip_id', $tripId)->where('invoice_id', $invoiceId)->where('status', 'approved')->exists();
-    }
-
-    /** A bypass with a reason (allowed now). */
-    public static function record(string $rule, ?User $u, ?string $reason, array $ctx = [], string $status = 'allowed'): ?TripOverride
-    {
-        if (! static::ready()) {
-            return null;
+        $key = static::madeKey($trip);
+        $note = static::hasMade() ? $trip->made_note : null;
+        $lines = [];
+        $lines[] = match ($key) {
+            'ai' => ['✦', 'Plan trips with the AI'.($note ? ': “'.$note.'”' : '').'.'],
+            'changed' => ['✎', 'Plan trips, changed before Create'.($note ? ': '.$note : '').'.'],
+            'plan' => ['✦', ($note ?: (static::isHubTrip($trip) ? 'Plan trips › To hubs' : 'Plan trips')).' (system rules).'],
+            default => ['✎', 'Made by hand in Delivery trips › New trip.'],
+        };
+        if ($trip->plan_why) {
+            $lines[] = ['💬', 'Why: '.$trip->plan_why];
         }
-
-        return TripOverride::create([
-            'rule' => $rule, 'trip_kind' => $ctx['kind'] ?? 'delivery', 'trip_id' => $ctx['trip_id'] ?? null, 'trip_number' => $ctx['trip_number'] ?? null,
-            'invoice_id' => $ctx['invoice_id'] ?? null, 'box' => $ctx['box'] ?? null, 'user_id' => $u?->id,
-            'reason' => $reason ? Str::limit($reason, 115, '') : null, 'note' => isset($ctx['note']) ? Str::limit($ctx['note'], 195, '') : null,
-            'data' => $ctx['data'] ?? null, 'status' => $status,
-        ]);
-    }
-
-    /** Office only: the request waits; the office gets it in the bell. */
-    public static function ask(string $rule, ?User $u, ?string $reason, array $ctx = []): ?TripOverride
-    {
-        $existing = static::ready() && ($ctx['trip_id'] ?? null) && ($ctx['invoice_id'] ?? null)
-            ? TripOverride::where('rule', $rule)->where('trip_id', $ctx['trip_id'])->where('invoice_id', $ctx['invoice_id'])->where('status', 'pending')->first() : null;
-        $o = $existing ?? static::record($rule, $u, $reason, $ctx, 'pending');
-        if ($o && ! $existing) {
-            try {
-                $office = User::where('is_admin', true)->get()->merge(User::role('super_admin')->get())->unique('id');
-                Notification::make()->title('Approve: '.self::RULES[$rule][0])
-                    ->body(collect([$o->box, $o->trip_number ? 'trip '.$o->trip_number : null, $u?->first_name, $reason])->filter()->join(' · '))
-                    ->warning()->sendToDatabase($office);
-            } catch (\Throwable $e) {
-                report($e);
+        if (static::isHubTrip($trip)) {
+            $lines[] = ['⌂', ($trip->destination?->hub_name ?? 'The hub').' delivers the boxes with its own trucks.'];
+        }
+        if (TripRules::ready()) {
+            foreach (TripOverride::where('trip_id', $trip->id)->latest('id')->limit(4)->get() as $o) {
+                $lines[] = ['⇄', (TripRules::RULES[$o->rule][0] ?? $o->rule).($o->box ? ' · '.$o->box : '').($o->reason ? ': '.$o->reason : '').' ('.$o->status.')'];
             }
         }
 
-        return $o;
+        return $lines;
     }
 
-    public static function decide(TripOverride $o, bool $yes, ?User $by): void
+    /** @return list<ViewColumn> */
+    public static function columns(): array
     {
-        $o->update(['status' => $yes ? 'approved' : 'refused', 'decided_by' => $by?->id, 'decided_at' => now()]);
-        // an approved split is written as the reason the box stays behind
-        if ($yes && $o->rule === 'lock_ready' && $o->trip_id) {
-            \App\Models\Deliverylog::whereKey($o->trip_id)->first()?->update(['is_lock' => true]);
-        }
-        if ($yes && $o->rule === 'split_set' && $o->invoice_id && $o->trip_id) {
-            $key = $o->data['split'] ?? null;
-            SetSplit::updateOrCreate(['invoice_id' => $o->invoice_id, 'deliverylog_id' => $o->trip_id],
-                ['reason' => array_key_exists((string) $key, SetSplit::REASONS) ? $key : 'held', 'user_id' => $o->user_id, 'set_key' => Invoice::whereKey($o->invoice_id)->value('set_key')]);
-        }
-        if ($o->user) {
-            try {
-                Notification::make()->title(self::RULES[$o->rule][0].': '.($yes ? 'approved' : 'refused'))
-                    ->body(($o->box ? $o->box.' · ' : '').($yes ? 'Scan it again to load it.' : 'Keep it off the truck.'))
-                    ->{$yes ? 'success' : 'danger'}()->sendToDatabase($o->user);
-            } catch (\Throwable $e) {
-                report($e);
-            }
-        }
+        return [
+            ViewColumn::make('trip_number')->label('Trip · made by')->view('filament.trips.list.trip')->searchable()->sortable(),
+            ViewColumn::make('goes')->label('Going to')->view('filament.trips.list.goes'),
+            ViewColumn::make('truck_view')->label('Truck · crew')->view('filament.trips.list.truck')
+                ->searchable(query: fn (Builder $query, string $search) => $query->whereHas('truck', fn ($t) => $t->where('plate_no', 'like', "%{$search}%"))),
+            ViewColumn::make('boxes_bar')->label('Boxes')->view('filament.trips.list.boxes'),
+            ViewColumn::make('stage_view')->label('Status')->view('filament.trips.list.status'),
+        ];
     }
 
-    /** The rule behind a "load it anyway" warning. */
-    public static function ruleOf(?array $early, ?array $wrongHub): string
+    /** Made by and Going to, as chips above the list. */
+    public static function filters(): array
     {
-        if ($early) {
-            return 'load_order';
-        }
+        return [
+            Filter::make('made')
+                ->schema([ToggleButtons::make('v')->label('Made by')->inline()->options(['all' => 'All', 'ai' => '✦ AI', 'plan' => '✦ Plan trips', 'manual' => '✎ By hand'])->default('all')])
+                ->query(function (Builder $query, array $data) {
+                    $q = $query;
+                    $v = $data['v'] ?? 'all';
+                    if ($v === 'all' || ! $v) {
+                        return $q;
+                    }
+                    $hasCities = fn ($w) => $w->select(DB::raw(1))->from('trip_cities')->whereColumn('trip_cities.deliverylog_id', 'deliverylogs.id');
+                    $made = static::hasMade();
 
-        return match ($wrongHub['kind'] ?? null) {
-            'city' => 'topup_other',
-            'full' => 'truck_full',
-            'hub' => 'direct_hub',
-            default => 'wrong_hub',
-        };
+                    return match ($v) {
+                        'ai' => $made ? $q->where('deliverylogs.made_by', 'ai') : $q->whereRaw('1 = 0'),
+                        'plan' => $q->where(fn ($w) => $made
+                            ? $w->whereIn('deliverylogs.made_by', ['plan', 'changed'])->orWhere(fn ($n) => $n->whereNull('deliverylogs.made_by')->whereExists($hasCities))
+                            : $w->whereExists($hasCities)),
+                        'manual' => $q->where(fn ($w) => $made
+                            ? $w->where('deliverylogs.made_by', 'manual')->orWhere(fn ($n) => $n->whereNull('deliverylogs.made_by')->whereNotExists($hasCities))
+                            : $w->whereNotExists($hasCities)),
+                        default => $q,
+                    };
+                })
+                ->columnSpan(2)
+                ->indicateUsing(fn (array $data) => ($data['v'] ?? 'all') !== 'all' ? 'Made by: '.(['ai' => 'AI', 'plan' => 'Plan trips', 'manual' => 'By hand'][$data['v']] ?? '') : null),
+            Filter::make('going')
+                ->schema([ToggleButtons::make('v')->label('Going to')->inline()->options(['all' => 'All', 'direct' => 'Direct', 'hub' => 'To hubs'])->default('all')])
+                ->query(fn (Builder $query, array $data) => match ($data['v'] ?? 'all') {
+                    'direct' => $query->whereColumn('deliverylogs.assigned_to', 'deliverylogs.logistichub_id'),
+                    'hub' => $query->whereColumn('deliverylogs.assigned_to', '!=', 'deliverylogs.logistichub_id'),
+                    default => $query,
+                })
+                ->indicateUsing(fn (array $data) => ($data['v'] ?? 'all') !== 'all' ? 'Going to: '.(['direct' => 'Direct', 'hub' => 'To hubs'][$data['v']] ?? '') : null),
+        ];
     }
 
-    public static function pendingCount(): int
+    /** Click a trip: its details on the side. */
+    public static function details(): Action
     {
-        return static::ready() ? TripOverride::where('status', 'pending')->count() : 0;
+        return Action::make('details')
+            ->label('Details')
+            ->icon('heroicon-o-ellipsis-horizontal')
+            ->iconButton()
+            ->slideOver()
+            ->modalWidth('lg')
+            ->modalHeading(fn (Deliverylog $record) => 'Trip '.$record->trip_number)
+            ->modalContent(fn (Deliverylog $record, $livewire) => view('filament.trips.list.details', ['trip' => $record,
+                'editUrl' => method_exists($livewire, 'getResource') ? $livewire::getResource()::getUrl('edit', ['record' => $record]) : null]))
+            ->modalSubmitAction(false)
+            ->modalCancelActionLabel('Close');
+    }
+
+    /** All / Planned / Loading / On the road / Done. */
+    public static function tabs(Builder $base): array
+    {
+        $loaded = fn ($w) => $w->select(DB::raw(1))->from('tripinvoices')->where('tripinvoices.is_loaded', true)
+            ->where(fn ($x) => $x->whereColumn('tripinvoices.deliverylog_id', 'deliverylogs.id')->orWhereColumn('tripinvoices.deliveryloghub_id', 'deliverylogs.id'));
+        $taken = Schema::hasColumn('deliverylogs', 'taken_at');
+        $q = [
+            'all' => fn (Builder $b) => $b,
+            'planned' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->whereNotExists($loaded),
+            'loading' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->whereExists($loaded),
+            'road' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNotNull('deliverylogs.taken_at'), fn ($x) => $x->whereRaw('1 = 0')),
+            'done' => fn (Builder $b) => $b->where('deliverylogs.is_active', false),
+        ];
+        $labels = ['all' => 'All', 'planned' => 'Planned', 'loading' => 'Loading', 'road' => 'On the road', 'done' => 'Done'];
+
+        return collect($q)->mapWithKeys(fn ($fn, $k) => [$k => Tab::make($labels[$k])
+            ->badge(fn () => $fn((clone $base))->count())
+            ->modifyQueryUsing(fn (Builder $query) => $fn($query))])->all();
     }
 }
-DISPATCH_FILE_END_6
+DISPATCH_FILE_END_14
+
+# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Deliverylogs/Pages/CreateDeliverylog.php
+mkdir -p 'app/Filament/Warehouse/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Warehouse/Resources/Deliverylogs/Pages/CreateDeliverylog.php' <<'DISPATCH_FILE_END_15'
+<?php
+
+namespace App\Filament\Warehouse\Resources\Deliverylogs\Pages;
+
+use App\Filament\Shared\Trips\NewTripRecord;
+use App\Filament\Warehouse\Pages\Hubroute;
+use App\Filament\Warehouse\Resources\Deliverylogs\DeliverylogResource;
+
+/** New trip by hand (board 44). */
+class CreateDeliverylog extends NewTripRecord
+{
+    protected static string $resource = DeliverylogResource::class;
+
+    protected static ?string $assignPage = Hubroute::class;
+}
+DISPATCH_FILE_END_15
+
+# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Deliverylogs/Pages/EditDeliverylog.php
+mkdir -p 'app/Filament/Warehouse/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Warehouse/Resources/Deliverylogs/Pages/EditDeliverylog.php' <<'DISPATCH_FILE_END_16'
+<?php
+
+namespace App\Filament\Warehouse\Resources\Deliverylogs\Pages;
+
+use App\Filament\Shared\Trips\EditsTrip;
+use App\Filament\Warehouse\Resources\Deliverylogs\DeliverylogResource;
+use App\Models\Tripinvoice;
+use App\Services\TripAssignment;
+use Filament\Resources\Pages\EditRecord;
+use Illuminate\Support\Facades\DB;
+
+class EditDeliverylog extends EditRecord
+{
+    use EditsTrip;
+
+    protected static string $resource = DeliverylogResource::class;
+
+    /** Truck on the trip before this save, so we only swap when it actually changed. */
+    protected ?int $previousTruckId = null;
+
+    protected function getRedirectUrl(): string
+    {
+        return $this->getResource()::getUrl('index');
+    }
+
+    protected function beforeSave(): void
+    {
+        $this->previousTruckId = $this->record->getOriginal('truck_id');
+    }
+
+    protected function afterSave(): void
+    {
+        DB::transaction(function (): void {
+            app(TripAssignment::class)->swapTruck($this->previousTruckId, $this->record->truck_id);
+
+            // Boxes on this trip now go to the (possibly new) destination hub.
+            Tripinvoice::where('deliverylog_id', $this->record->id)
+                ->update(['logistichub_id' => $this->record->assigned_to]);
+        });
+    }
+}
+DISPATCH_FILE_END_16
+
+# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Deliverylogs/Pages/ListDeliverylogs.php
+mkdir -p 'app/Filament/Warehouse/Resources/Deliverylogs/Pages'
+cat > 'app/Filament/Warehouse/Resources/Deliverylogs/Pages/ListDeliverylogs.php' <<'DISPATCH_FILE_END_17'
+<?php
+
+namespace App\Filament\Warehouse\Resources\Deliverylogs\Pages;
+
+use App\Filament\Shared\Trips\ListsTrips;
+use App\Filament\Shared\Widgets\TripBoard;
+use App\Filament\Warehouse\Resources\Deliverylogs\DeliverylogResource;
+use Filament\Resources\Pages\ListRecords;
+
+class ListDeliverylogs extends ListRecords
+{
+    use ListsTrips;
+
+    protected static string $resource = DeliverylogResource::class;
+
+    protected function getHeaderWidgets(): array
+    {
+        return [
+            TripBoard::make(['kind' => 'delivery', 'resource' => DeliverylogResource::class]),
+        ];
+    }
+
+    public function getWidgetData(): array
+    {
+        return ['activeCard' => data_get($this->tableFilters, 'board.value')];
+    }
+}
+DISPATCH_FILE_END_17
+
+# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Deliverylogs/RelationManagers/TripinvoicesRelationManager.php
+mkdir -p 'app/Filament/Warehouse/Resources/Deliverylogs/RelationManagers'
+cat > 'app/Filament/Warehouse/Resources/Deliverylogs/RelationManagers/TripinvoicesRelationManager.php' <<'DISPATCH_FILE_END_18'
+<?php
+
+namespace App\Filament\Warehouse\Resources\Deliverylogs\RelationManagers;
+
+use App\Filament\Actions\BulkPrintReceipts;
+use App\Filament\Exports\TripinvoiceExporter;
+use App\Filament\Tables\DeliveryAttemptColumns;
+use App\Filament\Tables\TripBoxes;
+use App\Filament\Tables\TruckSpotColumn;
+use App\Filament\Warehouse\Pages\Hubroute;
+use App\Models\Consolidator;
+use App\Models\Deliverylog;
+use App\Models\Invoice;
+use App\Models\Logistichub;
+use App\Models\Tripinvoice;
+use App\Services\TripAssignment;
+use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkAction;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\ExportAction;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TextInput;
+use Filament\Notifications\Notification;
+use Filament\Resources\RelationManagers\RelationManager;
+use Filament\Schemas\Schema;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Columns\Summarizers\Count;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\RecordActionsPosition;
+use Filament\Tables\Filters\Filter;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Grouping\Group;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Auth;
+
+class TripinvoicesRelationManager extends RelationManager
+{
+    protected static string $relationship = 'tripinvoices';
+
+    protected static ?string $title = TripBoxes::TITLE;
+
+    /** All / Loaded / Not loaded / Delivered / Problems (board 44b). */
+    public function getTabs(): array
+    {
+        return TripBoxes::tabs('is_loaded', fn () => $this->getRelationship()->getQuery());
+    }
+
+    public function form(Schema $schema): Schema
+    {
+        return $schema
+            ->components([
+                TextInput::make('trip_number')
+                    ->required()
+                    ->maxLength(255),
+            ]);
+    }
+
+    public function table(Table $table): Table
+    {
+        return $table
+            ->modifyQueryUsing(fn (Builder $query) => $query->withCount(['deliveryAttempts', 'deliveryReversals'])->with([...DeliveryAttemptColumns::eagerLoad(), 'invdata.consolidator:id,code,company_name', 'invdata.routearea', 'invdata.container', 'invoiceissue.boxissue', 'deliverylog']))
+            ->defaultGroup('invdata.receiver_name')
+            ->groups([
+                Group::make('invdata.receiver_name')
+                    ->label('Receiver Name'),
+                Group::make('invdata.boxtype')
+                    ->label('Box Type'),
+                Group::make('invdata.routearea.description')
+                    ->label('Route Area'),
+                Group::make('invdata.container.batch_no')
+                    ->label('Batch No'),
+                Group::make('invdata.receiver_barangay')
+                    ->label('Barangay'),
+                Group::make('invdata.receiver_city')
+                    ->label('City'),
+                Group::make('invdata.receiver_province')
+                    ->label('Province'),
+
+            ])
+            ->collapsedGroupsByDefault()
+            // ->poll('5s')
+            ->deferLoading()
+            ->recordTitleAttribute('id')
+            ->columns([
+                TruckSpotColumn::make(),
+                TextColumn::make('invdata.consolidator.company_name')
+                    ->label('Company'),
+                TextColumn::make('deliverylog.trip_number')
+                    ->label('Trip Number'),
+                //  ->searchable(),
+                TextColumn::make('invdata.invoice')
+                    ->sortable()
+                    ->searchable(isIndividual: true, isGlobal: false)
+                    ->label('Invoice No.'),
+                DeliveryAttemptColumns::column(),
+                TextColumn::make('problem')
+                    ->badge()
+                    ->color('danger')
+                    ->label('Problem')
+                    ->getStateUsing(fn ($record) => $record->invoiceissue->pluck('boxissue.issue_type')->filter()->unique()->join(', ') ?: null),
+                IconColumn::make('invdata.is_resolved')
+                    ->label('Resolved')
+                    ->icon(fn ($state) => $state ? 'heroicon-o-check-circle' : null)
+                    ->color('success'),
+                TextColumn::make('invdata.batchno')
+                    ->label('Batch No')
+                    ->sortable(),
+                TextColumn::make('invdata.is_priority')
+                    ->label('Priority')
+                    // ->badge()
+                    ->formatStateUsing(fn ($state) => $state ? 'PRIORITY' : null)
+                    ->color(fn ($state) => $state ? 'success' : null),
+                TextColumn::make('invdata.container.batch_year')
+                    ->label('Batch Year')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('invdata.sender_name')
+                    ->sortable()
+                    ->label('Sender'),
+                TextColumn::make('invdata.receiver_name')
+                    ->sortable()
+                    ->label('Receiver'),
+                TextColumn::make('invdata.receiver_address')
+                    ->label('Address'),
+                TextColumn::make('invdata.receiver_province')
+                    ->sortable()
+                    //   ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('Province'),
+                TextColumn::make('invdata.receiver_city')
+                    //     ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('City/Municipality'),
+                TextColumn::make('invdata.receiver_barangay')
+                    //        ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('Barangay'),
+                TextColumn::make('invdata.boxtype')
+                    ->label('Box Type')
+                    ->summarize(Count::make()->label('Total')),
+                // TextColumn::make('invoice.routearea.description')
+                //     ->label('Route Area'),
+                IconColumn::make('is_loaded')
+                    ->label('Loaded')
+                    ->color(fn (bool $state) => $state ? 'success' : 'danger')
+                    ->icon(fn (bool $state) => match ($state) {
+                        true => 'heroicon-o-check-circle',
+                        false => 'heroicon-o-x-circle',
+                    }),
+
+            ])->searchOnBlur()
+            ->persistSearchInSession()
+            ->persistColumnSearchesInSession()
+            ->filters([
+
+                Filter::make('is_loaded')
+                    ->label('Not Loaded')
+                    ->toggle()
+                    ->query(fn (Builder $query): Builder => $query->where('is_loaded', false)),
+                SelectFilter::make('company')
+                    ->label('Company')
+                    ->multiple()
+                    //  ->searchable()
+                    ->options(
+                        Consolidator::orderBy('company_name')
+                            ->pluck('company_name', 'code')
+                    )
+                    ->query(function ($query, array $data) {
+                        if (! $data['values']) {
+                            return;
+                        }
+
+                        $query->whereHas('invoice', function ($q) use ($data) {
+                            $q->whereIn('location_code', $data['values']);
+                        });
+                    }),
+
+            ])->deferFilters(false)
+            ->headerActions([
+                Action::make('Assign Invoice')
+                    ->label('+ Assign invoice')->color('warning')
+                    ->url(fn ($livewire) => Hubroute::getUrl(['ownerRecord' => $livewire->ownerRecord->getKey()])),
+                ExportAction::make()
+                    ->label('Export')
+                    ->exporter(TripinvoiceExporter::class)
+                    ->color('info')
+                    ->icon('heroicon-o-arrow-down-tray'),
+
+            ])
+            ->recordActions([
+                ActionGroup::make([
+                    DeliveryAttemptColumns::action(),
+                    DeliveryAttemptColumns::undoAction(),
+                    // Print Function
+                    Action::make('Priority')
+                        ->label('Mark as Priority')
+                        ->color('warning')
+                        ->icon(Heroicon::ExclamationTriangle)
+                        ->action(function ($record) {
+                            $record->invoice()->update([
+                                'is_priority' => true,
+                            ]);
+                            Notification::make()
+                                ->title('Invoice marked as priority')
+                                ->success()
+                                ->send();
+                        }),
+                    Action::make('Unpriority')
+                        ->label('Mark as Unpriority')
+                        ->color('danger')
+                        ->icon(Heroicon::ExclamationTriangle)
+                        ->action(function ($record) {
+                            $record->invoice()->update([
+                                'is_priority' => false,
+                            ]);
+                            Notification::make()
+                                ->title('Invoice marked as unpriority')
+                                ->success()
+                                ->send();
+                        }),
+                    Action::make('Print')
+                        ->label('Print')
+                        ->color('primary')
+                        ->icon('heroicon-o-printer')
+                        ->url(fn (Model $record) => route('invoicepdf', $record->invoice_id))
+                        ->openUrlInNewTab(),
+                    Action::make('Delete')
+                        ->label('Remove')
+                        ->action(function (Tripinvoice $record): void {
+                            try {
+                                app(TripAssignment::class)->removeFromDeliveryTrip($record);
+                            } catch (\DomainException $exception) {
+                                Notification::make()->title($exception->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            Notification::make()->title('Invoice removed from the trip')->success()->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('danger')
+                        ->icon('heroicon-o-trash'),
+
+                ]),
+
+            ], position: RecordActionsPosition::BeforeColumns)
+            ->toolbarActions([
+                BulkPrintReceipts::make(),
+                TripBoxes::priority(true),
+                TripBoxes::priority(false),
+                BulkActionGroup::make([
+                    // BulkAction::make('update_status')
+                    //     ->label('Update Status')
+                    //                         ->icon(Heroicon::DocumentArrowDown)
+                    //                         ->action(function (Collection $records): void {
+                    //                             // Transform records to array (only needed fields)
+                    //                            // dd($records);
+                    //                             $data = $records->map(function ($record) {
+                    //                                 return [
+                    //                                     'invoice' => $record->invoice,
+                    //                                 ];
+                    //                             })->toArray();
+
+                    //                             // Send DELETE request
+                    //                             // $response = Http::delete('https://apiconnector.test/api/status', [
+                    //                             //     'records' => $data
+                    //                             // ]);
+                    //                             $response = Http::send('DELETE', 'https://apiconnector.test/api/status', [
+                    //     'json' => [
+                    //         'records' => $data
+                    //     ]
+                    // ]);
+                    //                 //            dump($data);
+                    //                             // Debug response if needed
+                    //                             if ($response->failed()) {
+                    //                                 dd($response->body());
+                    //                             }
+
+                    //                             // Optional success feedback
+                    //                             Notification::make()
+                    //                                 ->title('Status updated successfully')
+                    //                                 ->success()
+                    //                                 ->send();
+                    //                         }),
+                    BulkAction::make('delete')
+                        ->label('Remove ')
+                        ->action(function ($records) {
+                            try {
+                                foreach ($records as $record) {
+                                    app(TripAssignment::class)->removeFromDeliveryTrip($record, returned: false);
+                                }
+                            } catch (\DomainException $exception) {
+                                Notification::make()->title($exception->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            Notification::make()
+                                ->title('Invoices removed from the trip')
+                                ->success()
+                                ->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('danger')
+                        ->icon('heroicon-o-trash'),
+                    BulkAction::make('Return')
+                        ->label('Return')
+                        ->icon(Heroicon::Backward)
+                        ->action(function ($records) {
+                            try {
+                                foreach ($records as $record) {
+                                    app(TripAssignment::class)->removeFromDeliveryTrip($record, returned: true);
+                                }
+                            } catch (\DomainException $exception) {
+                                Notification::make()->title($exception->getMessage())->danger()->send();
+
+                                return;
+                            }
+
+                            Notification::make()
+                                ->title('Invoices marked as returned')
+                                ->success()
+                                ->send();
+                        })
+                        ->requiresConfirmation()
+                        ->color('warning'),
+                    // BulkAction::make('Loaded')
+                    //     ->color('success')
+                    //     ->label('Mark as Loaded')
+                    //     ->icon(Heroicon::Truck)
+                    //     ->action(function ($records) {
+                    //         foreach ($records as $record) {
+                    //             $record->update([
+                    //                 'is_loaded' => 1,
+                    //             ]);
+                    //         }
+                    //         Notification::make()
+                    //             ->title('Invoice Loaded successfully')
+                    //             ->success()
+                    //             ->send();
+
+                    //         $tripcount = Tripinvoice::where('deliverylog_id', $record->deliverylog_id)->count();
+                    //         $totalloaded = Tripinvoice::where('deliverylog_id', $record->deliverylog_id)->where('is_loaded', true)->count();
+                    //         if ($totalloaded > 0) {
+                    //             if ($tripcount == $totalloaded) {
+                    //                 $Deliverydata = Deliverylog::find($record->deliverylog_id);
+                    //                 $Deliverydata->truck->update([
+                    //                     'is_assigned' => true,
+                    //                 ]);
+                    //                 $Deliverydata->update([
+                    //                     'is_current' => true,
+
+                    //                 ]);
+                    //             }
+                    //         }
+                    //     })
+
+                    BulkAction::make('Move')
+                        ->label('Move to Another Trip')
+                        ->icon(Heroicon::ArrowRight)
+                        ->color('info')
+                        ->schema([
+                            Select::make('deliverylog_id')
+                                ->label('Select Target Trip')
+                                ->searchable()
+                                ->options(function () {
+                                    return Deliverylog::where('is_active', true)
+                                        ->where('logistichub_id', Auth::user()->logistichub_id)
+                                        ->get()
+                                        ->mapWithKeys(function ($record) {
+                                            //    dd($record->logistichub->hub_name);
+                                            $assignTo = $record->assigned_to ?? 'N/A';
+                                            $going_to = Logistichub::where('id', $assignTo)->value('hub_name') ?? 'N/A';
+
+                                            return [
+                                                $record->id => "{$record->trip_number} | {$going_to}",
+                                            ];
+                                        });
+                                })
+                                ->required(),
+
+                        ])
+                        ->action(function (Collection $records, array $data) {
+
+                            $deliverylogdata = Deliverylog::find($data['deliverylog_id']);
+                            if ($this->ownerRecord->assigned_to == $deliverylogdata->assigned_to) {
+                                foreach ($records as $record) {
+                                    $record->update([
+                                        'deliverylog_id' => $data['deliverylog_id'],
+                                    ]);
+                                }
+                                Notification::make()
+                                    ->title('Invoices moved successfully')
+                                    ->success()
+                                    ->send();
+                            } else {
+                                Notification::make()
+                                    ->title('Cannot move invoices to a trip assigned to a different Hub')
+                                    ->danger()
+                                    ->send();
+                            }
+                            //   $recordIds = $records->pluck('id')->toArray();
+
+                            // Redirect to the move page with the selected record IDs
+                            //  redirect()->route('filament.pages.movetripinvoice', ['recordIds' => implode(',', $recordIds)]);
+                        }),
+                ]),
+            ]);
+    }
+}
+DISPATCH_FILE_END_18
+
+# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Deliverylogs/Tables/DeliverylogsTable.php
+mkdir -p 'app/Filament/Warehouse/Resources/Deliverylogs/Tables'
+cat > 'app/Filament/Warehouse/Resources/Deliverylogs/Tables/DeliverylogsTable.php' <<'DISPATCH_FILE_END_19'
+<?php
+
+namespace App\Filament\Warehouse\Resources\Deliverylogs\Tables;
+
+use App\Filament\Shared\Trips\TripActions;
+use App\Filament\Tables\TripBoardColumns;
+use App\Filament\Tables\TripList;
+use App\Filament\Warehouse\Pages\SeaShipments;
+use App\Filament\Warehouse\Pages\TripFuel;
+use App\Filament\Warehouse\Pages\TripStops;
+use App\Models\Deliverylog;
+use App\Models\Logistichub;
+use App\Models\Shipping\SeaShipment;
+use App\Models\Shipping\TruckReceipt;
+use App\Support\Fuel\Fuel;
+use App\Support\Shipping\Islands;
+use App\Support\Shipping\Shipments;
+use App\Support\Shipping\TruckReceive;
+use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteBulkAction;
+use Filament\Actions\EditAction;
+use Filament\Notifications\Notification;
+use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\ToggleColumn;
+use Filament\Tables\Enums\FiltersLayout;
+use Filament\Tables\Enums\RecordActionsPosition;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+
+class DeliverylogsTable
+{
+    public static function configure(Table $table): Table
+    {
+        return $table
+            // board 42: one clear row per trip; click a trip for its details on the side
+            ->recordUrl(null)
+            ->recordAction('details')
+            ->defaultSort('created_at', 'desc')
+            ->query(Deliverylog::query()->where('logistichub_id', '=', Auth::user()->logistichub_id))
+            ->modifyQueryUsing(fn (Builder $query) => TripBoardColumns::withProgress($query, 'delivery'))
+            ->columns([...TripList::columns(), ...collect([
+                TripActions::stageColumn(),
+
+                TripBoardColumns::status('delivery'),
+
+                TripBoardColumns::progress('delivery'),
+
+                // Partner hub by truck: "Received by Baguio · 2 missing" (Scan app · Receive truck).
+                TextColumn::make('hub_received')
+                    ->label('Hub received')
+                    ->badge()
+                    ->color(fn ($state) => str_contains((string) $state, 'missing') ? 'danger' : (str_contains((string) $state, 'Received') ? 'success' : 'warning'))
+                    ->visible(fn () => TruckReceive::ready())
+                    ->getStateUsing(function ($record) {
+                        $r = TruckReceipt::with('hub:id,hub_name')->where('deliverylog_id', $record->id)->get();
+
+                        return $r->isEmpty() ? null : $r->map(fn ($x) => $x->finished_at
+                            ? 'Received by '.($x->hub?->hub_name ?? 'hub').($x->missing ? ' · '.$x->missing.' missing' : '')
+                            : ($x->hub?->hub_name ?? 'Hub').' receiving…')->join(' / ');
+                    }),
+
+                TextColumn::make('truck_id')
+                    ->label('Truck')
+                    ->searchable(query: function ($query, $search) {
+                        return $query->whereHas('truck', function ($q) use ($search) {
+                            $q->where('plate_no', 'like', "%{$search}%");
+                        });
+                    })
+                    ->sortable()
+                    ->getStateUsing(function ($record) {
+                        return $record->truck ? $record->truck->plate_no : 'Truck not assigned';
+                    }),
+                TextColumn::make('vicheletype')
+                    ->label('Vichele Type/Size')
+                    ->getStateUsing(function ($record) {
+                        return $record->truck ? $record->truck->category : ' ';
+                    }),
+                TextColumn::make('trip_day')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->numeric()
+                    ->sortable(),
+                TextColumn::make('logistichub.hub_name')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('Logistic Hub/Location'),
+                TextColumn::make('Total Invoices')
+                    ->label('Total Invoices')
+                    ->badge()
+                    ->color('danger')
+                    ->getStateUsing(function ($record) {
+                        return $record->tripinvoices()->count();
+                    }),
+                TextColumn::make('Total Loaded')
+                    ->badge()
+                    ->color('success')
+                    ->label('Total Loaded')
+                    ->getStateUsing(function ($record) {
+                        return $record->tripinvoices()->whereHas('invoice', function ($query) {
+                            $query->where('is_loaded', 1);
+                        })->count();
+                    }),
+                TextColumn::make('Verified Invoices')
+                    ->label('Invoices Verified')
+                    ->badge()
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->color('info')
+                    ->getStateUsing(function ($record) {
+                        return $record->tripinvoices()->whereHas('invoice', function ($query) {
+                            $query->where('is_verified', 1);
+                        })->count();
+                        // return $record->tripinvoices->invoices->where('is_verified', 1)->count();
+                    }),
+                TextColumn::make('City')
+                    ->label('City')
+                    ->separator(',')
+                    ->color('primary')
+                    ->listWithLineBreaks()
+                    ->limitList(3)
+                    ->expandableLimitedList()
+                    ->getStateUsing(function ($record) {
+                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
+                        return DB::table('tripinvoices')
+                            ->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
+                            ->where('tripinvoices.deliverylog_id', $record->id)
+                            ->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
+                            ->distinct()->orderBy('invoices.receiver_city')->pluck('invoices.receiver_city');
+                        //   ->implode(" , ");
+                    }),
+                TextColumn::make('Province')
+                    ->label('Province')
+                    ->separator(',')
+                    ->color('primary')
+                    ->listWithLineBreaks()
+                    ->limitList(3)
+                    ->expandableLimitedList()
+                    ->getStateUsing(function ($record) {
+                        // only the distinct places, straight from the database (a trip can hold thousands of boxes)
+                        return DB::table('tripinvoices')
+                            ->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
+                            ->where('tripinvoices.deliverylog_id', $record->id)
+                            ->whereNotNull('invoices.receiver_province')->where('invoices.receiver_province', '!=', '')
+                            ->distinct()->orderBy('invoices.receiver_province')->pluck('invoices.receiver_province');
+                        //   ->implode(" , ");
+                    }),
+                IconColumn::make('is_lock')
+                    ->label('Lock Status')
+                    ->boolean()
+                    ->trueIcon(Heroicon::LockClosed)
+                    ->falseIcon(Heroicon::LockOpen)
+                    ->sortable()
+                    ->color(function ($state) {
+                        return $state ? 'danger' : 'success';
+                    }),
+
+                TextColumn::make('waybill_number')
+                    ->label('Waybill No. / Container No.')
+                    ->searchable()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->sortable(),
+                TextColumn::make('eta')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->label('ETA')
+                    ->date()
+                    ->sortable(),
+                TextColumn::make('departure_date')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->date()
+                    ->sortable(),
+                TextColumn::make('assigned_to')
+                    ->sortable()
+                    ->getStateUsing(function ($record) {
+                        return Logistichub::where('id', $record->assigned_to)->first()->hub_name;
+                    }),
+                TextColumn::make('user.full_name')
+                    ->label('Created By')
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->sortable(),
+
+                ToggleColumn::make('is_active')
+                    ->label('Is Active')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('created_at')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('updated_at')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+            ])->map(fn ($c) => $c->toggleable(isToggledHiddenByDefault: true))->all()])
+            ->filters([
+                ...TripList::filters(),
+                TripBoardColumns::filter('delivery'),
+                SelectFilter::make('assigned_to')
+                    ->label('Which hub')
+                    ->options(Logistichub::query()->pluck('hub_name', 'id'))
+                    ->searchable()
+                    ->preload(),
+            ])->deferFilters(false)
+            ->filtersLayout(FiltersLayout::AboveContent)->filtersFormColumns(5)
+            ->recordActions([
+                Action::make('stops')
+                    ->label('Stops & loading')
+                    ->icon('heroicon-o-map')
+                    ->button()
+                    ->color('gray')
+                    ->url(fn ($record): string => TripStops::getUrl(['trip' => $record->id])),
+                Action::make('seaShipment')
+                    ->label('Make it a sea shipment')
+                    ->icon('heroicon-o-globe-asia-australia')
+                    ->button()
+                    ->color('info')
+                    ->tooltip(fn ($record) => ($record->destination?->hub_name ?? 'This hub').' is reached by sea')
+                    ->visible(fn ($record): bool => Shipments::ready() && $record->is_active && $record->destination?->is_company
+                        && Islands::bySea($record->destination) && ! SeaShipment::where('deliverylog_id', $record->id)->exists())
+                    ->url(fn ($record): string => SeaShipments::getUrl(['trip' => $record->id])),
+                Action::make('fuel')
+                    ->label('Fuel')
+                    ->icon('heroicon-o-beaker')
+                    ->button()
+                    ->color('gray')
+                    ->visible(fn (): bool => Fuel::ready())
+                    ->url(fn ($record): string => TripFuel::getUrl(['trip' => $record->id])),
+                ActionGroup::make([
+                    Action::make('locktrip')
+                        ->requiresConfirmation()
+                        ->label(function ($record) {
+                            return $record->is_lock ? 'Unlock Trip' : 'Lock Trip';
+                        })
+                        ->color('info')
+                        ->icon(function ($record) {
+                            return $record->is_lock ? Heroicon::LockOpen : Heroicon::LockClosed;
+                        })
+                        // locking is on the Trip page (when ready); here a super admin can only unlock
+                        ->hidden(function ($record) {
+                            return ! $record->is_lock || ! Auth::user()->is_admin;
+                        })
+                        ->action(function ($record) {
+                            $record->update([
+                                'is_lock' => ! $record->is_lock,
+                            ]);
+
+                            Notification::make()
+                                ->title($record->is_lock ? 'Trip Locked Successfully' : 'Trip Unlocked Successfully')
+                                ->success()
+                                ->send();
+                        }),
+                    TripActions::release(),
+                    TripActions::crew(),
+                    EditAction::make()
+                        ->label('Edit')
+                        ->icon(Heroicon::PencilSquare)
+                        ->hidden(function ($record) {
+                            return $record->is_lock;
+                        }),
+
+                ]),
+                TripList::details(),
+            ], position: RecordActionsPosition::AfterColumns)
+            ->toolbarActions([
+                BulkActionGroup::make([
+                    //    DeleteBulkAction::make(),
+
+                ]),
+            ]);
+    }
+}
+DISPATCH_FILE_END_19
 
 # ---------------------------------------------------------------- resources/css/filament/admin/theme.css
 mkdir -p 'resources/css/filament/admin'
-cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_7'
+cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_20'
 @import '../../../../vendor/filament/filament/resources/css/theme.css';
 
 /* The Archivo font comes with the app (no internet needed): pages open fast even on a slow connection. */
@@ -6185,643 +7370,281 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-tp__check.is-ok i { background: #e6f6ef; color: #17895e; }
 .ds-tp__check > span { display: flex; flex-direction: column; }
 .ds-tp__check small { color: #6b7b88; font-size: 12px; }
-DISPATCH_FILE_END_7
+.ds-tl__trip { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.ds-tl__trip b { font-size: 15px; color: #0e2433; }
+.ds-tl__trip small, .ds-tl__goes small, .ds-tl__truck small, .ds-tl__boxes small, .ds-tl__status small { color: #6b7b88; font-size: 12px; }
+.ds-tl__made { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.ds-tl__made.is-ai { background: #fff0d1; color: #8a5a00; }
+.ds-tl__made.is-plan { background: #e6f4ff; color: #1d5f99; }
+.ds-tl__made.is-changed { background: #efeafd; color: #5b3fc4; }
+.ds-tl__made.is-manual { background: #eef1f4; color: #33424e; }
+.ds-tl__goes { display: flex; flex-direction: column; gap: 2px; min-width: 180px; }
+.ds-tl__goes > span { display: flex; align-items: center; gap: 6px; }
+.ds-tl__goes i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ds-tl__truck { display: flex; align-items: center; gap: 8px; }
+.ds-tl__truck > i { width: 32px; height: 32px; border-radius: 50%; background: #eef1f4; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; font-style: normal; flex: none; }
+.ds-tl__truck > span { display: flex; flex-direction: column; }
+.ds-tl__boxes { display: flex; flex-direction: column; gap: 5px; min-width: 190px; }
+.ds-tl__bar { height: 8px; border-radius: 999px; background: #e8ecef; display: flex; overflow: hidden; }
+.ds-tl__bar i { background: #17895e; }
+.ds-tl__bar i.is-l { background: #8fd3b4; }
+.ds-tl__status { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.ds-tl__pill { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; background: #eef1f4; color: #33424e; }
+.ds-tl__pill.is-planned, .ds-tl__pill.is-ready { background: #eef6ff; color: #1d5f99; }
+.ds-tl__pill.is-loading, .ds-tl__pill.is-back { background: #fff4d6; color: #8a5a00; }
+.ds-tl__pill.is-road { background: #e6f4ff; color: #1d5f99; }
+.ds-tl__pill.is-closed { background: #e6f6ef; color: #17895e; }
+.ds-tl__det { display: flex; flex-direction: column; gap: 14px; }
+.ds-tl__detpills { display: flex; gap: 6px; }
+.ds-tl__how { display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 14px; background: #fff8e1; }
+.ds-tl__how.is-manual { background: #f6f8fa; }
+.ds-tl__how > span { display: flex; gap: 8px; font-size: 13px; color: #33424e; }
+.ds-tl__how em { width: 18px; flex: none; font-style: normal; }
+.ds-tl__facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ds-tl__facts > span { display: flex; flex-direction: column; padding: 10px 12px; border-radius: 12px; background: #f6f8fa; }
+.ds-tl__facts small { color: #6b7b88; font-size: 12px; }
+.ds-tl__facts b { font-size: 14px; }
+.ds-tl__cities { display: flex; flex-direction: column; gap: 6px; }
+.ds-tl__cities > span { display: flex; flex-wrap: wrap; gap: 6px; }
+.ds-tl__cities i { height: 28px; padding: 0 10px; border-radius: 999px; background: #eef6ff; color: #1d5f99; font-size: 13px; font-weight: 700; font-style: normal; display: flex; align-items: center; }
+.ds-tl__btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.ds-tl__hint { color: #6b7b88; font-size: 12px; }
+.ds-tl__no { font-size: 15px; font-weight: 800; color: #0e2433; text-decoration: none; }
+.ds-tl__no:hover { color: #1d6fb8; text-decoration: underline; }
 
-# ---------------------------------------------------------------- resources/views/filament/scan/app.blade.php
-mkdir -p 'resources/views/filament/scan'
-cat > 'resources/views/filament/scan/app.blade.php' <<'DISPATCH_FILE_END_8'
-@php
-    $ring = fn (int $done, int $total, int $len = 289) => $len - ($total > 0 ? round($len * min($done, $total) / $total) : 0);
-    $condOrder = array_keys($conditions);
-@endphp
-<x-filament-panels::page>
-<div class="ds-sa" x-data x-on:scan-app-result.window="if (navigator.vibrate) navigator.vibrate($event.detail.status === 'success' ? 60 : [80, 60, 80])">
+/* ── Part 22e · New trip and Edit trip (boards 44, 44b) ─────────────────────────────── */
+.ds-et__head { display: flex; flex-direction: column; gap: 6px; }
+.ds-et__head .ds-te__link { font-size: 13px; font-weight: 700; text-decoration: none; }
+.ds-et__line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ds-et__line .ds-tl__made { height: 26px; font-size: 12px; padding: 0 10px; }
+.ds-et__tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.ds-et__tile { gap: 2px; padding: 12px 16px; }
+.ds-et__tile small { color: #6b7b88; font-size: 13px; }
+.ds-et__tile b { font-size: 24px; font-weight: 900; letter-spacing: -0.01em; }
+.ds-et__tile.is-ok b { color: #17895e; }
+.ds-et__tile.is-bad b { color: #c0392b; }
+.ds-et__tile.is-warn b { color: #8a5a00; }
+@media (max-width: 900px) { .ds-et__tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.dark .ds-et__tile small { color: #9aa7b2; }
 
-    {{-- ============================== start ============================== --}}
-    @if ($screen === 'home')
-        <section class="ds-sa__screen ds-sa__home" wire:key="home">
-            <header class="ds-sa__hello">
-                <span><small>{{ $place }}</small><strong>{{ $greeting }}, {{ $firstName }}</strong></span>
-                <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: 'scan-tips' })" aria-label="Help">?</button>
-                <span class="ds-sa__avatar">{{ $initials }}</span>
-            </header>
+.ds-nt { display: flex; flex-direction: column; gap: 18px; }
+.ds-nt__top { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; }
+.ds-nt__top .ds-te__link { text-decoration: none; }
+.ds-nt__plan { height: 40px; padding: 0 16px; border-radius: 10px; font-weight: 800; background: #fff4d6; color: #8a5a00; display: inline-flex; align-items: center; text-decoration: none; }
+.ds-nt__grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+.ds-nt__steps { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.ds-nt__card { gap: 14px; padding: 20px; }
+.ds-nt__h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ds-nt__h i { width: 26px; height: 26px; border-radius: 999px; background: #0e2433; color: #fff; font-style: normal; font-size: 13px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
+.ds-nt__h b { font-size: 17px; }
+.ds-nt__h small { color: #6b7b88; font-size: 13px; }
+.ds-nt__two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ds-nt__two label, .ds-nt__when label { display: flex; flex-direction: column; gap: 6px; font-weight: 700; }
+.ds-nt__two label > small, .ds-nt__when label > small { color: #6b7b88; font-size: 13px; }
+.ds-nt__opt { display: flex; gap: 12px; align-items: center; text-align: left; padding: 14px 16px; border: 0; border-radius: 14px; background: #f6f8fa; box-shadow: inset 0 0 0 1px #e1e7ec; cursor: pointer; color: #0e2433; }
+.ds-nt__opt em { font-style: normal; font-size: 22px; width: 40px; height: 40px; border-radius: 12px; background: #fff; display: flex; align-items: center; justify-content: center; flex: none; }
+.ds-nt__opt span { display: flex; flex-direction: column; gap: 2px; }
+.ds-nt__opt small { color: #6b7b88; font-size: 13px; }
+.ds-nt__opt.is-on { background: #eef6ff; box-shadow: inset 0 0 0 2px #1d6fb8; }
+.ds-nt__chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.ds-nt__chip { height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: #f1f4f6; color: #33424e; font-weight: 700; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.ds-nt__chip i { width: 10px; height: 10px; border-radius: 3px; }
+.ds-nt__chip.is-on { background: #0e2433; color: #fff; }
+.ds-nt__trucks { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.ds-nt__truck { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 12px 14px; border: 0; border-radius: 14px; background: #f6f8fa; box-shadow: inset 0 0 0 1px #e1e7ec; cursor: pointer; color: #0e2433; }
+.ds-nt__truck small { color: #6b7b88; font-size: 12px; }
+.ds-nt__truck.is-on { background: #eef6ff; box-shadow: inset 0 0 0 2px #1d6fb8; }
+.ds-nt__truck.is-off { opacity: .5; cursor: not-allowed; }
+.ds-nt__trow { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.ds-nt__trow em { font-style: normal; font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: #eef1f4; color: #33424e; white-space: nowrap; }
+.ds-nt__trow em.is-free { background: #e6f6ef; color: #17895e; }
+.ds-nt__trow em.is-busy { background: #fff4d6; color: #8a5a00; }
+.ds-nt__crew { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-nt__when { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 14px; align-items: start; }
+.ds-nt__field { display: flex; flex-direction: column; gap: 4px; }
+.ds-nt__field em { font-style: normal; font-size: 12px; font-weight: 700; }
+.ds-nt__field em.is-ok { color: #17895e; }
+.ds-nt__field em.is-bad { color: #c0392b; }
+.ds-nt__err { color: #c0392b; font-weight: 700; }
+.ds-nt__sum { gap: 10px; padding: 20px; position: sticky; top: 84px; }
+.ds-nt__sumh { font-size: 17px; }
+.ds-nt__row { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; padding: 4px 0; border-bottom: 1px solid #eef1f4; }
+.ds-nt__row > span { color: #6b7b88; }
+.ds-nt__row b { text-align: right; }
+.ds-nt__space { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; }
+.ds-nt__space small { color: #6b7b88; font-size: 12px; }
+.ds-nt__go, .ds-nt__only { height: 44px; border: 0; border-radius: 12px; font-weight: 800; font-size: 15px; cursor: pointer; }
+.ds-nt__go { background: #e5b94a; color: #0e2433; }
+.ds-nt__only { background: #fff; box-shadow: inset 0 0 0 1px #dfe5ea; color: #33424e; }
+.ds-nt__go:disabled, .ds-nt__only:disabled { opacity: .6; }
+.ds-nt__cancel { text-align: center; color: #6b7b88; font-weight: 700; text-decoration: none; font-size: 14px; }
+@media (max-width: 1100px) { .ds-nt__grid { grid-template-columns: 1fr; } .ds-nt__sum { position: static; } .ds-nt__when, .ds-nt__two { grid-template-columns: 1fr; } }
+.dark .ds-nt__opt, .dark .ds-nt__truck, .dark .ds-nt__chip { background: rgb(255 255 255 / .06); color: inherit; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .1); }
+.dark .ds-nt__opt.is-on, .dark .ds-nt__truck.is-on { box-shadow: inset 0 0 0 2px #5aa7e6; }
+.dark .ds-nt__chip.is-on { background: #fff; color: #0e2433; }
+.dark .ds-nt__row { border-color: rgb(255 255 255 / .08); }
+DISPATCH_FILE_END_20
 
-            <div class="ds-sa__today">
-                <span class="ds-sa__ring">
-                    <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring(min($today['scans'], 500), 500) }}"/></svg>
-                    <span><strong>{{ $today['scans'] }}</strong><small>today</small></span>
-                </span>
-                <dl>
-                    <dt>Boxes scanned</dt><dd>{{ number_format($today['scans']) }}</dd>
-                    <dt>Photos</dt><dd>{{ number_format($today['photos']) }}</dd>
-                    <dt>Problems</dt><dd class="is-bad">{{ $today['problems'] }}</dd>
-                </dl>
-            </div>
-
-            @if ($modes)
-                <p class="ds-sa__label">Start scanning</p>
-                <div class="ds-sa__list">
-                    @foreach ($modes as $key => $m)
-                        <button type="button" class="ds-sa__row" wire:click="open('{{ $key }}')">
-                            <span class="ds-sa__chip">@include('filament.scan.icon', ['name' => $m['icon']])</span>
-                            <span class="ds-sa__rowtext"><strong>{{ $m['label'] }}</strong><small>{{ $m['sub'] }}</small></span>
-                            @php($w = $waiting[$key] ?? 0)
-                            <span @class(['ds-sa__waiting', 'is-none' => ! $w])>{{ $w ? $w.' waiting' : 'All done' }}</span>
-                            <span class="ds-sa__chev" aria-hidden="true">›</span>
-                        </button>
-                    @endforeach
-                </div>
-            @else
-                <div class="ds-sa__note">Your account can't scan here. Ask the office to set your account to Warehouse or Company.</div>
-            @endif
-
-            <footer class="ds-sa__foot">
-                <span class="ds-sa__online"><i></i>Online · every scan is saved</span>
-                <span class="ds-sa__footlinks">
-                    <button type="button" class="ds-pwa-install" onclick="window.dsInstallApp && window.dsInstallApp()">Install app</button>
-                    <form method="POST" action="{{ filament()->getLogoutUrl() }}">@csrf<button type="submit">Sign out</button></form>
-                </span>
-            </footer>
-        </section>
-    @endif
-
-    {{-- ============================== pick ============================== --}}
-    @if ($screen === 'pick' && $def)
-        <section class="ds-sa__screen ds-sa__pick" wire:key="pick-{{ $this->mode }}">
-            <button type="button" class="ds-sa__pill" wire:click="home"><span aria-hidden="true">‹</span> Back</button>
-            <header class="ds-sa__title ds-sa__title--help"><span><small>{{ $def['label'] }}</small><strong>Choose the {{ $def['kind'] }}</strong></span><button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button></header>
-
-            @forelse ($choices as $i => $c)
-                <button type="button" @class(['ds-sa__choice', 'is-finished' => $c['finished']]) style="animation-delay: {{ $i * 50 }}ms" wire:click="pick({{ $c['id'] }})" wire:key="c-{{ $c['id'] }}">
-                    <span class="ds-sa__choicetext">
-                        <strong>{{ $c['name'] }}</strong>
-                        @if ($c['sub'])<small>{{ $c['sub'] }}</small>@endif
-                        <small class="is-num">{{ $c['done'] }} of {{ $c['total'] }} scanned{{ $c['finished'] ? (($c['active'] ?? true) ? ' · finished' : ' · closed') : '' }}</small>
-                    </span>
-                    <span class="ds-sa__ring is-small">
-                        <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring($c['done'], $c['total']) }}"/></svg>
-                        <span><b>{{ $c['total'] ? round($c['done'] / $c['total'] * 100) : 0 }}%</b></span>
-                    </span>
-                </button>
-            @empty
-                <div class="ds-sa__note">Nothing left to scan for {{ strtolower($def['label']) }}. Everything open is 100% scanned.</div>
-            @endforelse
-
-            @if ($finishedCount)
-                <button type="button" class="ds-sa__more" wire:click="toggleFinished">
-                    {{ $showFinished ? 'Hide finished' : 'Show finished ('.$finishedCount.')' }}
-                </button>
-            @endif
-        </section>
-    @endif
-
-    {{-- ============================== scan ============================== --}}
-    @if ($screen === 'scan' && $def)
-        <section class="ds-sa__screen ds-sa__scan" wire:key="scan-{{ $this->mode }}-{{ $choice }}">
-            @if ($aiFlag)
-                <div class="ds-sa__aiflag" wire:key="aiflag-{{ $aiFlag->id }}">
-                    <span class="ds-sa__aibadge">AI</span>
-                    <span><b>{{ $aiFlag->invoice }} looks {{ strtolower($aiFlag->label()) }}?</b><small>{{ $aiFlag->note }}</small></span>
-                    <button type="button" wire:click="aiFlagAnswer({{ $aiFlag->id }}, true)">Yes, mark it</button>
-                    <button type="button" class="is-plain" wire:click="aiFlagAnswer({{ $aiFlag->id }}, false)">It's fine</button>
-                </div>
-            @elseif ($aiPending)
-                <span wire:poll.8s class="hidden"></span>
-            @endif
-            <div class="ds-sa__cam" wire:ignore
-                 x-data="barcodeScanner(@js(['method' => 'scan', 'formats' => ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'itf', 'qr_code'], 'autoStart' => true, 'continuous' => true, 'cooldown' => 2500, 'beep' => true]))">
-                <video x-ref="video" playsinline muted autoplay></video>
-                <div class="ds-sa__frame" x-bind:class="{ 'is-hit': flash }"><i></i><i></i><i></i><i></i><span x-show="scanning" class="ds-sa__sweep"></span></div>
-                <p class="ds-sa__camtext" x-show="loading" x-cloak>Starting camera…</p>
-                <p class="ds-sa__camtext" x-show="! scanning && ! loading && ! error">Camera is off · tap the round button</p>
-                <p class="ds-sa__camtext is-error" x-show="error" x-text="error" x-cloak></p>
-                <p class="ds-sa__camtext is-hint" x-show="hint && ! error" x-text="hint" x-cloak></p>
-
-                <div class="ds-sa__controls">
-                    <label class="ds-sa__type">
-                        <input type="text" x-model="manualCode" x-on:keydown.enter.prevent="submitManual()" placeholder="Type or use a handheld scanner" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go" aria-label="Box number">
-                        <button type="button" x-on:click="submitManual()" aria-label="Find">→</button>
-                    </label>
-                    <div class="ds-sa__buttons">
-                        <button type="button" class="ds-sa__round" x-show="torchSupported && scanning" x-on:click="toggleTorch()" x-bind:class="{ 'is-on': torchOn }" aria-label="Flashlight" x-cloak>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6l-1 6h-4zM10 8h4v12a2 2 0 0 1-4 0z"/></svg>
-                        </button>
-                        <button type="button" class="ds-sa__shutter" x-on:click="toggle()" x-bind:aria-label="scanning ? 'Stop camera' : 'Start camera'">
-                            <span x-bind:class="{ 'is-live': scanning }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></span>
-                        </button>
-                        <button type="button" class="ds-sa__round is-text" wire:click="finish">Done</button>
-                    </div>
-                </div>
-            </div>
-
-            <header class="ds-sa__bar">
-                <button type="button" class="ds-sa__back" wire:click="back" aria-label="Back">‹</button>
-                <span class="ds-sa__bartext"><small>{{ $def['label'] }}</small><strong>{{ $target['name'] ?? '' }}{{ ! empty($target['sub']) ? ' · '.$target['sub'] : '' }}</strong></span>
-                <span class="ds-sa__ring is-tiny">
-                    <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring($progress['loaded'] ?? 0, $progress['total'] ?? 0) }}"/></svg>
-                </span>
-                <span class="ds-sa__count"><strong>{{ $progress['loaded'] ?? 0 }}</strong><small>of {{ $progress['total'] ?? 0 }}</small>@if ($space)<small class="ds-sa__space">{{ \App\Support\BoxSizes::fmt($space['loaded']) }}{{ $space['cap'] ? ' / '.$space['cap'] : '' }} space</small>@endif</span>
-                <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button>
-            </header>
-
-            @if (count($team) > 1)
-                <div class="ds-sx__team" aria-label="Who scanned">
-                    @foreach (array_slice($team, 0, 4) as $m)<span @class(['is-me' => $m['me']])>{{ $m['name'] }} <b>{{ $m['n'] }}</b></span>@endforeach
-                </div>
-            @endif
-
-            @if ($this->mode === 'unload' && $trucks)
-                @foreach ($trucks as $tk)
-                    <div class="ds-sx__here"><b>🚚 Truck to {{ $tk['to'] }} is here</b><span>{{ $tk['onTruck'] }} on truck</span></div>
-                @endforeach
-            @endif
-
-            @if (! $status && $loadNext && $loadNext['stop'])
-                @include('filament.partials.load-next', ['next' => $loadNext, 'dark' => true])
-            @endif
-
-            @if (! $status && ! $bypass && $cityTopUp)
-                <div class="ds-sx__citytop" wire:key="citytop-{{ $cityTopUp['key'] }}">
-                    <b>✦ Room for {{ $cityTopUp['room'] }} more boxes</b>
-                    <span>{{ $cityTopUp['same'] ? 'Same way' : 'Next province' }}: <b>{{ $cityTopUp['city'] }}, {{ $cityTopUp['province'] }}</b> · {{ $cityTopUp['boxes'] }} {{ Str::plural('box', $cityTopUp['boxes']) }}{{ $cityTopUp['days'] ? ', '.$cityTopUp['days'].' '.Str::plural('day', $cityTopUp['days']).' old' : '' }}.@if ($cityTopUp['section']) In section <b>{{ $cityTopUp['section'] }}</b>.@endif</span>
-                    <button type="button" class="ds-sa__primary" wire:click="cityTopUpAdd(@js($cityTopUp['key']))">Scan them now</button>
-                    <button type="button" class="ds-sa__secondary" wire:click="cityTopUpSkip">No thanks</button>
-                </div>
-            @endif
-
-            @if ($bypass)
-                <div class="ds-sa__sheet is-warn" wire:key="bypass-{{ $bypass['code'] }}">
-                    <span class="ds-sa__grab"></span>
-                    @if ($bypass['need'] === 'office')
-                        <p class="ds-sa__msg"><b>{{ $bypass['title'] }}: office only.</b> Ask the office to allow {{ $bypass['code'] }}. Keep the box aside until they answer.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="askOffice">Ask the office</button>
-                    @else
-                        <span class="ds-sa__hit"><span><small class="ds-ld__kicker">{{ $bypass['title'] }} · load anyway</small><strong>{{ $bypass['code'] }}</strong></span></span>
-                        <p class="ds-sa__msg"><b>Why? (the office sees this)</b></p>
-                        <div class="ds-sx__reasons">@foreach ($bypassReasons as $r)<button type="button" wire:click="bypassWith(@js($r))">{{ $r }}</button>@endforeach</div>
-                    @endif
-                    <button type="button" class="ds-sa__secondary" wire:click="cancelBypass">Cancel</button>
-                </div>
-            @elseif ($status === 'success' && $box)
-                <div class="ds-sa__sheet is-ok" wire:key="ok-{{ $invoiceId }}-{{ $sessionScans }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit">
-                        <span class="ds-sa__mark is-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
-                        <span><strong>{{ $box->invoice }}</strong><small>{{ $def['ok'] }}</small></span>
-                        @if ($boxSize && $boxSize['space'] != 1)<em class="ds-sa__size">{{ $boxSize['name'] }} · takes {{ \App\Support\BoxSizes::fmt($boxSize['space']) }} space</em>@elseif ($box->boxtype)<em>{{ $box->boxtype }}</em>@endif
-                    </div>
-                    @if ($this->mode === 'count')<p class="ds-sa__msg">{{ $message }}</p>@endif
-                    @if ($route)
-                        <div @class(['ds-sx__tile', 'is-truck' => ($route['kind'] ?? '') === 'truck']) style="--sx: {{ $route['color'] ?? '#1d6fb8' }}">
-                            <small>{{ match ($route['kind'] ?? '') { 'truck' => 'Carry this box to', 'wrong' => 'Careful', default => 'Put this box in' } }}</small>
-                            <strong>{{ ($route['kind'] ?? '') === 'truck' ? 'TRUCK' : $route['code'] }}</strong>
-                            <span>{{ ($route['kind'] ?? '') === 'truck' ? $route['name'].(! empty($route['plate']) ? ' · '.$route['plate'] : '') : $route['name'] }}</span>
-                            @if (($route['kind'] ?? '') === 'truck')<em>✓ Already loaded on trip {{ $route['trip'] }}. No need to scan it again.</em>@endif
-                            @if (! empty($route['why']))<em>{{ $route['why'] }}</em>@endif
-                            @if (! empty($route['pending']))<em>Then scan the QR on section {{ $route['code'] }}.</em>@endif
-                        </div>
-                        @if (($route['kind'] ?? '') === 'truck')
-                            <button type="button" class="ds-sx__link" wire:click="putInSection">Put in section instead</button>
-                        @endif
-                    @endif
-                    @if ($setInfo)
-                        <div @class(['ds-sx__set', 'is-'.$setInfo['kind']])>
-                            <span><b>{{ $setInfo['name'] }}</b> · box {{ $setInfo['n'] }} of {{ $setInfo['of'] }}</span>
-                            <span class="ds-sx__dots">@for ($i = 1; $i <= min(12, $setInfo['of']); $i++)<i @class(['is-on' => $i <= $setInfo['n']])></i>@endfor</span>
-                            <small>{{ $setInfo['text'] }}</small>
-                            @if (! empty($setInfo['rows']))
-                                <ul class="ds-sx__setrows">@foreach ($setInfo['rows'] as $sr)<li><span>{{ $sr['i'] }}</span>{{ $sr['t'] }}</li>@endforeach</ul>
-                            @endif
-                            @foreach ($setInfo['add'] ?? [] as $sa)
-                                <button type="button" class="ds-sx__setadd" wire:click="addSetBox({{ $sa['id'] }})">Bring {{ $sa['invoice'] }} from section {{ $sa['section'] ?? '?' }} · add to truck</button>
-                            @endforeach
-                        </div>
-                    @endif
-                    @if ($spot)
-                        <div class="ds-ld__spot is-{{ $spot['zone'] }}"><strong>{{ \App\Models\Maps\TripStop::ZONES[$spot['zone']] ?? '' }}</strong><span>{{ ! empty($spot['hub']) ? $spot['hub'].' (stop '.$spot['stop'].')' : 'Stop '.$spot['stop'] }} · {{ ['front' => 'deep inside, next to the cab', 'middle' => 'in the middle', 'back' => 'near the door'][$spot['zone']] ?? '' }}</span></div>
-                    @endif
-                    <div class="ds-sa__who">
-                        <span>{{ mb_strtoupper(mb_substr($box->receiver_name ?? '?', 0, 2)) }}</span>
-                        <span><strong>{{ \Illuminate\Support\Str::title($box->receiver_name) }}</strong><small>{{ collect([$box->receiver_barangay, $box->receiver_city])->filter()->map(fn ($p) => \Illuminate\Support\Str::title($p))->join(', ') }}</small></span>
-                    </div>
-
-                    @if ($this->photosOn())
-                        @php($ci = max(0, (int) array_search($condition ?? 'good', $condOrder, true)))
-                        <div class="ds-sa__seg" role="group" aria-label="How does the box look?">
-                            <span class="ds-sa__segthumb is-{{ $condition ?? 'good' }}" style="left: calc(4px + {{ $ci }} * (100% - 8px) / 4)"></span>
-                            @foreach ($conditions as $key => $label)
-                                <button type="button" wire:click="setCondition('{{ $key }}')" @class(['is-on' => ($condition ?? 'good') === $key]) aria-pressed="{{ ($condition ?? 'good') === $key ? 'true' : 'false' }}"><i class="is-{{ $key }}"></i>{{ $label }}</button>
-                            @endforeach
-                        </div>
-                        @if (in_array($condition, ['damaged', 'wet', 'open'], true))
-                            <input type="text" class="ds-sa__note-in" wire:model.blur="note" maxlength="250" placeholder="What is wrong? (optional)" aria-label="What is wrong?">
-                        @endif
-
-                        <div class="ds-sa__photos"
-                             x-data="{ busy: false, failed: false, pct: 0,
-                                take() { this.failed = false; this.$refs.file.value = ''; this.$refs.file.click() },
-                                async send(e) {
-                                    const file = e.target.files[0]; if (! file) return;
-                                    this.busy = true; this.pct = 0; let out = file;
-                                    out = window.dsShrinkPhoto ? await window.dsShrinkPhoto(file) : file;
-                                    $wire.upload('boxPhoto', out, () => $wire.saveBoxPhoto().then(() => { this.busy = false }), () => { this.busy = false; this.failed = true }, (ev) => { this.pct = ev.detail.progress });
-                                } }">
-                            <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
-                            @foreach ($shots as $shot)
-                                <a href="{{ $shot->url() }}" target="_blank" class="ds-sa__shot"><img src="{{ $shot->url() }}" alt="Photo {{ $loop->iteration }}"></a>
-                            @endforeach
-                            <button type="button" class="ds-sa__addphoto" x-on:click="take()" x-bind:disabled="busy">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-                                <span x-show="! busy">{{ $shots->isEmpty() ? 'Add photo · optional' : 'Add another' }}</span>
-                                <span x-show="busy" x-cloak>Saving… <span x-text="pct + '%'"></span></span>
-                            </button>
-                            <p class="ds-sa__err" x-show="failed" x-cloak>The photo did not upload. Try again.</p>
-                        </div>
-                    @endif
-                    <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
-                </div>
-            @elseif ($status === 'success' && $route)
-                <div class="ds-sa__sheet is-ok" wire:key="placed-{{ $sessionScans }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sx__tile" style="--sx: {{ $route['color'] ?? '#1d6fb8' }}"><small>Saved in</small><strong>{{ $route['code'] }}</strong><span>{{ $route['name'] }}</span></div>
-                    <p class="ds-sa__msg">{{ $message }}</p>
-                    <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
-                </div>
-            @elseif ($status === 'warning' && $wrongHub)
-                <div class="ds-sa__sheet is-bad" wire:key="wronghub-{{ $sessionScans }}-{{ $wrongHub['code'] }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit is-shake">
-                        <span class="ds-sa__mark is-bad">⛔</span>
-                        <span><small class="ds-ld__kicker">{{ ['city' => 'Other city', 'wh' => 'Not for '.($wrongHub['trip'] ?? ''), 'full' => 'Truck full', 'hub' => 'Not for this trip'][$wrongHub['kind'] ?? ''] ?? 'Wrong hub' }}</small><strong>{{ ($wrongHub['kind'] ?? null) === 'full' ? $wrongHub['code'].' does not fit' : $wrongHub['code'].' is for '.$wrongHub['for'] }}</strong></span>
-                    </div>
-                    @if (($wrongHub['kind'] ?? null) === 'full')
-                        <p class="ds-sa__msg">{{ $wrongHub['for'] }}. This box takes {{ $wrongHub['space'] }} space: it waits for the next {{ $wrongHub['province'] }} trip. Put it back{{ $wrongHub['section'] !== '—' ? ' in section '.$wrongHub['section'] : '' }}.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">It still fits · load anyway</button>
-                    @elseif (($wrongHub['kind'] ?? null) === 'wh')
-                        <p class="ds-sa__msg">{{ $wrongHub['for'] }} is delivered from {{ $wrongHub['home'] }}. Not loaded: it stays here{{ $wrongHub['section'] !== '—' ? ', section '.$wrongHub['section'] : '' }}.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">The office says load it</button>
-                    @elseif (($wrongHub['kind'] ?? null) === 'hub')
-                        <p class="ds-sa__msg">{{ $wrongHub['for'] }} goes {{ str_contains($wrongHub['home'], 'own trucks') ? 'with '.$wrongHub['home'] : 'to '.$wrongHub['home'] }}. Not loaded on {{ $wrongHub['trip'] }}: put it back{{ $wrongHub['section'] !== '—' ? ' in section '.$wrongHub['section'] : '' }}.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">Deliver it on this trip anyway</button>
-                    @elseif (($wrongHub['kind'] ?? null) === 'city')
-                        <p class="ds-sa__msg">This trip goes to {{ $wrongHub['trip'] }}. Not loaded. Put it back in section {{ $wrongHub['section'] }}; it goes on a trip to its own city.</p>
-                        <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                        <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">Add it to this trip anyway</button>
-                    @else
-                    <p class="ds-sa__msg">This trip goes to {{ $wrongHub['trip'] }}. Not loaded. Put it back in section {{ $wrongHub['section'] }} and tell the office.</p>
-                    <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put it back</button>
-                    <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">The office says load it</button>
-                    @endif
-                </div>
-            @elseif ($status === 'warning' && $early)
-                <div class="ds-sa__sheet is-warn" wire:key="early-{{ $sessionScans }}-{{ $early['code'] }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit">
-                        <span class="ds-sa__mark is-warn">!</span>
-                        <span><small class="ds-ld__kicker">Too early</small><strong>{{ $early['code'] }} is for stop {{ $early['stop'] }}{{ $early['place'] ? ' ('.$early['place'].')' : '' }}</strong></span>
-                    </div>
-                    <p class="ds-sa__msg">It's delivered earlier, so it goes in later, {{ $early['zone'] === 'back' ? 'at the door' : 'in the middle' }}. Put it aside and load stop {{ $early['nextStop'] }} now.</p>
-                    <button type="button" class="ds-sa__primary" wire:click="dismiss">OK, put aside</button>
-                    <button type="button" class="ds-sa__secondary" wire:click="loadAnyway">Load it anyway</button>
-                </div>
-            @elseif ($status === 'warning')
-                <div class="ds-sa__sheet is-warn" wire:key="warn-{{ $sessionScans }}-{{ md5($message) }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit">
-                        <span class="ds-sa__mark is-warn">!</span>
-                        <span><strong>{{ $box?->invoice ?? 'Check this box' }}</strong><small>{{ $message }}</small></span>
-                    </div>
-                    <button type="button" class="ds-sa__secondary" wire:click="dismiss">OK, scan next</button>
-                </div>
-            @elseif ($status === 'danger')
-                <div class="ds-sa__sheet is-bad" wire:key="bad-{{ $sessionScans }}-{{ md5($message) }}">
-                    <span class="ds-sa__grab"></span>
-                    <div class="ds-sa__hit is-shake">
-                        <span class="ds-sa__mark is-bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
-                        <span><strong>{{ $missing ?? $box?->invoice ?? 'Wrong box' }}</strong><small>Not on this {{ $def['kind'] }}</small></span>
-                    </div>
-                    <p class="ds-sa__msg">{{ $message }}</p>
-                    @if ($missing && $this->mode === 'unload')
-                        {{ $this->unmanifestedAction }}
-                    @endif
-                    <button type="button" class="ds-sa__secondary" wire:click="dismiss">Keep it aside, scan next</button>
-                </div>
-            @endif
-        </section>
-    @endif
-
-    {{-- ============================== done ============================== --}}
-    @if ($screen === 'done' && $def)
-        <section class="ds-sa__screen ds-sa__done" wire:key="done">
-            <span class="ds-sa__ring is-big">
-                <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="48" class="is-track"/><circle cx="55" cy="55" r="48" class="is-fill is-ok" style="stroke-dasharray: 302; stroke-dashoffset: {{ $ring($progress['loaded'] ?? 0, $progress['total'] ?? 0, 302) }}"/></svg>
-                <span><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></i></span>
-            </span>
-            @php($complete = ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total'])
-            <h2>{{ $complete ? $def['done'] : ($progress['loaded'] ?? 0).' of '.($progress['total'] ?? 0).' scanned' }}</h2>
-            <p>{{ $target['name'] ?? '' }}{{ ! empty($target['sub']) ? ' · '.$target['sub'] : '' }}</p>
-            <div class="ds-sa__totals">
-                <span><strong>{{ $sessionScans }}</strong><small>scanned now</small></span>
-                <span><strong>{{ $today['photos'] }}</strong><small>photos today</small></span>
-                <span><strong class="is-bad">{{ $today['problems'] }}</strong><small>problems today</small></span>
-            </div>
-            <p class="ds-sa__note">{{ $complete ? 'Everything on this '.$def['kind'].' is scanned. The office sees it right away.' : 'You can come back and finish later; every scan is already saved.' }}</p>
-            @if ($topUp && $topUp['room'] >= 1)
-                <div class="ds-sx__topup">
-                    <strong>Room for about {{ \App\Support\BoxSizes::fmt($topUp['room']) }} more on the truck</strong>
-                    @forelse ($topUp['boxes'] as $tb)
-                        <div class="ds-sx__toprow" wire:key="tu-{{ $tb['id'] }}">
-                            <span><b>{{ $tb['invoice'] }} · {{ $tb['name'] }}</b><small>{{ $tb['place'] }}{{ $tb['section'] ? ' · section '.$tb['section'] : '' }}{{ $tb['space'] != 1 ? ' · takes '.\App\Support\BoxSizes::fmt($tb['space']) : '' }}</small></span>
-                            <button type="button" wire:click="topUpAdd({{ $tb['id'] }})">Add</button>
-                        </div>
-                    @empty
-                        <small>No waiting boxes for these provinces.</small>
-                    @endforelse
-                    <small>Waiting boxes for the same provinces, oldest and priority first. Add one, then scan it onto the truck.</small>
-                </div>
-            @endif
-            @if ($receiveResult)
-                <div class="ds-sx__open">
-                    <strong>{{ $receiveResult['got'] }} of {{ $receiveResult['of'] }} boxes received</strong>
-                    @if (count($receiveResult['missing']))
-                        <span>{{ $receiveResult['of'] - $receiveResult['got'] }} not scanned:</span>
-                        @foreach ($receiveResult['missing'] as $rm)
-                            <span class="ds-sx__miss"><span>{{ $rm['code'] }} <small>{{ $rm['sub'] }}</small></span></span>
-                        @endforeach
-                        <small>Look in the truck once more. Found it? Keep scanning.</small>
-                    @else
-                        <span>✓ Every box arrived.</span>
-                    @endif
-                    @if ($receiveResult['finished'])
-                        <span>✓ Receiving finished.</span>
-                    @else
-                        <button type="button" class="ds-sa__secondary" wire:click="finishReceiving" wire:confirm="Finish receiving? Boxes not scanned get a Missing box issue each.">Finish receiving{{ ! empty($receiveResult['next']) ? ' · pass on to '.$receiveResult['next'] : '' }}</button>
-                    @endif
-                </div>
-            @endif
-            @if ($countResult)
-                <div class="ds-sx__open">
-                    <strong>Section {{ $countResult['code'] }}: {{ $countResult['found'] }} found{{ $countResult['moved'] ? ' · '.$countResult['moved'].' moved in' : '' }}</strong>
-                    @if (count($countResult['missing']))
-                        <span>{{ count($countResult['missing']) }} missing: {{ implode(', ', array_slice($countResult['missing'], 0, 12)) }}{{ count($countResult['missing']) > 12 ? '…' : '' }}</span>
-                    @else
-                        <span>✓ Nothing missing.</span>
-                    @endif
-                    <button type="button" class="ds-sa__secondary" wire:click="closeCount" wire:confirm="Close the count of section {{ $countResult['code'] }}?">Close the count</button>
-                </div>
-            @endif
-            @if (count($openSets))
-                @if ($noReason)<p class="ds-sx__stop">⛔ Not ready to leave: {{ $noReason }} {{ $noReason === 1 ? 'customer has' : 'customers have' }} boxes left behind with no reason.</p>@endif
-                <div class="ds-sx__open">
-                    <strong>{{ count($openSets) }} {{ count($openSets) === 1 ? 'customer is' : 'customers are' }} missing boxes</strong>
-                    @foreach ($openSets as $os)
-                        <div class="ds-sx__openrow" wire:key="os-{{ $os['key'] }}">
-                            <span><b>{{ $os['name'] }}</b> · {{ $os['have'] }} of {{ $os['of'] }} on the truck</span>
-                            @foreach ($os['missing'] as $mb)
-                                <span class="ds-sx__miss"><span>{{ $mb['invoice'] }} <small>{{ $mb['where'] }}</small></span>
-                                    <span class="ds-sx__why">@foreach ($splitReasons as $rk => $rl)<button type="button" wire:click="splitReason({{ $mb['id'] }}, '{{ $rk }}')" @class(['is-on' => $mb['reason'] === $rk])>{{ $rl }}</button>@endforeach</span>
-                                </span>
-                            @endforeach
-                        </div>
-                    @endforeach
-                    <small>Find the boxes, or pick why each one stays behind. The office sees it on the trip.</small>
-                </div>
-            @endif
-            <button type="button" class="ds-sa__primary" wire:click="pick({{ $choice }})">Keep scanning</button>
-            <button type="button" class="ds-sa__secondary" wire:click="home">Back to start</button>
-        </section>
-    @endif
-</div>
-<x-filament-actions::modals />
-</x-filament-panels::page>
-DISPATCH_FILE_END_8
-
-# ---------------------------------------------------------------- resources/views/filament/trips/rules.blade.php
+# ---------------------------------------------------------------- resources/views/filament/trips/edit-head.blade.php
 mkdir -p 'resources/views/filament/trips'
-cat > 'resources/views/filament/trips/rules.blade.php' <<'DISPATCH_FILE_END_9'
-<x-filament-panels::page>
-<div class="ds-fl ds-wc">
-    <span class="ds-te__title"><small>Settings › Trip rules</small><h1>Trip rules and who can bypass</h1><small>Click the level of each rule. Every bypass is saved with who and why (Overrides).</small></span>
-    <div class="ds-tr__grid">
-        <section class="ds-cb__card ds-ad__table">
-            <span class="ds-tr__row is-head"><span>Rule</span><span>Who can bypass</span></span>
-            @foreach ($rules as $r)
-                <span class="ds-tr__row" wire:key="r-{{ $r['key'] }}">
-                    <span class="ds-ad__who"><b>{{ $r['title'] }}</b><small>{{ $r['sub'] }}</small></span>
-                    <span class="ds-fl__seg">@foreach ($levels as $lk => $ll)<button type="button" wire:click="setLevel('{{ $r['key'] }}', '{{ $lk }}')" @class(['is-on' => $r['level'] === $lk])>{{ $ll }}</button>@endforeach</span>
-                </span>
-            @endforeach
-            <small class="ds-te__hint ds-tr__note">Off: the check still shows, anyone can go on without a reason. Anyone with a reason: they pick a reason. Office only: the crew asks, the office approves in the bell or in Overrides.</small>
-        </section>
-        <div class="ds-ad__col">
-            <section class="ds-cb__card ds-ad__card">
-                <b class="ds-ad__h">Reasons the crew can pick</b>
-                @foreach ($reasons as $i => $r)
-                    <span class="ds-tr__reason"><span>{{ $r }}</span><button type="button" class="ds-te__link is-bad" wire:click="removeReason({{ $i }})" aria-label="Remove {{ $r }}">✕</button></span>
-                @endforeach
-                <form wire:submit="addReason" class="ds-wc__form"><input type="text" wire:model="newReason" class="ds-te__input" placeholder="+ Add a reason"><button type="submit" class="ds-te__btn">Add</button></form>
-            </section>
-            <section class="ds-cb__card ds-ad__card">
-                <b class="ds-ad__h">Lock the trip</b>
-                <span class="ds-hs__switch"><span>Lock by itself when the lead man takes the trip</span><button type="button" role="switch" aria-checked="{{ $autoLock ? 'true' : 'false' }}" wire:click="toggleAutoLock" @class(['ds-hs__sw', 'is-on' => $autoLock])><i></i></button></span>
-                <span class="ds-te__hint">The office locks a trip on the Trip page. With this on, the trip also locks when the lead man taps “I take the trip” in the Driver app, if every check is green: all boxes loaded, truck here, lead man set.</span>
-            </section>
-            <section class="ds-cb__card ds-ad__card">
-                <b class="ds-ad__h">Who is “the office”</b>
-                <span class="ds-te__hint">Users who are <b>Admin</b> or <b>Super admin</b>. They get each request in the bell and approve it with one click in Overrides.</span>
-            </section>
-        </div>
+cat > 'resources/views/filament/trips/edit-head.blade.php' <<'DISPATCH_FILE_END_21'
+<span class="ds-et__head">
+    <a href="{{ $listUrl }}" class="ds-te__link">‹ Delivery trips</a>
+    <span class="ds-et__line"><span>Trip {{ $trip->trip_number }}</span><span class="ds-tl__pill is-{{ $st['tone'] }}">{{ $st['label'] }}</span><span class="ds-tl__made is-{{ $k }}">{{ $made }}</span>@if ($trip->is_lock)<span class="ds-tl__pill">🔒 Locked</span>@endif</span>
+</span>
+DISPATCH_FILE_END_21
+
+# ---------------------------------------------------------------- resources/views/filament/trips/edit-tiles.blade.php
+mkdir -p 'resources/views/filament/trips'
+cat > 'resources/views/filament/trips/edit-tiles.blade.php' <<'DISPATCH_FILE_END_22'
+<div class="ds-et__tiles">
+    @foreach ($tiles as $t)
+        <span class="ds-cb__card ds-et__tile is-{{ $t['tone'] }}"><small>{{ $t['l'] }}</small><b>{{ $t['v'] }}</b></span>
+    @endforeach
+</div>
+DISPATCH_FILE_END_22
+
+# ---------------------------------------------------------------- resources/views/filament/trips/list/details.blade.php
+mkdir -p 'resources/views/filament/trips/list'
+cat > 'resources/views/filament/trips/list/details.blade.php' <<'DISPATCH_FILE_END_23'
+@php($k = \App\Filament\Tables\TripList::madeKey($trip))
+@php($st = \App\Filament\Tables\TripList::status($trip))
+@php($g = \App\Filament\Tables\TripList::goes($trip))
+@php($crew = \App\Filament\Tables\TripList::crew($trip))
+@php($rows = \App\Support\TripFlow::boxes($trip))
+@php($total = (clone $rows)->count())
+@php($loaded = (clone $rows)->where(fn ($q) => $q->where('is_loaded', true)->orWhere('is_loaded_hub', true))->count())
+@php($done = (clone $rows)->where('is_delivered', true)->count())
+@php($page = collect(\Filament\Facades\Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => is_subclass_of($p, \App\Filament\Shared\Trips\TripPage::class)))
+<div class="ds-tl__det">
+    <span class="ds-tl__detpills"><span class="ds-tl__pill is-{{ $st['tone'] }}">{{ $st['label'] }}</span><span class="ds-tl__made is-{{ $k }}">{{ \App\Filament\Tables\TripList::MADE[$k][0] }}</span></span>
+    <div @class(['ds-tl__how', 'is-manual' => $k === 'manual'])>
+        <b>How this trip was made</b>
+        @foreach (\App\Filament\Tables\TripList::how($trip) as [$i, $t])<span><em>{{ $i }}</em><span>{{ $t }}</span></span>@endforeach
     </div>
+    <div class="ds-tl__facts">
+        @foreach ([
+            'Made by' => ($trip->user?->first_name ?? '—').' · '.($trip->created_at?->format('M j g:i A') ?? ''),
+            'Going to' => $g['to'],
+            'Truck' => $trip->truck?->plate_no ?? 'No truck yet',
+            'Crew' => $crew->isNotEmpty() ? $crew->map(fn ($c) => Str::before((string) $c->user?->full_name, ' '))->filter()->join(' · ') : 'No crew yet',
+            'Boxes' => $total.' · '.$loaded.' loaded',
+            'Delivered' => $done.' of '.$total,
+            'When' => $st['when'] ?: '—',
+            'Waybill' => $trip->waybill_number ?: '—',
+        ] as $label => $value)
+            <span><small>{{ $label }}</small><b>{{ $value }}</b></span>
+        @endforeach
+    </div>
+    <div class="ds-tl__cities"><b>Cities</b><span>@foreach (array_filter(explode(', ', preg_replace('/ \+\d+$/', '', $g['cities']))) as $c)<i>{{ $c }}</i>@endforeach</span></div>
+    <span class="ds-tl__btns">
+        @if ($page)<x-filament::button tag="a" :href="$page::getUrl(['trip' => $trip->id])" icon="heroicon-m-arrow-top-right-on-square">Open the trip</x-filament::button>@endif
+        @php($stops = collect(\Filament\Facades\Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => class_basename($p) === 'TripStops'))
+        @if ($stops)<x-filament::button tag="a" color="gray" :href="$stops::getUrl(['trip' => $trip->id])" icon="heroicon-m-map">Stops & loading</x-filament::button>@endif
+        @if (! empty($editUrl))<x-filament::button tag="a" color="gray" :href="$editUrl" icon="heroicon-m-pencil-square">Boxes and edit</x-filament::button>@endif
+    </span>
+    <small class="ds-tl__hint">Lock, crew, release and edit are on the trip’s page.</small>
 </div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_9
+DISPATCH_FILE_END_23
 
-# ---------------------------------------------------------------- resources/views/filament/trips/trip.blade.php
+# ---------------------------------------------------------------- resources/views/filament/trips/new-trip.blade.php
 mkdir -p 'resources/views/filament/trips'
-cat > 'resources/views/filament/trips/trip.blade.php' <<'DISPATCH_FILE_END_10'
+cat > 'resources/views/filament/trips/new-trip.blade.php' <<'DISPATCH_FILE_END_24'
 <x-filament-panels::page>
-<div class="ds-tp">
-    <section class="ds-tp__steps" aria-label="Trip steps">
-        @foreach ($steps as $s)
-            <span @class(['ds-tp__step', 'is-'.$s['state']])><b>{{ $s['n'] }} {{ $s['label'] }}</b><small>{{ $s['who'] }}</small></span>
-        @endforeach
-    </section>
-
-    <section class="ds-board__panel ds-tp__card">
-        <header class="ds-tp__head">
-            <strong>{{ $trip->trip_number }}{{ $trip->destination ? ' → '.$trip->destination->hub_name : '' }}</strong>
-            <span class="ds-cb__pill is-{{ $stage }}">{{ $stageInfo[0] }}</span>
-        </header>
-        @if (\App\Support\Trips\CityTrips::ready() && ($tc = $trip->cities()->get())->isNotEmpty())
-            <p class="ds-tp__cities">📍 {{ $tc->first()->province }} › {{ $tc->pluck('city')->join(', ') }} · {{ $trip->is_lock ? 'locked: no more boxes join' : 'boxes of these cities join when scanned onto the truck' }}@if ($trip->plan_why)<small>✦ {{ $trip->plan_why }}</small>@endif</p>
-        @endif
-
-        <div class="ds-tp__tiles">
-            <span><small>Truck</small><b>{{ $trip->truck?->plate_no ?? 'No truck yet' }}</b><small>{{ $rental ? 'Rental · '.($rental['company'] ?? '—').' · ' : '' }}{{ $truckState === 'Free' && $rental ? 'Returned' : $truckState }}</small></span>
-            <span><small>Boxes</small><b>{{ $boxes }}</b></span>
-            @if ($rental)
-                <span><small>Rental cost</small><b>{{ $rental['cost'] !== null ? '₱'.number_format($rental['cost']).' · '.(\App\Support\Rentals::RATES[$rental['rate']] ?? '') : '—' }}</b><small>{{ $rental['perBox'] ? 'about ₱'.number_format($rental['perBox']).' per box' : 'not known yet' }}</small></span>
-            @endif
-            <span><small>Leadman took the trip</small><b>{{ $took ?? '—' }}</b></span>
-        </div>
-
-        <div class="ds-tp__crewhead"><b>Crew on this trip</b><small>Copied from the truck team · change it for this trip only with Crew on this trip (top right)</small></div>
-        @forelse ($crew as $c)
-            <span @class(['ds-tp__person', 'is-swap' => $c->replaces_user_id])>
-                <i>{{ collect(explode(' ', (string) $c->user?->full_name))->map(fn ($w) => mb_substr($w, 0, 1))->take(2)->join('') }}</i>
-                <span><b>{{ $c->user?->full_name }}</b><small>{{ $c->role ?? $c->user?->workposition?->position_description }}@if ($c->replaces_user_id) · this trip only, instead of {{ $c->replaces?->full_name }}{{ $c->reason ? ' ('.(\App\Support\TripFlow::SWAP_REASONS[$c->reason] ?? $c->reason).')' : '' }}@endif</small></span>
-            </span>
-        @empty
-            <p class="ds-cb__none">{{ $trip->truck_id ? 'No crew on this trip. Click Crew on this trip (top right) to choose who goes.' : 'No truck and no crew yet. Pick the truck in Boxes & edit (top right): its team is copied here. Or click Crew on this trip to choose people now.' }}</p>
-        @endforelse
-
-        @if ($rental)
-            <span class="ds-tp__person"><i>R</i><span><b>{{ $rental['driver'] ?: 'Rental driver' }}</b><small>Rental driver · written on the trip for the records · our leadman rides along with the driver app</small></span></span>
-        @endif
-        @if ($lockChecks)
-            @php($allOk = collect($lockChecks)->every('ok'))
-            <div @class(['ds-tp__lock', 'is-ok' => $allOk])>
-                <span class="ds-tp__lockhead"><b>🔒 Lock the trip</b><small>Only here, on the Trip page · the button at the top right</small></span>
-                @foreach ($lockChecks as $c)
-                    <span @class(['ds-tp__check', 'is-ok' => $c['ok']])><i>{{ $c['ok'] ? '✓' : '!' }}</i><span><b>{{ $c['title'] }}</b><small>{{ $c['sub'] }}</small></span></span>
-                @endforeach
-                <small>{{ $allOk ? 'All green: lock it now.' : 'Not ready yet.' }}{{ $autoLock ? ' It also locks by itself when the lead man takes the trip with every check green.' : '' }}</small>
-            </div>
-        @endif
-        @foreach ($warnings as $w)
-            <p @class(['ds-tp__warn', 'is-'.$w['tone']])>{{ $w['text'] }}</p>
-        @endforeach
-
-        @if ($next)
-            <div class="ds-tp__next">
-                <span><b>Next trip waiting for {{ $trip->truck?->plate_no }}</b><small>{{ $next->trip_number }}{{ $next->destination ? ' → '.$next->destination->hub_name : '' }} · {{ $nextBoxes }} boxes{{ $next->departure_date ? ' · '.$next->departure_date->format('M j') : '' }}</small></span>
-                <a href="{{ static::getUrl(['trip' => $next->id]) }}" class="ds-cb__pill">Waits for {{ $trip->trip_number }} to close ›</a>
-            </div>
-        @endif
-        <small class="ds-board__muted">Release truck now is a backup only. Normally the truck releases itself when every box is delivered or returned.</small>
-    </section>
-</div>
-</x-filament-panels::page>
-DISPATCH_FILE_END_10
-
-# ---------------------------------------------------------------- resources/views/filament/widgets/trip-board.blade.php
-mkdir -p 'resources/views/filament/widgets'
-cat > 'resources/views/filament/widgets/trip-board.blade.php' <<'DISPATCH_FILE_END_11'
-<x-filament-widgets::widget>
-    <div class="ds-board" wire:poll.60s>
-        {{-- Today at a glance: each card filters the trip list --}}
-        <div class="ds-board__cards">
-            @foreach ($cards as $card)
-                <a href="{{ $this->cardUrl($card['id']) }}"
-                   @class(['ds-board__card', 'is-active' => $activeCard === $card['id']])
-                   aria-current="{{ $activeCard === $card['id'] ? 'true' : 'false' }}">
-                    <span class="ds-board__card-head">
-                        <span>{{ $card['label'] }}</span>
-                        <span class="ds-board__dot ds-board__dot--{{ $card['tone'] }}"></span>
+<div class="ds-nt">
+    <div class="ds-nt__top">
+        <span class="ds-te__title"><a href="{{ $listUrl }}" class="ds-te__link">‹ Delivery trips</a><h1>New trip by hand</h1><small>For a trip Plan trips does not make. Most days, ✦ Plan trips makes them for you.</small></span>
+        @if ($planUrl)<a href="{{ $planUrl }}" class="ds-nt__plan">✦ Use Plan trips instead</a>@endif
+    </div>
+    <div class="ds-nt__grid">
+        <div class="ds-nt__steps">
+            @if (! $atHub)
+                <section class="ds-cb__card ds-nt__card">
+                    <span class="ds-nt__h"><i>1</i><b>Where does it go?</b></span>
+                    <span class="ds-nt__two">
+                        <button type="button" wire:click="pickGo('direct')" @class(['ds-nt__opt', 'is-on' => $go === 'direct'])><em>🏠</em><span><b>Direct to customers</b><small>Our truck delivers to each receiver{{ $hubName ? ' · from '.$hubName : '' }}</small></span></button>
+                        <button type="button" wire:click="pickGo('hub')" @class(['ds-nt__opt', 'is-on' => $go === 'hub'])><em>⌂</em><span><b>To a partner hub</b><small>The hub delivers with its own trucks</small></span></button>
                     </span>
-                    <span class="ds-board__card-value">{{ $card['value'] }}</span>
-                    @if ($card['pct'] !== null)
-                        <span class="ds-board__bar"><span class="ds-board__bar-fill ds-board__bar-fill--{{ $card['tone'] }}" style="width: {{ $card['pct'] }}%"></span></span>
-                    @endif
-                    <span class="ds-board__card-sub">{{ $card['sub'] }}</span>
-                </a>
-            @endforeach
-        </div>
-
-        {{-- Trips that need attention --}}
-        @if ($attention->isNotEmpty())
-            <section class="ds-board__panel">
-                <div class="ds-board__panel-head">
-                    <h2>Needs attention</h2>
-                    <span>{{ $attention->count() }} {{ Str::plural('trip', $attention->count()) }}</span>
-                </div>
-                <ul class="ds-board__attention">
-                    @foreach ($attention as $item)
-                        <li wire:key="attention-{{ $item['trip']->id }}">
-                            <span class="ds-board__tag ds-board__tag--{{ $item['tone'] }}">{{ $item['tag'] }}</span>
-                            <span class="ds-board__attention-text">
-                                <strong>Trip {{ $item['trip']->trip_number }}</strong>
-                                @if ($item['destination']) <span class="ds-board__muted">· {{ $item['destination'] }}</span> @endif
-                                <span class="ds-board__detail">{{ $item['detail'] }}</span>
-                            </span>
-                            <span class="ds-board__muted ds-board__truck">{{ $item['truck'] }}</span>
-                            @if ($item['action'] === 'release')
-                                <x-filament::button size="sm" icon="heroicon-m-truck"
-                                    wire:click="releaseTruck({{ $item['trip']->id }})"
-                                    wire:confirm="Release the truck and close trip {{ $item['trip']->trip_number }}?">
-                                    Release truck
-                                </x-filament::button>
-                            @elseif ($item['action'] === 'lock')
-                                {{-- the trip is locked only on the Trip page, when ready --}}
-                                <x-filament::button size="sm" color="gray" outlined tag="a" icon="heroicon-m-lock-closed" :href="$this->tripPageUrl($item['trip']->id)">
-                                    Open to lock
-                                </x-filament::button>
-                            @else
-                                <x-filament::button size="sm" color="gray" outlined tag="a" :href="$this->tripUrl($item['trip']->id)">
-                                    Open trip
-                                </x-filament::button>
-                            @endif
-                        </li>
-                    @endforeach
-                </ul>
-            </section>
-        @endif
-
-        {{-- Trends --}}
-        <div class="ds-board__trends">
-            <section class="ds-board__panel">
-                <div class="ds-board__panel-head">
-                    <h2>Boxes {{ $board->doneWord() }} per day</h2>
-                    <span>Last 14 days</span>
-                </div>
-                <div class="ds-board__chart" role="img"
-                     aria-label="Boxes {{ $board->doneWord() }} per day: {{ $days->map(fn ($d) => $d['date']->format('M j').' '.$d['boxes'])->join(', ') }}">
-                    @foreach ($days as $day)
-                        <span class="ds-board__col" title="{{ $day['date']->format('D, M j') }}: {{ $day['boxes'] }} boxes">
-                            <span class="ds-board__col-n">{{ $day['boxes'] ?: '' }}</span>
-                            <span @class(['ds-board__col-bar', 'is-today' => $day['date']->isToday(), 'is-zero' => ! $day['boxes']])
-                                  style="height: {{ max(2, round($day['boxes'] / $dayMax * 120)) }}px"></span>
-                            <span class="ds-board__col-day">{{ $day['date']->isToday() ? 'Today' : $day['date']->format('j') }}</span>
+                    @if ($go === 'hub')
+                        <span class="ds-nt__chips">
+                            @forelse ($hubs as $h)
+                                <button type="button" wire:click="pickHub({{ $h->id }})" @class(['ds-nt__chip', 'is-on' => $hub === $h->id])><i style="background: {{ $color($h->id) }}"></i>{{ $h->hub_name }}</button>
+                            @empty
+                                <small class="ds-te__hint">No other active hub.</small>
+                            @endforelse
                         </span>
-                    @endforeach
-                </div>
+                    @endif
+                </section>
+            @endif
+            <section class="ds-cb__card ds-nt__card">
+                <span class="ds-nt__h"><i>{{ $atHub ? 1 : 2 }}</i><b>Truck</b><small>Check its space first: a full truck is safe, an overloaded one is not</small></span>
+                <span class="ds-nt__trucks">
+                    @forelse ($trucks as $t)
+                        <button type="button" wire:click="pickTruck({{ $t['id'] }})" @disabled($t['state'] === 'off') @class(['ds-nt__truck', 'is-on' => $truck === $t['id'], 'is-off' => $t['state'] === 'off'])>
+                            <span class="ds-nt__trow"><b>{{ $t['plate'] }}</b><em class="is-{{ $t['state'] }}">{{ $t['state'] === 'busy' && $t['on'] ? 'On '.$t['on'] : $t['label'] }}</em></span>
+                            <small>{{ $t['kind'] ?: 'Truck' }} · {{ $t['capacity'] }} space</small>
+                            <small class="ds-nt__crew">👥 {{ $t['state'] === 'free' ? $t['sub'] : ($t['state'] === 'busy' ? 'Crew on '.$t['on'] : '—') }}</small>
+                        </button>
+                    @empty
+                        <small class="ds-te__hint">No trucks in this hub yet.</small>
+                    @endforelse
+                </span>
+                @if ($sel && $sel['state'] === 'busy')
+                    <span class="ds-wc__asked">{{ $sel['plate'] }} is still on {{ $sel['on'] }}: this trip waits and starts when it closes. The crew sees it as soon as the truck is free.</span>
+                @endif
+                @error('truck')<small class="ds-nt__err">{{ $message }}</small>@enderror
             </section>
-
-            <section class="ds-board__panel">
-                <div class="ds-board__panel-head">
-                    <h2>{{ $board->breakdownTitle() }}</h2>
-                    <span>Last 7 days</span>
-                </div>
-                @forelse ($breakdown as $row)
-                    <div class="ds-board__reason">
-                        <span class="ds-board__reason-row"><span>{{ $row['label'] }}</span><strong>{{ $row['count'] }}</strong></span>
-                        <span class="ds-board__bar"><span class="ds-board__bar-fill ds-board__bar-fill--{{ $board->isWarehouse() ? 'navy' : 'warn' }}" style="width: {{ round($row['count'] / $breakdownMax * 100) }}%"></span></span>
-                    </div>
-                @empty
-                    <p class="ds-board__muted">{{ $board->isWarehouse() ? 'No boxes sent in the last 7 days.' : 'Every box was delivered on the first try this week.' }}</p>
-                @endforelse
+            <section class="ds-cb__card ds-nt__card">
+                <span class="ds-nt__h"><i>{{ $atHub ? 2 : 3 }}</i><b>When</b></span>
+                <span class="ds-nt__when">
+                    <label><small>Leaves</small><span class="ds-nt__chips">@foreach (['today' => 'Today', 'tomorrow' => 'Tomorrow', 'date' => 'Pick a date'] as $k => $l)<button type="button" wire:click="setDay('{{ $k }}')" @class(['ds-nt__chip', 'is-on' => $day === $k])>{{ $l }}</button>@endforeach</span>
+                        @if ($day === 'date')<input type="date" wire:model.live="date" class="ds-te__input">@endif</label>
+                    <label><small>Arrives (ETA)</small><input type="date" wire:model="eta" class="ds-te__input"></label>
+                    <label><small>Trip day</small><span class="ds-nt__chips">@foreach ([1, 2, 3] as $n)<button type="button" wire:click="$set('tripDay', {{ $n }})" @class(['ds-nt__chip', 'is-on' => $tripDay === $n])>Day {{ $n }}</button>@endforeach</span></label>
+                </span>
+            </section>
+            <section class="ds-cb__card ds-nt__card">
+                <span class="ds-nt__h"><i>{{ $atHub ? 3 : 4 }}</i><b>Paperwork</b><small>optional</small></span>
+                <span class="ds-nt__two">
+                    <label><small>Waybill no.</small><span class="ds-nt__field"><input type="text" wire:model.live.debounce.400ms="waybill" class="ds-te__input" placeholder="WB-12345">@if ($waybillOk === true)<em class="is-ok">✓ looks right</em>@elseif ($waybillOk === false)<em class="is-bad">format: WB-12345</em>@endif</span></label>
+                    <label><small>Container no.</small><input type="text" wire:model="container" class="ds-te__input" placeholder="CN-12345"></label>
+                </span>
             </section>
         </div>
+        <aside class="ds-cb__card ds-nt__sum">
+            <b class="ds-nt__sumh">Trip summary</b>
+            @foreach ([
+                'Going to' => $atHub ? 'Direct to customers' : ($go === 'hub' ? '→ '.$toName : 'Direct to customers'),
+                'Truck' => $sel ? $sel['plate'].' · '.$sel['capacity'].' space' : 'No truck yet',
+                'Crew' => $sel && $sel['state'] === 'free' ? $sel['sub'] : ($sel ? 'Crew of '.$sel['plate'] : '—'),
+                'Leaves' => $fmt($date),
+                'Arrives' => $fmt($eta),
+                'Trip day' => 'Day '.$tripDay,
+                'Made by' => '✎ By hand · '.(auth()->user()?->first_name ?? 'you'),
+            ] as $k => $v)
+                <span class="ds-nt__row"><span>{{ $k }}</span><b>{{ $v }}</b></span>
+            @endforeach
+            <span class="ds-nt__space"><small>Truck space</small><span class="ds-tl__bar"><i style="width: 0%"></i></span><small>0 of {{ $sel['capacity'] ?? 0 }} · boxes are added after Create</small></span>
+            <button type="button" class="ds-nt__go" wire:click="createTrip(true)" wire:loading.attr="disabled">Create trip and add boxes</button>
+            <button type="button" class="ds-nt__only" wire:click="createTrip(false)" wire:loading.attr="disabled">Create only</button>
+            <a href="{{ $listUrl }}" class="ds-nt__cancel">Cancel</a>
+            <small class="ds-te__hint">Saved as “✎ By hand” in Delivery trips. The trip number is given when you press Create. Delivered date fills itself when the last box is delivered.</small>
+        </aside>
     </div>
-</x-filament-widgets::widget>
-DISPATCH_FILE_END_11
+</div>
+</x-filament-panels::page>
+DISPATCH_FILE_END_24
 
-# ---------------------------------------------------------------- tests/Feature/TripLockTest.php
+# ---------------------------------------------------------------- tests/Feature/TripFormsTest.php
 mkdir -p 'tests/Feature'
-cat > 'tests/Feature/TripLockTest.php' <<'DISPATCH_FILE_END_12'
+cat > 'tests/Feature/TripFormsTest.php' <<'DISPATCH_FILE_END_25'
 <?php
 
-use App\Filament\Delivery\Pages\Dashboard as DriverDashboard;
 use App\Models\Deliverylog;
+use App\Models\Invoice;
 use App\Models\Tripinvoice;
-use App\Models\TripOverride;
+use App\Models\Truck;
 use App\Models\User;
-use App\Support\TripFlow;
-use App\Support\Trips\TripLock;
-use App\Support\Trips\TripRules;
 use Database\Seeders\DemoSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -6831,255 +7654,85 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->seed(DemoSeeder::class);
-    $this->admin = User::where('email', 'admin@example.com')->firstOrFail();
-    $this->driver = User::where('email', 'driver@example.com')->firstOrFail();
-    $this->trip = Deliverylog::firstOrFail();
-    $this->trip->truck->update(['is_assigned' => true]);
-    \App\Models\TripCrew::where('deliverylog_id', $this->trip->id)->update(['role' => 'Lead Man']);
+    Truck::query()->update(['is_assigned' => false, 'is_active' => true]);
 });
 
-it('checks boxes, truck and crew before the trip can lock', function () {
-    $checks = collect(TripLock::checks($this->trip))->keyBy('key');
-    expect($checks['boxes']['ok'])->toBeFalse()->and($checks['truck']['ok'])->toBeTrue()->and($checks['crew']['ok'])->toBeTrue()
-        ->and(TripLock::missing($this->trip))->toBe('not every box is loaded');
+/** [panel id, user email, namespace] for the three panels. */
+dataset('panels', [
+    'Admin' => ['admin', 'admin@example.com', 'App\\Filament\\Resources\\Deliverylogs\\Pages\\'],
+    'Warehouse' => ['warehouse', 'warehouse@example.com', 'App\\Filament\\Warehouse\\Resources\\Deliverylogs\\Pages\\'],
+    'Partner hub' => ['company', 'company@example.com', 'App\\Filament\\Company\\Resources\\Deliverylogs\\Pages\\'],
+]);
 
-    Tripinvoice::where('deliverylog_id', $this->trip->id)->update(['is_loaded' => true]);
-    expect(TripLock::isReady($this->trip))->toBeTrue();
-});
+function inPanel(string $panel, string $email): User
+{
+    $u = User::where('email', $email)->firstOrFail();
+    test()->actingAs($u);
+    Filament::setCurrentPanel(Filament::getPanel($panel));
 
-it('locks on the Trip page only when ready, or asks the office', function () {
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
-    $this->get(\App\Filament\Pages\Trip::getUrl(['trip' => $this->trip->id]))->assertOk()
-        ->assertSee('Lock the trip')->assertSee('All boxes loaded')->assertSee('still to load')->assertSee('Not ready yet');
+    return $u;
+}
 
-    // not ready, crew member (not office): the office is asked
-    $clerk = User::factory()->create(['is_admin' => false, 'logistichub_id' => $this->admin->logistichub_id]);
-    expect(TripLock::lock($this->trip, $clerk))->toBe('office')->and($this->trip->fresh()->is_lock)->toBeFalse();
-    $ask = TripOverride::where('rule', 'lock_ready')->where('status', 'pending')->firstOrFail();
-    TripRules::decide($ask, true, $this->admin);
-    expect($this->trip->fresh()->is_lock)->toBeTrue();
+it('shows the same Delivery trips list in every panel', function (string $panel, string $email, string $ns) {
+    inPanel($panel, $email);
+    Livewire::test($ns.'ListDeliverylogs')->assertSee('Delivery trips')->assertSee('+ New trip by hand')
+        ->assertSee('Trip · made by')->assertTableActionExists('details');
+})->with('panels');
 
-    // ready: locks with no question
-    $this->trip->fresh()->update(['is_lock' => false]);
-    Tripinvoice::where('deliverylog_id', $this->trip->id)->update(['is_loaded' => true]);
-    Livewire::withQueryParams(['trip' => $this->trip->id])->test(\App\Filament\Pages\Trip::class)->callAction('lock');
-    expect($this->trip->fresh()->is_lock)->toBeTrue();
-});
-
-it('locks by itself when the lead man takes a ready trip; not ready, he cannot take it', function () {
-    Filament::setCurrentPanel(Filament::getPanel('delivery'));
-    $this->actingAs($this->driver);
-    Livewire::test(DriverDashboard::class)->assertSee('Being loaded')->assertSee('Not ready: not every box is loaded')->assertDontSee('I take the trip');
-
-    Tripinvoice::where('deliverylog_id', $this->trip->id)->update(['is_loaded' => true]);
-    Livewire::test(DriverDashboard::class)->assertSee('it locks by itself')->call('takeTrip');
-    $trip = $this->trip->fresh();
-    expect($trip->is_lock)->toBeTrue()->and(TripFlow::stage($trip))->toBe('road');
-
-    // switched off in Trip rules: the office must lock it first
-    TripLock::setAutoOnTake(false);
-    $other = Deliverylog::create(['truck_id' => null, 'logistichub_id' => $trip->logistichub_id, 'assigned_to' => $trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today()]);
-    expect(TripLock::autoOnTake())->toBeFalse()->and(TripLock::isReady($other))->toBeFalse();
-});
-DISPATCH_FILE_END_12
-
-# ---------------------------------------------------------------- tests/Feature/TripStepsTest.php
-mkdir -p 'tests/Feature'
-cat > 'tests/Feature/TripStepsTest.php' <<'DISPATCH_FILE_END_13'
-<?php
-
-use App\Filament\Delivery\Pages\Dashboard as DriverDashboard;
-use App\Filament\Resources\Deliverylogs\Pages\ListDeliverylogs;
-use App\Models\Deliverylog;
-use App\Models\TripCrew;
-use App\Models\Tripinvoice;
-use App\Models\Truckcrew;
-use App\Models\User;
-use App\Services\TripAssignment;
-use App\Support\DriverTrip;
-use App\Support\TripFlow;
-use Database\Seeders\DemoSeeder;
-use Filament\Facades\Filament;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Livewire\Livewire;
-
-uses(RefreshDatabase::class);
-
-beforeEach(function () {
-    $this->seed(DemoSeeder::class);
-    $this->admin = User::where('email', 'admin@example.com')->firstOrFail();
-    $this->driver = User::where('email', 'driver@example.com')->firstOrFail();
-    $this->trip = Deliverylog::firstOrFail();
-    $this->sub = $this->driver->replicate()->fill(['email' => 'mark@example.com', 'first_name' => 'Mark']);
-    $this->sub->save();
-});
-
-it('copies the truck team onto a new trip, follows team changes until the trip leaves, and swaps for one trip only', function () {
-    $trip = Deliverylog::create(['truck_id' => $this->trip->truck_id, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
-    // Truck A is still on the demo trip: the new trip is the next trip waiting.
-    expect(TripFlow::crew($trip)->pluck('user_id')->all())->toBe([$this->driver->id])
-        ->and(TripFlow::stage($trip))->toBe('waiting')
-        ->and(TripFlow::nextAfter($this->trip)?->id)->toBe($trip->id);
-
-    // Mark is sick-cover for this trip only: the truck team stays the same.
-    TripFlow::setCrew($trip, [$this->sub->id], 'sick');
-    $row = TripCrew::where('deliverylog_id', $trip->id)->sole();
-    expect($row->user_id)->toBe($this->sub->id)->and($row->replaces_user_id)->toBe($this->driver->id)->and($row->reason)->toBe('sick')
-        ->and(Truckcrew::where('truck_id', $trip->truck_id)->pluck('crew')->all())->toBe([$this->driver->id])
-        ->and(TripFlow::tripFor($this->sub))->toBeNull()                    // waits for the truck
-        ->and(TripFlow::tripFor($this->driver)?->id)->toBe($this->trip->id);
-
-    // The demo trip closes: the next trip starts, Mark sees it.
-    TripFlow::release($this->trip, 'done');
-    expect(TripFlow::stage($trip->fresh()))->toBe('planned')
-        ->and($trip->fresh()->truck->is_assigned)->toBeTrue()
-        ->and(TripFlow::tripFor($this->sub)?->id)->toBe($trip->id)
-        ->and(TripFlow::tripFor($this->driver))->toBeNull();
-});
-
-it('goes Ready → On the road → Back → Closed, and the truck releases itself', function () {
-    $this->trip->truck->update(['is_assigned' => true]);
-    Filament::setCurrentPanel(Filament::getPanel('delivery'));
-    $this->actingAs($this->driver);
-
-    expect(TripFlow::stage($this->trip))->toBe('loading');
-    Livewire::test(DriverDashboard::class)->assertSee('Being loaded')->assertDontSee('I take the trip');
-
-    $this->trip->update(['is_lock' => true]);
-    Livewire::test(DriverDashboard::class)->assertSee('Trip ready')->assertSee('I take the trip · 6 boxes')->call('takeTrip');
-    $trip = $this->trip->fresh();
-    expect(TripFlow::stage($trip))->toBe('road')->and($trip->taken_by)->toBe($this->driver->id)->and($trip->taken_boxes)->toBe(6);
-
-    $rows = Tripinvoice::where('deliverylog_id', $trip->id)->orderBy('id')->get();
-    foreach ($rows->take(5) as $r) {
-        app(TripAssignment::class)->markDelivered($r, ['p.jpg']);
+it('makes a trip by hand from the New trip page in every panel', function (string $panel, string $email, string $ns) {
+    $u = inPanel($panel, $email);
+    $truck = Truck::where('logistichub_id', $u->logistichub_id)->first();
+    if (! $truck) {
+        $truck = Truck::query()->firstOrFail()->replicate();
+        $truck->forceFill(['logistichub_id' => $u->logistichub_id, 'plate_no' => 'HUB 101', 'is_assigned' => false])->save();
     }
-    expect($trip->fresh()->is_active)->toBeTrue();
-    Livewire::test(DriverDashboard::class)->assertSee('Back at the hub')->call('backAtHub');
-    expect(TripFlow::stage($trip->fresh()))->toBe('back');
 
-    // The last box is scanned back at the hub: the trip closes by itself.
-    app(TripAssignment::class)->returnToInventory($rows->last());
-    $trip = $trip->fresh();
-    expect($trip->is_active)->toBeFalse()->and($trip->release_reason)->toBe('auto')->and($trip->truck->fresh()->is_assigned)->toBeFalse();
+    $page = Livewire::test($ns.'CreateDeliverylog')->assertSee('New trip by hand')->assertSee('Trip summary')
+        ->assertSee($truck->plate_no)->assertSee('Create trip and add boxes');
+    $panel === 'company' ? $page->assertDontSee('Where does it go?') : $page->assertSee('Where does it go?');
 
-    Livewire::test(DriverDashboard::class)->assertSee('done · truck released')->assertSee('All 5 boxes delivered');
+    $page->call('pickTruck', $truck->id)->call('setDay', 'tomorrow')->set('waybill', 'WB-12345')
+        ->assertSee('looks right')->call('createTrip', false)->assertHasNoErrors();
+
+    $trip = Deliverylog::latest('id')->firstOrFail();
+    expect($trip->made_by)->toBe('manual')->and((int) $trip->truck_id)->toBe($truck->id)
+        ->and((int) $trip->assigned_to)->toBe((int) $u->logistichub_id)
+        ->and((string) $trip->departure_date)->toContain(today()->addDay()->toDateString())
+        ->and($trip->waybill_number)->toBe('WB-12345')
+        ->and((bool) $truck->fresh()->is_assigned)->toBe($panel !== 'company');
+})->with('panels');
+
+it('sends a trip to a partner hub from the warehouse', function () {
+    $u = inPanel('warehouse', 'warehouse@example.com');
+    $hub = User::where('email', 'company@example.com')->value('logistichub_id');
+    Livewire::test('App\\Filament\\Warehouse\\Resources\\Deliverylogs\\Pages\\CreateDeliverylog')
+        ->call('pickGo', 'hub')->call('pickHub', $hub)->assertSee('→')->call('createTrip', true)->assertHasNoErrors()
+        ->assertRedirectContains('ownerRecord=');
+    expect((int) Deliverylog::latest('id')->value('assigned_to'))->toBe((int) $hub);
 });
 
-it('closes the trip when the last box is delivered, even without Back at the hub', function () {
-    foreach (Tripinvoice::where('deliverylog_id', $this->trip->id)->get() as $r) {
-        app(TripAssignment::class)->markDelivered($r, ['p.jpg']);
-    }
-    expect($this->trip->fresh()->is_active)->toBeFalse()->and($this->trip->fresh()->closed_at)->not->toBeNull();
-});
+it('shows the Edit trip page with tiles, folded details and the boxes tabs in every panel', function (string $panel, string $email, string $ns) {
+    $u = inPanel($panel, $email);
+    $trip = Deliverylog::create(['trip_day' => 1, 'eta' => today()->addDay(), 'departure_date' => today(),
+        'logistichub_id' => $u->logistichub_id, 'assigned_to' => $u->logistichub_id, 'user_id' => $u->id, 'made_by' => 'manual']);
+    $inv = Invoice::firstOrFail();
+    Tripinvoice::create(['deliverylog_id' => $trip->id, 'logistichub_id' => $u->logistichub_id, 'invoice' => $inv->invoice, 'invoice_id' => $inv->id]
+        + ($panel === 'company' ? ['deliveryloghub_id' => $trip->id] : []));
 
-it('lets the office change the crew of a trip and release the truck with a reason', function () {
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
-    Livewire::test(ListDeliverylogs::class)->assertSee('Loading')
-        ->callTableAction('tripCrew', $this->trip, data: ['crew' => [$this->sub->id], 'reason' => 'day_off'])->assertHasNoTableActionErrors();
-    expect(TripFlow::crew($this->trip)->pluck('user_id')->all())->toBe([$this->sub->id])
-        ->and(DriverTrip::currentTrip($this->sub)?->id)->toBe($this->trip->id)
-        ->and(DriverTrip::currentTrip($this->driver))->toBeNull();
+    Livewire::test($ns.'EditDeliverylog', ['record' => $trip->getRouteKey()])
+        ->assertSee('Trip '.$trip->trip_number)->assertSee('✎ By hand')->assertSee('✎ Edit details')
+        ->assertSee('Not delivered')->assertSee('Priority');
 
-    Livewire::test(ListDeliverylogs::class)->callTableAction('releasetruct', $this->trip, data: ['reason' => 'broke_down'])->assertHasNoTableActionErrors();
-    expect($this->trip->fresh()->is_active)->toBeFalse()->and($this->trip->fresh()->release_reason)->toBe('broke_down');
-});
-
-it('shows today\'s crew board with the warnings, and puts people on trucks', function () {
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
-    $this->sub->update(['is_crew' => true]);
-    $this->trip->update(['is_lock' => true]);
-    $this->trip->forceFill(['ready_at' => now()->subHour()])->saveQuietly();
-
-    Livewire::test(\App\Filament\Pages\CrewBoard::class)
-        ->assertSee($this->trip->truck->plate_no)->assertSee($this->trip->trip_number.' · Ready')
-        ->assertSee('ready, nobody took it')->assertSeeInOrder(['Crew without a truck', $this->sub->full_name])
-        ->call('addCrew', $this->trip->truck_id, $this->sub->id)
-        ->assertSeeInOrder([$this->trip->truck->plate_no, $this->sub->full_name, 'Crew without a truck']);
-    expect(Truckcrew::where('truck_id', $this->trip->truck_id)->pluck('crew')->sort()->values()->all())->toBe(collect([$this->driver->id, $this->sub->id])->sort()->values()->all())
-        ->and(TripFlow::crew($this->trip)->pluck('user_id')->all())->toContain($this->sub->id); // the trip did not leave yet: it follows
-});
-
-it('plans more trips for one truck: they start one after the other', function () {
-    $mk = fn () => Deliverylog::create(['truck_id' => $this->trip->truck_id, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
-    $second = $mk();
-    $third = $mk();
-    expect(TripFlow::stage($second))->toBe('waiting')->and(TripFlow::stage($third))->toBe('waiting')
-        ->and(TripFlow::tripFor($this->driver)?->id)->toBe($this->trip->id);
-
-    TripFlow::release($this->trip, 'done');
-    expect(TripFlow::tripFor($this->driver)?->id)->toBe($second->id)
-        ->and(TripFlow::stage($third->fresh()))->toBe('waiting')
-        ->and(TripFlow::nextAfter($second->fresh())?->id)->toBe($third->id);
-
-    TripFlow::release($second->fresh(), 'done');
-    expect(TripFlow::tripFor($this->driver)?->id)->toBe($third->id)->and(TripFlow::stage($third->fresh()))->not->toBe('waiting');
-});
-
-it('shows one trip on one page: steps, crew, warnings, next trip, and the office buttons', function () {
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
-    $next = Deliverylog::create(['truck_id' => $this->trip->truck_id, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
-
-    $this->get(\App\Filament\Pages\Trip::getUrl(['trip' => $this->trip->id]))->assertOk()
-        ->assertSee('1 Planned')->assertSee('Leadman took the trip')->assertSee('Crew on this trip')
-        ->assertSee($this->driver->full_name)->assertSee('Next trip waiting for')->assertSee($next->trip_number);
-    $this->get(\App\Filament\Pages\Trip::getUrl(['trip' => $next->id]))->assertOk()
-        ->assertSee('is still on trip '.$this->trip->trip_number)->assertSee('Next trip · waits for the truck');
-
-    Livewire::withQueryParams(['trip' => $this->trip->id])->test(\App\Filament\Pages\Trip::class)
-        ->callAction('lock', data: ['reason' => 'Customer called'])->callAction('tripCrew', data: ['crew' => [$this->sub->id], 'reason' => 'sick'])
-        ->assertSee('instead of '.$this->driver->full_name);
-    expect($this->trip->fresh()->is_lock)->toBeTrue()->and(TripFlow::stage($this->trip->fresh()))->toBe('ready');
-
-    Livewire::withQueryParams(['trip' => $this->trip->id])->test(\App\Filament\Pages\Trip::class)
-        ->callAction('releasetruct', data: ['reason' => 'cancelled']);
-    expect($this->trip->fresh()->release_reason)->toBe('cancelled')->and(TripFlow::stage($next->fresh()))->toBe('planned');
-
-    // The trip list opens the page.
-    Livewire::test(ListDeliverylogs::class)->assertSee(\App\Filament\Pages\Trip::getUrl(['trip' => $next->id]), false);
-});
-
-it('lets the office pick the crew of a trip that has no truck yet, and keeps it when the truck is picked', function () {
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
-    $trip = Deliverylog::create(['truck_id' => null, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
-
-    Livewire::withQueryParams(['trip' => $trip->id])->test(\App\Filament\Pages\Trip::class)
-        ->assertSee('No truck and no crew yet')->assertActionVisible('tripCrew')
-        ->callAction('tripCrew', data: ['crew' => [$this->sub->id]]);
-    $trip->update(['truck_id' => \App\Models\Truck::where('id', '!=', $this->trip->truck_id)->value('id') ?? $this->trip->truck_id]);
-    expect(TripFlow::crew($trip->fresh())->pluck('user_id')->all())->toContain($this->sub->id);
-});
-
-it('leaves inactive people off trips and crew lists, and shows the crew member (not who added them) on the crew board', function () {
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
-    $this->sub->update(['is_crew' => true, 'is_active' => false]);
-    Truckcrew::create(['truck_id' => $this->trip->truck_id, 'crew' => $this->sub->id, 'user_id' => $this->admin->id]);
-
-    $trip = Deliverylog::create(['truck_id' => $this->trip->truck_id, 'logistichub_id' => $this->trip->logistichub_id, 'assigned_to' => $this->trip->assigned_to, 'user_id' => $this->admin->id, 'trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'is_active' => true]);
-    expect(TripFlow::crew($trip)->pluck('user_id')->all())->toBe([$this->driver->id])
-        ->and(TripFlow::crewPeople(null)->pluck('id')->all())->not->toContain($this->sub->id);
-
-    Livewire::test(\App\Filament\Pages\CrewBoard::class)
-        ->assertSee($this->driver->full_name)->assertSee('1 inactive person still on a truck team')->assertSee('inactive but still on the team')
-        ->call('removeCrew', $this->trip->truck_id, $this->sub->id)->assertDontSee('inactive but still on the team');
-});
-
-it('counts people on an inactive truck as without a truck', function () {
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
-    $this->driver->update(['is_crew' => true]);
-    $this->trip->truck->update(['is_active' => false]);
-
-    Livewire::test(\App\Filament\Pages\CrewBoard::class)->assertSeeInOrder(['Crew without a truck', $this->driver->full_name])
-        ->assertDontSee($this->trip->truck->plate_no);
-});
-DISPATCH_FILE_END_13
+    $rm = collect(glob(app_path(str_replace(['App\\', '\\'], ['', '/'], substr($ns, 0, -6)).'RelationManagers/TripinvoicesRelationManager.php')))->first();
+    $class = substr($ns, 0, -6).'RelationManagers\\TripinvoicesRelationManager';
+    expect($rm)->not->toBeNull();
+    Livewire::test($class, ['ownerRecord' => $trip, 'pageClass' => $ns.'EditDeliverylog'])
+        ->assertSee('Boxes on this trip')->assertSee('Not loaded')->assertSee('Problems')->assertSee('+ Assign invoice')
+        ->assertTableBulkActionExists('bulkPriority')
+        ->callTableBulkAction('bulkPriority', Tripinvoice::where('invoice_id', $inv->id)->get());
+    expect((bool) $inv->fresh()->is_priority)->toBeTrue();
+})->with('panels');
+DISPATCH_FILE_END_25
 
 echo "▶ Rebuilding the design"
 npm run build
