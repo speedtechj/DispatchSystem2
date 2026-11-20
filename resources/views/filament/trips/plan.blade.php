@@ -6,7 +6,7 @@
             @if ($atHub)
                 <small>{{ $hubName }}: direct to customers in your area only. Your trucks, your trip numbers. The boxes at your hub go on the trip when you press Create.</small>
             @else
-                <small>The AI makes trips by city: nearby cities of one province fill one truck. Boxes join when scanned onto the truck, so new containers are always included.</small>
+                <small>The AI makes trips by city: nearby cities of one province fill one truck. Create puts the waiting boxes on the trips. Boxes of a new container: New boxes (to a trip with room).</small>
             @endif
         </span>
         {{-- the day only matters when you press Create: switching it happens in the browser, no wait --}}
@@ -127,7 +127,7 @@
                 <p class="ds-cb__card ds-cb__muted">Nothing to plan: every waiting city is already on a trip, or no boxes are waiting.</p>
             @endforelse
             <span class="ds-pt__sum">
-                <span><b>{{ $onTrips->count() }} {{ Str::plural('trip', $onTrips->count()) }} · about {{ $onTrips->sum('load') }} boxes</b><small>{{ $atHub ? 'Trip numbers with your hub code · the boxes go on the trip when you press Create' : 'Trip numbers now · boxes join when scanned onto the truck' }} · @if ($smsOn)SMS to receivers when the trip is locked{{ ($noSms = $onTrips->filter(fn ($t) => ! ($t['sms'] ?? true))->count()) ? ', except '.$noSms.' '.Str::plural('trip', $noSms) : '' }}@else No SMS (off in @if ($smsUrl)<a href="{{ $smsUrl }}" class="ds-pt__smslink">SMS settings ›</a>@else SMS settings @endif)@endif</small></span>
+                <span><b>{{ $onTrips->count() }} {{ Str::plural('trip', $onTrips->count()) }} · about {{ $onTrips->sum('load') }} boxes</b><small>{{ $atHub ? 'Trip numbers with your hub code · the boxes go on the trip when you press Create' : 'Trip numbers and their boxes now (combos together)' }} · @if ($smsOn)SMS to receivers when the trip is locked{{ ($noSms = $onTrips->filter(fn ($t) => ! ($t['sms'] ?? true))->count()) ? ', except '.$noSms.' '.Str::plural('trip', $noSms) : '' }}@else No SMS (off in @if ($smsUrl)<a href="{{ $smsUrl }}" class="ds-pt__smslink">SMS settings ›</a>@else SMS settings @endif)@endif</small></span>
                 @if ($changedAny && $needPlan === 'reason')
                     <select wire:model="planReason" class="ds-wc__sel" aria-label="Why did you change the AI plan?"><option value="">Why did you change the plan?</option>@foreach ($reasons as $r)<option value="{{ $r }}">{{ $r }}</option>@endforeach</select>
                 @endif

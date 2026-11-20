@@ -2,6 +2,7 @@
 
 namespace App\Filament\Shared\Shipping;
 
+use App\Filament\Concerns\PlacesOnHubTrips;
 use App\Filament\Concerns\ScansInvoices;
 use App\Models\Shipping\SeaShipment;
 use App\Models\Shipping\SeaShipmentScan;
@@ -10,6 +11,8 @@ use App\Models\User;
 use App\Support\Shipping\Shipments;
 use App\Support\Tracking\Tracker;
 use Filament\Pages\Page;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 
@@ -19,6 +22,7 @@ use Illuminate\Support\Facades\Auth;
  */
 abstract class ShipmentScanStation extends Page
 {
+    use PlacesOnHubTrips;
     use ScansInvoices;
 
     protected string $view = 'filament.pages.scaninvoice';
@@ -43,7 +47,7 @@ abstract class ShipmentScanStation extends Page
     }
 
     /** Shipments open for this scan. */
-    abstract protected function shipments(): \Illuminate\Database\Eloquent\Builder;
+    abstract protected function shipments(): Builder;
 
     protected function selected(): ?SeaShipment
     {
@@ -65,6 +69,7 @@ abstract class ShipmentScanStation extends Page
     {
         $this->setInfo = null;
         $this->route = null;
+        $this->hubTrip = null;
         $s = $this->selected();
         if (! $s) {
             $this->scanResult('danger', 'That shipment is not open for this scan any more.');
@@ -96,7 +101,7 @@ abstract class ShipmentScanStation extends Page
         $prev = SeaShipmentScan::where('sea_shipment_id', $s->id)->where('invoice_id', $row->invoice_id)->where('step', static::$step)->first();
         if ($prev) {
             $who = $prev->user_id && $prev->user_id !== Auth::id() ? User::find($prev->user_id)?->first_name : null;
-            $this->scanResult('warning', "{$code} was already scanned".($who ? " by {$who}" : '').($prev->created_at ? ' at '.\Illuminate\Support\Carbon::parse($prev->created_at)->format('g:i A') : '').'. Not counted again.', $row->invdata);
+            $this->scanResult('warning', "{$code} was already scanned".($who ? " by {$who}" : '').($prev->created_at ? ' at '.Carbon::parse($prev->created_at)->format('g:i A') : '').'. Not counted again.', $row->invdata);
 
             return;
         }
@@ -111,7 +116,9 @@ abstract class ShipmentScanStation extends Page
                 return;
             }
         }
-        $this->scanResult('success', "{$code} ".(static::$step === 'port' ? 'handed over at the port.' : 'received.'), $row->invdata);
+        // received at the partner hub: the box goes on the hub's trip of its city (board 45d)
+        $placed = static::$step === 'received' ? $this->placeOnHubTrip($row) : null;
+        $this->scanResult('success', "{$code} ".(static::$step === 'port' ? 'handed over at the port.' : 'received.').($placed ? ' → '.$placed['trip'] : ''), $row->invdata);
     }
 
     public function progress(): array

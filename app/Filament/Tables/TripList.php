@@ -134,10 +134,13 @@ class TripList
     public static function status(Model $trip): array
     {
         $stage = TripFlow::ready() ? TripFlow::stage($trip) : ($trip->is_active ? 'loading' : 'closed');
-        $label = TripFlow::STAGES[$stage][0] ?? Str::title($stage);
+        $label = $stage === 'back' ? 'Coming back' : (TripFlow::STAGES[$stage][0] ?? Str::title($stage));
+        if ($stage === 'closed' && $trip->release_reason === 'auto') {
+            $label = 'Done';
+        }
         $when = match ($stage) {
             'road' => $trip->taken_at ? 'Left '.$trip->taken_at->format('g:i A') : 'On the road',
-            'back' => $trip->back_at ? 'Back '.$trip->back_at->format('g:i A') : 'Back at the hub',
+            'back' => ($n = TripFlow::left($trip)) > 0 ? $n.' '.Str::plural('return', $n).' to scan at the office' : ($trip->back_at ? 'Back '.$trip->back_at->format('g:i A') : 'Back at the hub'),
             'closed' => $trip->closed_at ? 'Done '.$trip->closed_at->format('M j g:i A') : 'Done',
             'ready' => $trip->ready_at ? 'Locked '.$trip->ready_at->format('g:i A') : 'Locked',
             'waiting' => 'Waits for the truck',
@@ -248,14 +251,19 @@ class TripList
         $loaded = fn ($w) => $w->select(DB::raw(1))->from('tripinvoices')->where('tripinvoices.is_loaded', true)
             ->where(fn ($x) => $x->whereColumn('tripinvoices.deliverylog_id', 'deliverylogs.id')->orWhereColumn('tripinvoices.deliveryloghub_id', 'deliverylogs.id'));
         $taken = Schema::hasColumn('deliverylogs', 'taken_at');
+        $back = Schema::hasColumn('deliverylogs', 'back_at');
         $q = [
-            'all' => fn (Builder $b) => $b,
+            'work' => fn (Builder $b) => $b->where('deliverylogs.is_active', true),
             'planned' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->whereNotExists($loaded),
             'loading' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->whereExists($loaded),
-            'road' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNotNull('deliverylogs.taken_at'), fn ($x) => $x->whereRaw('1 = 0')),
+            'road' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNotNull('deliverylogs.taken_at'), fn ($x) => $x->whereRaw('1 = 0'))
+                ->when($back, fn ($x) => $x->whereNull('deliverylogs.back_at')),
+            'back' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($back, fn ($x) => $x->whereNotNull('deliverylogs.back_at'), fn ($x) => $x->whereRaw('1 = 0')),
             'done' => fn (Builder $b) => $b->where('deliverylogs.is_active', false),
+            'all' => fn (Builder $b) => $b,
         ];
-        $labels = ['all' => 'All', 'planned' => 'Planned', 'loading' => 'Loading', 'road' => 'On the road', 'done' => 'Done'];
+        // board 45c: only trips still at work by default; done trips stay in the Done tab
+        $labels = ['work' => 'Still at work', 'planned' => 'Planned', 'loading' => 'Loading', 'road' => 'On the road', 'back' => 'Coming back', 'done' => 'Done', 'all' => 'All'];
 
         return collect($q)->mapWithKeys(fn ($fn, $k) => [$k => Tab::make($labels[$k])
             ->badge(fn () => $fn((clone $base))->count())

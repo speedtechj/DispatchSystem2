@@ -5,6 +5,7 @@ namespace App\Support\Navigation;
 use App\Models\Shipping\WrongHubBox;
 use App\Support\Shipping\Shipments;
 use App\Support\Tracking\Tracker;
+use App\Support\Trips\TripFill;
 use Filament\Navigation\NavigationGroup;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -49,6 +50,7 @@ class Menu
             'Resources\\Deliverylogs\\DeliverylogResource' => ['Trips & delivery', 'Delivery trips', 1],
             'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Trips & delivery', 'Delivery invoices', 2],
             'Pages\\PlanTrips' => ['Trips & delivery', null, 0],
+            'Pages\\NewBoxes' => ['Trips & delivery', null, 0],
             'Pages\\AddressesToCheck' => ['Trips & delivery', null, 2],
             'Pages\\Overrides' => ['Trips & delivery', null, 2],
             'Pages\\WarehouseTransfers' => ['Trips & delivery', null, 2],
@@ -116,6 +118,7 @@ class Menu
             'Resources\\Deliverylogs\\DeliverylogResource' => ['Trips', 'Delivery trips', 1],
             'Resources\\Whdeliverylogs\\WhdeliverylogResource' => ['Trips', 'Transfers to other warehouses', 2],
             'Pages\\PlanTrips' => ['Trips', null, 0],
+            'Pages\\NewBoxes' => ['Trips', null, 0],
             'Pages\\AddressesToCheck' => ['Trips', null, 2],
             'Pages\\Overrides' => ['Trips', null, 2],
             'Pages\\WarehouseTransfers' => ['Trips', null, 2],
@@ -177,8 +180,8 @@ class Menu
 
     /** Pages with a number of what waits: panel => [short class => counter]. */
     public const BADGES = [
-        'admin' => ['Pages\\SeaShipments' => 'sea', 'Pages\\WrongHub' => 'wrongHub'],
-        'warehouse' => ['Pages\\SeaShipments' => 'sea', 'Pages\\ComingBack' => 'comingBack'],
+        'admin' => ['Pages\\SeaShipments' => 'sea', 'Pages\\WrongHub' => 'wrongHub', 'Pages\\NewBoxes' => 'newBoxes'],
+        'warehouse' => ['Pages\\SeaShipments' => 'sea', 'Pages\\ComingBack' => 'comingBack', 'Pages\\NewBoxes' => 'newBoxes'],
         'company' => ['Pages\\IncomingShipments' => 'sea', 'Pages\\WrongHub' => 'wrongHub'],
     ];
 
@@ -223,6 +226,10 @@ class Menu
         }
         try {
             $n = Cache::remember("menu:{$panel}:{$user->getKey()}:{$counter}", 60, function () use ($panel, $user, $counter): int {
+                if ($counter === 'newBoxes') {
+                    // new boxes of cities that already have a trip (board 45b)
+                    return (int) collect(TripFill::newBoxes($user))->sum('n');
+                }
                 if (! Shipments::ready()) {
                     return 0;
                 }

@@ -2,9 +2,9 @@
 
 namespace App\Filament\Shared\Shipping;
 
+use App\Filament\Concerns\PlacesOnHubTrips;
 use App\Filament\Concerns\ScansInvoices;
 use App\Models\Deliverylog;
-use App\Models\Shipping\SeaShipment;
 use App\Models\Shipping\TruckReceiptScan;
 use App\Models\Tripinvoice;
 use App\Models\User;
@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Auth;
 /** Scan app · Receive truck: the partner hub (by truck) scans every box in when the truck from Manila arrives. */
 class TruckReceiveStation extends Page
 {
+    use PlacesOnHubTrips;
     use ScansInvoices;
 
     protected string $view = 'filament.pages.scaninvoice';
@@ -54,6 +55,7 @@ class TruckReceiveStation extends Page
     {
         $this->setInfo = null;
         $this->route = null;
+        $this->hubTrip = null;
         $trip = $this->selected();
         $hub = $this->hubId();
         if (! $trip) {
@@ -93,7 +95,9 @@ class TruckReceiveStation extends Page
 
             return;
         }
-        $this->scanResult('success', "{$code} received at your hub.".($wasLoaded ? '' : ' It was not scanned onto the truck in Manila.'), $row->invdata);
+        // the box goes on the hub's open trip of its city: full → a new hub trip (Add anyway offered)
+        $placed = $this->placeOnHubTrip($row);
+        $this->scanResult('success', "{$code} received at your hub.".($placed ? ' → '.$placed['trip'] : '').($wasLoaded ? '' : ' It was not scanned onto the truck in Manila.'), $row->invdata);
     }
 
     public function progress(): array

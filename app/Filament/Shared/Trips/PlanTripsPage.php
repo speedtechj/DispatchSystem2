@@ -3,9 +3,14 @@
 namespace App\Filament\Shared\Trips;
 
 use App\Models\Deliverylog;
+use App\Models\Logistichub;
 use App\Support\Ai\Ai;
+use App\Support\Hubs\HubAreas;
+use App\Support\Sms\SmsSettings;
 use App\Support\Tracking\Tracker;
 use App\Support\Trips\CityTrips;
+use App\Support\Trips\TripRules;
+use App\Support\Warehouses\Coverage;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -14,7 +19,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 
-/** Plan trips by city: the AI groups nearby cities into truckloads; boxes join when scanned onto the truck. */
+/** Plan trips by city: the AI groups nearby cities into truckloads; Create puts the boxes on the trips. */
 class PlanTripsPage extends Page
 {
     protected string $view = 'filament.trips.plan';
@@ -127,7 +132,7 @@ class PlanTripsPage extends Page
     protected function replanHubs(): void
     {
         $used = collect($this->trips)->where('on', true)->pluck('truck_id')->filter()->values()->all();
-        $this->hubPlan = \App\Support\Hubs\HubAreas::ready() && ! static::$atHub ? json_decode(json_encode($this->city()->planHubs($used)), true) : [];
+        $this->hubPlan = HubAreas::ready() && ! static::$atHub ? json_decode(json_encode($this->city()->planHubs($used)), true) : [];
         foreach ($this->hubPlan as $h) {
             $this->hubWhen[$h['hub']] ??= collect($h['trips'])->contains('when', 'later') ? 'later' : 'now';
         }
@@ -174,7 +179,7 @@ class PlanTripsPage extends Page
     /** "Deliver direct instead": a hub city moves to the Direct tab (with a reason, per the trip rules). */
     public function askDirectCity(int $hub, string $key): void
     {
-        $need = \App\Support\Trips\TripRules::need('direct_hub', Auth::user());
+        $need = TripRules::need('direct_hub', Auth::user());
         if ($need === 'office') {
             Notification::make()->title('Only the office can deliver a hub’s boxes direct')->warning()->send();
 
@@ -192,7 +197,7 @@ class PlanTripsPage extends Page
             return;
         }
         [$hub, $p, $c] = array_pad(explode('|', $this->askDirect, 3), 3, '');
-        \App\Support\Trips\TripRules::record('direct_hub', Auth::user(), $reason ?: null, ['note' => Str::title($c).', '.Str::title($p).': '.\App\Support\Hubs\HubAreas::name((int) $hub).' → direct']);
+        TripRules::record('direct_hub', Auth::user(), $reason ?: null, ['note' => Str::title($c).', '.Str::title($p).': '.HubAreas::name((int) $hub).' → direct']);
         $this->direct[] = $this->askDirect;
         $this->direct = array_values(array_unique($this->direct));
         $this->askDirect = null;
@@ -241,7 +246,7 @@ class PlanTripsPage extends Page
     /** Trip rules: may this person change the AI plan? */
     protected function mayChange(): bool
     {
-        if (\App\Support\Trips\TripRules::need('change_plan', Auth::user()) === 'office') {
+        if (TripRules::need('change_plan', Auth::user()) === 'office') {
             Notification::make()->title('Only the office can change the AI plan')->body('Ask an admin, or create the trips as suggested.')->warning()->send();
 
             return false;
@@ -335,14 +340,14 @@ class PlanTripsPage extends Page
     {
         $date = Carbon::parse($this->date ?: today());
         $changed = collect($this->trips)->filter(fn ($t) => ! empty($t['changed']));
-        if ($changed->isNotEmpty() && \App\Support\Trips\TripRules::need('change_plan', Auth::user()) === 'reason') {
-            if (! in_array($this->planReason, \App\Support\Trips\TripRules::reasons(), true)) {
+        if ($changed->isNotEmpty() && TripRules::need('change_plan', Auth::user()) === 'reason') {
+            if (! in_array($this->planReason, TripRules::reasons(), true)) {
                 Notification::make()->title('Pick why you changed the AI plan')->warning()->send();
 
                 return;
             }
             foreach ($changed as $t) {
-                \App\Support\Trips\TripRules::record('change_plan', Auth::user(), $this->planReason, ['note' => $t['province'].' › '.collect($t['cities'])->pluck('city')->join(', ').($t['on'] ? '' : ' (switched off)')]);
+                TripRules::record('change_plan', Auth::user(), $this->planReason, ['note' => $t['province'].' › '.collect($t['cities'])->pluck('city')->join(', ').($t['on'] ? '' : ' (switched off)')]);
             }
         }
         $this->city()->made = ['ai' => $this->ai, 'instruction' => trim($this->instruction), 'reason' => $this->planReason];
@@ -388,7 +393,7 @@ class PlanTripsPage extends Page
         ])->sortByDesc('days')->values();
         $addrPage = str_replace('PlanTrips', 'AddressesToCheck', static::class);
         $here = (int) Auth::user()->warehouse_id;
-        $out = $here && \App\Support\Warehouses\Coverage::active() ? \App\Support\Warehouses\Coverage::waitingTransfer($here)->countBy('home') : collect();
+        $out = $here && Coverage::active() ? Coverage::waitingTransfer($here)->countBy('home') : collect();
         $trPage = str_replace('PlanTrips', 'WarehouseTransfers', static::class);
 
         return [
@@ -411,16 +416,16 @@ class PlanTripsPage extends Page
             'tops' => collect($this->trips)->keys()->mapWithKeys(fn ($i) => [$i => $this->topOptions($i)])->all(),
             'sets' => collect($this->trips)->map(fn ($t) => $t['on'] ? $c->sets(collect($t['cities'])->pluck('key')->all()) : [])->all(),
             'changedAny' => collect($this->trips)->contains(fn ($t) => ! empty($t['changed'])),
-            'needPlan' => \App\Support\Trips\TripRules::need('change_plan', Auth::user()),
-            'reasons' => \App\Support\Trips\TripRules::reasons(),
-            'transferOut' => $out->map(fn ($n, $w) => ['n' => $n, 'name' => \App\Support\Warehouses\Coverage::name((int) $w)])->values(),
-            'arriving' => $here && \App\Support\Warehouses\Coverage::active() ? \App\Support\Warehouses\Coverage::arriving($here) : 0,
+            'needPlan' => TripRules::need('change_plan', Auth::user()),
+            'reasons' => TripRules::reasons(),
+            'transferOut' => $out->map(fn ($n, $w) => ['n' => $n, 'name' => Coverage::name((int) $w)])->values(),
+            'arriving' => $here && Coverage::active() ? Coverage::arriving($here) : 0,
             'trUrl' => static::class !== self::class && class_exists($trPage) ? $trPage::getUrl() : null,
-            'smsOn' => \App\Support\Sms\SmsSettings::on(static::$atHub ? 'out_for_delivery_hub' : 'out_for_delivery'),
+            'smsOn' => SmsSettings::on(static::$atHub ? 'out_for_delivery_hub' : 'out_for_delivery'),
             'smsUrl' => class_exists(\App\Filament\Pages\SmsSettings::class) && Filament::getCurrentPanel()?->getId() === 'admin' ? \App\Filament\Pages\SmsSettings::getUrl() : null,
-            'hubsOn' => ! static::$atHub && \App\Support\Hubs\HubAreas::ready() && \App\Support\Hubs\HubAreas::hubs()->isNotEmpty(),
+            'hubsOn' => ! static::$atHub && HubAreas::ready() && HubAreas::hubs()->isNotEmpty(),
             'atHub' => static::$atHub, 'notMine' => $c->notMine(),
-            'hubName' => static::$atHub ? \App\Models\Logistichub::whereKey(Auth::user()->logistichub_id)->value('hub_name') : null,
+            'hubName' => static::$atHub ? Logistichub::whereKey(Auth::user()->logistichub_id)->value('hub_name') : null,
             'hubBoxes' => collect($this->hubPlan)->sum('boxes'),
             'directBoxes' => $places->reject(fn ($p) => $p['unclear'])->sum('boxes'),
             'hubColors' => ['#1d6fb8', '#c97a00', '#17895e', '#7a4fd6', '#c2410c', '#0e7490'],

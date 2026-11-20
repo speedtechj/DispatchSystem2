@@ -32,6 +32,17 @@
                 </div>
             @endif
 
+            @if (property_exists($this, 'hubTrip') && $this->hubTrip)
+                @php($ht = $this->hubTrip)
+                <div @class(['ds-ws__trip', 'is-new' => $ht['kind'] === 'new', 'is-anyway' => $ht['kind'] === 'anyway'])>
+                    <b class="ds-ws__to">→ {{ $ht['kind'] === 'new' ? 'new trip ' : '' }}{{ $ht['trip'] }}</b>
+                    <small>{{ $ht['why'] }}</small>
+                    @if ($ht['kind'] === 'new' && ! empty($ht['full']))
+                        <button type="button" wire:click="hubAnyway" wire:loading.attr="disabled">Add anyway to {{ $ht['full']['number'] }}</button>
+                    @endif
+                </div>
+            @endif
+
             @if ($missingCode)
                 <div class="ds-result__actions">
                     {{ $this->unmanifestedAction }}

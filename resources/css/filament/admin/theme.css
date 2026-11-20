@@ -4770,3 +4770,67 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .dark .ds-nt__opt.is-on, .dark .ds-nt__truck.is-on { box-shadow: inset 0 0 0 2px #5aa7e6; }
 .dark .ds-nt__chip.is-on { background: #fff; color: #0e2433; }
 .dark .ds-nt__row { border-color: rgb(255 255 255 / .08); }
+
+/* ── New boxes since the trips were made (board 45b) ── */
+.ds-nb { display: flex; flex-direction: column; gap: 14px; }
+.ds-nb__empty { align-items: flex-start; }
+.ds-nb__empty small { color: #6b7b88; }
+.ds-nb__apply { flex-direction: row; align-items: center; gap: 14px; box-shadow: inset 0 0 0 2px #e5b94a, 0 12px 32px -18px rgb(14 36 51 / .25); }
+.ds-nb__apply > span { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.ds-nb__apply b { font-size: 17px; }
+.ds-nb__apply small { color: #6b7b88; }
+.ds-nb__apply .ds-nt__go { padding: 0 22px; }
+.ds-nb__list { padding: 0; gap: 0; overflow: hidden; }
+.ds-nb__row { display: grid; grid-template-columns: 1.3fr 90px 1.8fr 1.6fr; gap: 14px; align-items: center; padding: 14px 18px; border-top: 1px solid #f1f4f6; }
+.ds-nb__head { border-top: 0; font-size: 12px; font-weight: 800; color: #6b7b88; padding: 12px 18px; }
+.ds-nb__city { display: flex; flex-direction: column; }
+.ds-nb__city small { color: #6b7b88; }
+.ds-nb__n { font-size: 18px; }
+.ds-nb__trip { display: flex; flex-direction: column; gap: 6px; }
+.ds-nb__tline { display: flex; gap: 8px; align-items: center; }
+.ds-nb__pill { font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px; background: #eef1f4; color: #33424e; }
+.ds-nb__pill.is-open { background: #e6f6ef; color: #17895e; }
+.ds-nb__pill.is-full { background: #fff1c2; color: #8a5a00; }
+.ds-nb__space { display: flex; align-items: center; gap: 8px; }
+.ds-nb__space .ds-tl__bar { flex: 1; }
+.ds-nb__space .ds-tl__bar i { background: #8fd3b4; }
+.ds-nb__space small { font-weight: 700; color: #33424e; white-space: nowrap; }
+.ds-nb__acts { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.ds-nb__btn { height: 36px; padding: 0 14px; font-size: 13px; }
+.ds-nb__btn.is-anyway { color: #8a5a00; box-shadow: inset 0 0 0 1px #e8c873; }
+.ds-nt__go.ds-nb__btn.is-anyway { background: #f2c46b; color: #0e2433; box-shadow: none; }
+.ds-nb__modal { position: fixed; inset: 0; z-index: 50; background: rgb(14 36 51 / .35); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.ds-nb__pick { width: min(640px, 100%); max-height: calc(100vh - 40px); gap: 12px; }
+.ds-nb__ph { display: flex; flex-direction: column; gap: 3px; }
+.ds-nb__ph b { font-size: 19px; }
+.ds-nb__ph small { color: #6b7b88; }
+.ds-nb__meter { display: flex; flex-direction: column; gap: 6px; }
+.ds-nb__meter .ds-tl__bar { height: 10px; }
+.ds-nb__meter i.is-used { background: #b8c3cc; }
+.ds-nb__meter i.is-new { background: #17895e; }
+.ds-nb__meter i.is-over { background: #e2a23b; }
+.ds-nb__meter small { font-weight: 800; color: #17895e; }
+.ds-nb__meter small.is-over { color: #8a5a00; }
+.ds-nb__items { display: flex; flex-direction: column; max-height: 340px; overflow: auto; border-radius: 12px; box-shadow: inset 0 0 0 1px #e3e8ec; }
+.ds-nb__item { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border: 0; border-bottom: 1px solid #f1f4f6; background: #fff; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.ds-nb__item.is-on { background: #fffbea; }
+.ds-nb__item > span { flex: 1; display: flex; flex-direction: column; }
+.ds-nb__item small { color: #6b7b88; }
+.ds-nb__check { width: 20px; height: 20px; border-radius: 6px; flex: none; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 12px; font-weight: 900; color: #fff; background: #fff; box-shadow: inset 0 0 0 1px #c3ccd4; }
+.ds-nb__item.is-on .ds-nb__check { background: #c99a00; box-shadow: none; }
+.ds-nb__tag { font-style: normal; font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px; background: #eef1f4; color: #33424e; white-space: nowrap; }
+.ds-nb__tag.is-combo { background: #f3e9ff; color: #6a2fb0; }
+.ds-nb__warn { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 12px; background: #fff1c2; color: #7a5600; font-size: 13px; font-weight: 700; }
+.ds-nb__foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ds-nb__foot > span { display: flex; gap: 8px; align-items: center; }
+.dark .ds-nb__item { background: transparent; }
+.dark .ds-nb__item.is-on { background: rgb(201 154 0 / .12); }
+@media (max-width: 900px) { .ds-nb__row { grid-template-columns: 1fr 60px; } .ds-nb__trip, .ds-nb__acts { grid-column: 1 / -1; } }
+
+/* ── Scan app · Receive truck: the box goes on a hub trip (board 45d) ── */
+.ds-ws__trip { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 16px; background: #d9f2e6; color: #0e2433; }
+.ds-ws__trip.is-new { background: #fff1c2; }
+.ds-ws__trip.is-anyway { background: #ffe2b8; }
+.ds-ws__trip b.ds-ws__to { font-size: 20px; }
+.ds-ws__trip small { font-size: 13px; }
+.ds-ws__trip button { height: 40px; border: 0; border-radius: 12px; background: #fff; font: inherit; font-weight: 800; color: #8a5a00; cursor: pointer; }

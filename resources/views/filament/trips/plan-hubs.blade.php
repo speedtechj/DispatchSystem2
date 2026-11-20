@@ -36,7 +36,7 @@
                 @if (count($h['cities']) > 5)<small class="ds-pt__muted">+ {{ count($h['cities']) - 5 }} more {{ Str::plural('city', count($h['cities']) - 5) }}</small>@endif
             </span>
             @if (! empty($h['open']))
-                <span class="ds-ph__done is-made">On {{ implode(', ', $h['open']) }}: boxes join when scanned onto the truck.</span>
+                <span class="ds-ph__done is-made">On {{ implode(', ', $h['open']) }}: new boxes of the hub join it while it has room (New boxes).</span>
             @elseif ($multi)
                 <span class="ds-fl__seg ds-ph__when">
                     <button type="button" wire:click="setWhen({{ $h['hub'] }}, 'now')" @class(['is-on' => $when === 'now'])>Both now</button>
@@ -70,4 +70,4 @@
         <p class="ds-cb__card ds-cb__muted">No boxes wait for a hub. Places get a hub in Settings › Hub areas.</p>
     @endforelse
 </div>
-<span class="ds-wc__asked">One trip per hub, not split by city: the hub splits the boxes into its own trips. Boxes join when scanned onto the truck. No SMS from here; the hub texts the receivers when it locks its own trip.</span>
+<span class="ds-wc__asked">One trip per hub, not split by city: the hub splits the boxes into its own trips. The hub’s boxes go on the trip when you press Create. No SMS from here; the hub texts the receivers when it locks its own trip.</span>

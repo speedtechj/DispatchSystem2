@@ -61,6 +61,7 @@ it('lets the driver undo from the toast right after delivering', function () {
 });
 
 it('shows Undo on the dashboard for 30 minutes, then Office only', function () {
+    $this->travelTo(today()->setTime(10, 0)); // not near midnight: the list is today's deliveries
     ($this->deliver)();
     driverPanel();
 

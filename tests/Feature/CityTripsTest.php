@@ -6,8 +6,10 @@ use App\Models\Deliverylog;
 use App\Models\Invoice;
 use App\Models\TripCity;
 use App\Models\Tripinvoice;
+use App\Models\TripOverride;
 use App\Models\Truck;
 use App\Models\User;
+use App\Support\Sms\SmsEvents;
 use App\Support\Trips\CityTrips;
 use Database\Seeders\DemoSeeder;
 use Filament\Facades\Filament;
@@ -56,10 +58,15 @@ it('plans trips by city: oldest province first, nearby cities fill one truck', f
     expect($first['trips'][0]['province'])->toBe('Bulacan');
 });
 
-it('creates trips with numbers now and no boxes; boxes join when scanned onto the truck', function () {
+it('creates trips with their boxes (not loaded); scanning onto the truck marks them loaded', function () {
     $page = Livewire::test(PlanTrips::class)->assertSee('Plan trips')->assertSee('Tarlac City')->assertSee('Waiting, by city')->call('create');
     $trip = Deliverylog::whereHas('cities', fn ($q) => $q->where('city', 'Tarlac City'))->firstOrFail();
-    expect(Tripinvoice::where('deliverylog_id', $trip->id)->count())->toBe(0)
+    // board 45: the boxes go on the trip at Create, as "Not loaded"
+    $on = Tripinvoice::where('deliverylog_id', $trip->id);
+    expect((clone $on)->count())->toBeGreaterThan(0)
+        ->and((clone $on)->where('is_loaded', true)->count())->toBe(0)
+        ->and((clone $on)->where('invoice', 'TAR1')->exists())->toBeTrue()
+        ->and(TripCity::where('deliverylog_id', $trip->id)->sum('planned_boxes'))->toBe((clone $on)->count())
         ->and($trip->truck_id)->toBe($this->free[0]->id)
         ->and($this->free[0]->fresh()->is_assigned)->toBeTrue();
     $page->assertSee('created:')->assertSee($trip->trip_number);
@@ -80,8 +87,10 @@ it('creates trips with numbers now and no boxes; boxes join when scanned onto th
 
     // locked: no more boxes join, and the SMS waits for the lock
     $trip->update(['is_lock' => true]);
-    $load->call('scan', 'CAP1')->assertSet('lastStatus', 'danger');
-    expect(Tripinvoice::where('invoice', 'CAP1')->exists())->toBeFalse();
+    $late = Invoice::where('invoice', 'TAR1')->firstOrFail()->replicate();
+    $late->forceFill(['invoice' => 'TARLATE', 'is_assigned' => false, 'set_key' => null])->save();
+    $load->call('scan', 'TARLATE')->assertSet('lastStatus', 'danger');
+    expect(Tripinvoice::where('invoice', 'TARLATE')->exists())->toBeFalse();
 });
 
 it('keeps a trip for the next free truck, then Give hands it over', function () {
@@ -91,7 +100,7 @@ it('keeps a trip for the next free truck, then Give hands it over', function () 
     $page->call('create');
     expect(Deliverylog::whereHas('cities')->count())->toBe(0); // changed the AI plan: a reason first
     $page->assertSee('Why did you change the plan?')->set('planReason', 'Truck problem')->call('create');
-    expect(\App\Models\TripOverride::where('rule', 'change_plan')->value('reason'))->toBe('Truck problem');
+    expect(TripOverride::where('rule', 'change_plan')->value('reason'))->toBe('Truck problem');
     $trip = Deliverylog::whereHas('cities')->whereNull('truck_id')->firstOrFail();
 
     Livewire::test(PlanTrips::class)->assertSee('is free')->assertSee('Give')->call('give', $trip->id, $this->free[0]->id)->assertSee('is on '.$trip->trip_number);
@@ -102,5 +111,5 @@ it('does not text receivers of a city trip before it is locked', function () {
     (new CityTrips($this->admin))->create((new CityTrips($this->admin))->plan()['trips'], today());
     $trip = Deliverylog::whereHas('cities')->firstOrFail();
     Livewire::test(Scanload::class)->set('data.deliverylog_id', $trip->id)->call('scan', 'TAR1');
-    expect(\App\Support\Sms\SmsEvents::outForDelivery($trip->fresh()))->toBe(0);
+    expect(SmsEvents::outForDelivery($trip->fresh()))->toBe(0);
 });

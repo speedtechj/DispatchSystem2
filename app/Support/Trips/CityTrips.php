@@ -104,6 +104,30 @@ class CityTrips
         return ! $u['hub'] || in_array($u['hub'].'|'.Str::lower($u['province']).'|'.Barangays::cityKey($u['city']), $this->direct, true);
     }
 
+    /** Waiting boxes (one unit per receiver) this hub delivers itself. */
+    public function waitingUnits(): Collection
+    {
+        return $this->planner()->units()->map(fn ($u) => $u + ['hub' => null])->filter(fn ($u) => $this->isDirect($u))->values();
+    }
+
+    /**
+     * Put the waiting boxes of the trip's cities on it (board 45): urgent first, combos whole, up to the truck's space.
+     * $hubId: boxes a partner hub delivers (a trip to that hub).
+     */
+    protected function fillTrip(Deliverylog $trip, array $cityKeys, float $cap, ?int $hubId = null): int
+    {
+        $keys = array_flip($cityKeys);
+        $units = ($hubId ? $this->planner()->units()->filter(fn ($u) => (int) ($u['hub'] ?? 0) === $hubId) : $this->waitingUnits())
+            ->filter(fn ($u) => isset($keys[TripFill::cityKey($u['province'], $u['city'])]));
+        // boxes put on an earlier trip of this Create are not waiting any more
+        $free = Invoice::whereIn('id', $units->flatMap(fn ($u) => $u['ids']))->where('is_assigned', false)->pluck('id')->flip();
+        $units = $units->map(fn ($u) => ['ids' => array_values(array_filter($u['ids'], fn ($id) => isset($free[$id])))] + $u)
+            ->filter(fn ($u) => $u['ids'])->map(fn ($u) => count($u['ids']) === $u['n'] ? $u : ['n' => count($u['ids']), 'space' => $u['space'] * count($u['ids']) / max(1, $u['n'])] + $u);
+        [$picked] = TripFill::pick(TripFill::combos($units), $cap);
+
+        return TripFill::addInvoices($trip, $picked);
+    }
+
     /** Days a box has waited, per box id. */
     protected ?Collection $sinceMemo = null;
 
@@ -247,7 +271,7 @@ class CityTrips
     }
 
     /**
-     * Make trips to a hub. Boxes join when scanned onto the truck (only boxes of this hub's cities).
+     * Make trips to a hub. The hub's waiting boxes go on them now (combos whole, up to the truck's space).
      *
      * @return list<array{id: int, number: string, truck: ?string}>
      */
@@ -269,6 +293,9 @@ class CityTrips
                     TripCity::create(['deliverylog_id' => $trip->id, 'province' => $c['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'),
                         'planned_boxes' => (int) $c['boxes'], 'hub_id' => $hubId]);
                 }
+                // the hub's boxes go on the trip now (board 45)
+                $this->fillTrip($trip, collect($t['cities'])->map(fn ($c) => TripFill::cityKey($c['province'], $c['city']))->unique()->all(),
+                    (float) ($t['cap'] ?? self::DEFAULT_CAPACITY), $hubId);
                 if ($truck && ! $truck->is_assigned) {
                     $truck->update(['is_assigned' => true]);
                 }
@@ -516,7 +543,7 @@ class CityTrips
     }
 
     /**
-     * Make the trips. Trip numbers come now; boxes join when scanned onto the truck.
+     * Make the trips with their boxes (board 45): combos whole, urgent first, up to the truck's space.
      *
      * @return list<array{id: int, number: string, truck: ?string}>
      */
@@ -525,6 +552,7 @@ class CityTrips
         if ($this->atHub) {
             return $this->createAtHub($trips, $date);
         }
+        $this->plannerMemo = null; // fresh waiting boxes
         $made = [];
         foreach ($trips as $t) {
             if (empty($t['on']) || empty($t['cities'])) {
@@ -544,6 +572,9 @@ class CityTrips
                         TripCity::create(['deliverylog_id' => $trip->id, 'province' => $t['province'], 'city' => $c['city'], 'city_key' => Str::after($c['key'], '|'), 'planned_boxes' => 0, 'hub_id' => (int) $hub]);
                     }
                 }
+                // the boxes go on the trip now (board 45): combos whole, up to the truck's space
+                $this->fillTrip($trip, collect($t['cities'])->map(fn ($c) => TripFill::cityKey($t['province'], $c['city']))->all(),
+                    (float) ($t['cap'] ?? ($truck ? TruckSpace::usable($truck, self::DEFAULT_CAPACITY) : self::DEFAULT_CAPACITY)));
                 if ($truck && ! $truck->is_assigned) {
                     $truck->update(['is_assigned' => true]);
                 }

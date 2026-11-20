@@ -12,7 +12,7 @@
             <span class="ds-cb__pill is-{{ $stage }}">{{ $stageInfo[0] }}</span>
         </header>
         @if (\App\Support\Trips\CityTrips::ready() && ($tc = $trip->cities()->get())->isNotEmpty())
-            <p class="ds-tp__cities">📍 {{ $tc->first()->province }} › {{ $tc->pluck('city')->join(', ') }} · {{ $trip->is_lock ? 'locked: no more boxes join' : 'boxes of these cities join when scanned onto the truck' }}@if ($trip->plan_why)<small>✦ {{ $trip->plan_why }}</small>@endif</p>
+            <p class="ds-tp__cities">📍 {{ $tc->first()->province }} › {{ $tc->pluck('city')->join(', ') }} · {{ $trip->is_lock ? 'locked: no more boxes join' : 'new boxes of these cities can still join (New boxes)' }}@if ($trip->plan_why)<small>✦ {{ $trip->plan_why }}</small>@endif</p>
         @endif
 
         <div class="ds-tp__tiles">

@@ -210,7 +210,9 @@ class TripFlow
     {
         app(TripAssignment::class)->releaseTruck($trip);
         if (static::ready()) {
-            $trip->forceFill(['closed_at' => now(), 'release_reason' => $auto ? 'auto' : $reason])->saveQuietly();
+            $trip->forceFill(['closed_at' => now(), 'release_reason' => $auto ? 'auto' : $reason]
+                // done by itself: the Delivered date fills in (board 45c)
+                + ($auto && ! $trip->delivery_date ? ['delivery_date' => now()->toDateString()] : []))->saveQuietly();
         }
         // The next trip waiting for this truck starts now: the crew sees it right away.
         if ($next = static::nextAfter($trip)) {

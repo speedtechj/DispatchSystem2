@@ -192,6 +192,16 @@
                             <button type="button" class="ds-sx__link" wire:click="putInSection">Put in section instead</button>
                         @endif
                     @endif
+                    @if ($hubTrip)
+                        <div @class(['ds-ws__trip', 'is-new' => $hubTrip['kind'] === 'new', 'is-anyway' => $hubTrip['kind'] === 'anyway'])>
+                            <small>{{ $hubTrip['kind'] === 'new' ? 'Trip full · goes on a new trip' : 'Goes on trip' }}</small>
+                            <b class="ds-ws__to">→ {{ $hubTrip['trip'] }}</b>
+                            <small>{{ $hubTrip['why'] }}</small>
+                            @if ($hubTrip['kind'] === 'new' && ! empty($hubTrip['full']))
+                                <button type="button" wire:click="hubAnyway" wire:loading.attr="disabled">Add anyway to {{ $hubTrip['full']['number'] }}</button>
+                            @endif
+                        </div>
+                    @endif
                     @if ($setInfo)
                         <div @class(['ds-sx__set', 'is-'.$setInfo['kind']])>
                             <span><b>{{ $setInfo['name'] }}</b> · box {{ $setInfo['n'] }} of {{ $setInfo['of'] }}</span>

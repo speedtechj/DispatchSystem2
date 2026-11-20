@@ -3,16 +3,21 @@
 namespace App\Filament\Scan\Pages;
 
 use App\Models\Ai\AiPhotoCheck;
+use App\Models\Boxes\SetSplit;
 use App\Models\BoxPhoto;
 use App\Models\Deliverylog;
 use App\Models\Invoice;
 use App\Models\PhotoSetting;
 use App\Models\Unmanifested;
+use App\Models\Whdeliverylog;
+use App\Services\TripAssignment;
 use App\Support\Ai\Ai;
 use App\Support\Ai\PhotoCheck;
 use App\Support\BoxSizes;
 use App\Support\Photos\BoxPhotos;
 use App\Support\ScanModes;
+use App\Support\Trips\TripRules;
+use App\Support\TruckSpace;
 use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Textarea;
@@ -82,10 +87,12 @@ class ScanApp extends Page
     #[Locked]
     public ?array $setInfo = null;
 
+    /** Partner hub unload: the hub trip the box went on (board 45d). */
+    public ?array $hubTrip = null;
+
     /** Load truck: the box is for another hub. */
     #[Locked]
     public ?array $wrongHub = null;
-
 
     /** Show the finished and closed ones on the pick list too (greyed out). */
     public bool $showFinished = false;
@@ -232,7 +239,7 @@ class ScanApp extends Page
 
     protected function clearResult(): void
     {
-        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass');
+        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass', 'hubTrip');
     }
 
     /** Called by the camera or the typed box number. */
@@ -250,7 +257,7 @@ class ScanApp extends Page
     protected function bypassCtx(string $code): array
     {
         $kind = in_array($this->mode, ['wh_load'], true) ? 'transfer' : 'delivery';
-        $model = $kind === 'transfer' ? \App\Models\Whdeliverylog::class : Deliverylog::class;
+        $model = $kind === 'transfer' ? Whdeliverylog::class : Deliverylog::class;
 
         return ['kind' => $kind, 'trip_id' => $this->choice, 'trip_number' => $this->choice ? $model::whereKey($this->choice)->value('trip_number') : null,
             'invoice_id' => Invoice::where('invoice', $code)->latest('id')->value('id'), 'box' => $code];
@@ -263,24 +270,24 @@ class ScanApp extends Page
         if (! $code) {
             return;
         }
-        $rule = \App\Support\Trips\TripRules::ruleOf($this->early, $this->wrongHub);
+        $rule = TripRules::ruleOf($this->early, $this->wrongHub);
         $ctx = $this->bypassCtx($code);
-        $need = \App\Support\Trips\TripRules::need($rule, Auth::user(), $ctx['trip_id'], $ctx['invoice_id']);
+        $need = TripRules::need($rule, Auth::user(), $ctx['trip_id'], $ctx['invoice_id']);
         if ($need === 'free') {
             $this->runScan($code, true);
 
             return;
         }
-        $this->bypass = ['rule' => $rule, 'code' => $code, 'need' => $need, 'title' => \App\Support\Trips\TripRules::RULES[$rule][0]];
+        $this->bypass = ['rule' => $rule, 'code' => $code, 'need' => $need, 'title' => TripRules::RULES[$rule][0]];
     }
 
     public function bypassWith(string $reason): void
     {
-        if (! $this->bypass || $this->bypass['need'] !== 'reason' || ! in_array($reason, \App\Support\Trips\TripRules::reasons(), true)) {
+        if (! $this->bypass || $this->bypass['need'] !== 'reason' || ! in_array($reason, TripRules::reasons(), true)) {
             return;
         }
         $b = $this->bypass;
-        \App\Support\Trips\TripRules::record($b['rule'], Auth::user(), $reason, $this->bypassCtx($b['code']));
+        TripRules::record($b['rule'], Auth::user(), $reason, $this->bypassCtx($b['code']));
         $this->bypass = null;
         $this->runScan($b['code'], true);
     }
@@ -291,7 +298,7 @@ class ScanApp extends Page
             return;
         }
         $b = $this->bypass;
-        \App\Support\Trips\TripRules::ask($b['rule'], Auth::user(), null, $this->bypassCtx($b['code']));
+        TripRules::ask($b['rule'], Auth::user(), null, $this->bypassCtx($b['code']));
         $this->clearResult();
         $this->status = 'warning';
         $this->message = "Asked the office about {$b['code']}. Keep it aside: when they approve, scan it again.";
@@ -318,6 +325,18 @@ class ScanApp extends Page
     }
 
     // ------------------------------------------------------------------ sections, truck waiting, sets
+
+    /** Partner hub unload: Add anyway to the full trip (space is an estimate). */
+    public function hubAnyway(): void
+    {
+        $station = $this->station();
+        if (! $this->hubTrip || ! $station || ! method_exists($station, 'hubAnyway')) {
+            return;
+        }
+        $station->hubTrip = $this->hubTrip;
+        $station->hubAnyway();
+        $this->hubTrip = $station->hubTrip;
+    }
 
     /** Unload: take the box off the waiting truck and keep it in its section. */
     public function putInSection(): void
@@ -355,13 +374,13 @@ class ScanApp extends Page
             return;
         }
         $trip = Deliverylog::with('truck')->find($this->choice);
-        if (! $trip || ! \App\Support\TruckSpace::topUp($trip)['boxes']->contains('id', $invoiceId)) {
+        if (! $trip || ! TruckSpace::topUp($trip)['boxes']->contains('id', $invoiceId)) {
             Notification::make()->title('That box does not fit or is not free any more.')->warning()->send();
 
             return;
         }
         try {
-            app(\App\Services\TripAssignment::class)->addToDeliveryTrip($trip, Invoice::whereKey($invoiceId)->get());
+            app(TripAssignment::class)->addToDeliveryTrip($trip, Invoice::whereKey($invoiceId)->get());
         } catch (\DomainException $e) {
             Notification::make()->title($e->getMessage())->warning()->send();
 
@@ -432,6 +451,7 @@ class ScanApp extends Page
         $this->route = property_exists($station, 'route') ? $station->route : null;
         $this->setInfo = property_exists($station, 'setInfo') ? $station->setInfo : null;
         $this->wrongHub = property_exists($station, 'wrongHub') ? $station->wrongHub : null;
+        $this->hubTrip = property_exists($station, 'hubTrip') ? $station->hubTrip : null;
 
         if ($this->status === 'success') {
             $this->sessionScans++;
@@ -551,7 +571,7 @@ class ScanApp extends Page
             if (in_array($this->mode, ['load', 'hub_load'], true) && BoxSizes::on() && ($trip = Deliverylog::with('truck')->find($this->choice))) {
                 $space = BoxSizes::tripSpace($trip, $this->mode === 'hub_load');
                 if ($this->screen === 'done' && $this->mode === 'load' && ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total']) {
-                    $topUp = \App\Support\TruckSpace::topUp($trip);
+                    $topUp = TruckSpace::topUp($trip);
                 }
             }
         }
@@ -583,10 +603,14 @@ class ScanApp extends Page
             'receiveResult' => $receiveResult,
             'topUp' => $topUp,
             'cityTopUp' => $this->mode === 'load' && $this->choice && empty($this->topUpSkipped[(int) $this->choice]) && ($st = $this->station()) && method_exists($st, 'cityTopUp')
-                ? (function () use ($st) { $st->data['deliverylog_id'] = $this->choice; return $st->cityTopUp(); })() : null,
-            'bypassReasons' => \App\Support\Trips\TripRules::reasons(),
+                ? (function () use ($st) {
+                    $st->data['deliverylog_id'] = $this->choice;
+
+                    return $st->cityTopUp();
+                })() : null,
+            'bypassReasons' => TripRules::reasons(),
             'noReason' => collect($openSets)->filter(fn ($o) => collect($o['missing'])->contains(fn ($m) => ! $m['reason']))->count(),
-            'splitReasons' => \App\Models\Boxes\SetSplit::REASONS,
+            'splitReasons' => SetSplit::REASONS,
             'box' => $box = ($this->invoiceId ? Invoice::find($this->invoiceId) : null),
             'space' => $space ?? null,
             'boxSize' => $box && BoxSizes::on() ? ['name' => BoxSizes::nameOfType($box->boxtype), 'space' => BoxSizes::spaceOf($box->boxtype)] : null,

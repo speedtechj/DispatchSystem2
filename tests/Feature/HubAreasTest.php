@@ -2,19 +2,24 @@
 
 use App\Filament\Company\Pages\MyArea;
 use App\Filament\Company\Pages\PlanTrips as HubPlanTrips;
+use App\Filament\Pages\Ai\AiTrips;
 use App\Filament\Pages\HubAreas as HubAreasSettings;
 use App\Filament\Pages\HubSetup;
 use App\Filament\Pages\PlanTrips;
+use App\Models\AppSetting;
 use App\Models\Deliverylog;
-use App\Models\Hubs\HubArea;
 use App\Models\Hubs\HubAreaRequest;
 use App\Models\Invoice;
 use App\Models\Logistichub;
 use App\Models\TripCity;
 use App\Models\Tripinvoice;
+use App\Models\TripOverride;
 use App\Models\Truck;
 use App\Models\User;
+use App\Support\Ai\AiFeatures;
 use App\Support\Hubs\HubAreas;
+use App\Support\Sms\SmsEvents;
+use App\Support\Sms\SmsSettings;
 use App\Support\Trips\CityTrips;
 use Database\Seeders\DemoSeeder;
 use Filament\Facades\Filament;
@@ -125,13 +130,15 @@ it('plans one trip per hub, more when the boxes do not fit one truck, and keeps 
 
     // scanning: a Baguio box joins the Baguio trip; a Capas box does not, and a Baguio box does not join a direct trip
     $hubTrip = $trips->first();
-    [$joined] = CityTrips::join($hubTrip, 'LT1');
-    expect($joined?->logistichub_id)->toBe($this->baguio->id);
+    // board 45: the hub's boxes are on the trip from Create
+    expect(Tripinvoice::where('deliverylog_id', $hubTrip->id)->where('invoice', 'LT1')->value('logistichub_id'))->toBe($this->baguio->id);
     expect(CityTrips::join($hubTrip, 'CAP1')[1])->toBe('hub:0');
     $page->call('setTab', 'direct')->call('create');
     $direct = Deliverylog::whereHas('cities', fn ($q) => $q->where('city', 'Capas'))->firstOrFail();
-    expect(CityTrips::join($direct, 'LT2')[1])->toBe('hub:'.$this->baguio->id)
-        ->and(CityTrips::join($direct, 'LT2', false, true)[0])->not->toBeNull(); // with a reason: delivered direct
+    $late = Invoice::where('invoice', 'LT2')->firstOrFail()->replicate();
+    $late->forceFill(['invoice' => 'LT9', 'is_assigned' => false, 'set_key' => null])->save(); // came after Create
+    expect(CityTrips::join($direct, 'LT9')[1])->toBe('hub:'.$this->baguio->id)
+        ->and(CityTrips::join($direct, 'LT9', false, true)[0])->not->toBeNull(); // with a reason: delivered direct
 });
 
 it('delivers a hub city direct instead, with a reason saved in Overrides', function () {
@@ -143,8 +150,8 @@ it('delivers a hub city direct instead, with a reason saved in Overrides', funct
         ->call('directWith', 'Priority box')->call('setTab', 'direct')->assertSee('Itogon')->call('create');
     $trip = Deliverylog::whereHas('cities', fn ($q) => $q->where('city', 'Itogon'))->firstOrFail();
     expect(TripCity::where('deliverylog_id', $trip->id)->pluck('hub_id')->all())->toContain($this->baguio->id)
-        ->and(CityTrips::join($trip, 'IT1')[0])->not->toBeNull()
-        ->and(\App\Models\TripOverride::where('rule', 'direct_hub')->value('reason'))->toBe('Priority box');
+        ->and(Tripinvoice::where('deliverylog_id', $trip->id)->where('invoice', 'IT1')->exists())->toBeTrue()
+        ->and(TripOverride::where('rule', 'direct_hub')->value('reason'))->toBe('Priority box');
 });
 
 it('lets a partner hub plan its own trips with its trucks and trip numbers', function () {
@@ -171,13 +178,13 @@ it('lets a partner hub plan its own trips with its trucks and trip numbers', fun
 });
 
 it('follows the SMS switches: hub texts have their own switch, one trip can skip the text', function () {
-    expect(\App\Support\Sms\SmsSettings::KINDS)->toHaveKey('out_for_delivery_hub');
+    expect(SmsSettings::KINDS)->toHaveKey('out_for_delivery_hub');
     $trip = Deliverylog::create(['trip_day' => 1, 'eta' => today(), 'departure_date' => today(), 'logistichub_id' => $this->admin->logistichub_id, 'assigned_to' => $this->admin->logistichub_id, 'user_id' => $this->admin->id, 'no_sms' => true]);
-    expect(\App\Support\Sms\SmsEvents::outForDelivery($trip))->toBe(0);
-    \App\Models\AppSetting::put('sms.on.out_for_delivery', '0');
+    expect(SmsEvents::outForDelivery($trip))->toBe(0);
+    AppSetting::put('sms.on.out_for_delivery', '0');
     ($this->box)('Tarlac', 'Capas', 'X', 'CAP1', 3);
     Livewire::test(PlanTrips::class)->assertSee('No SMS (off in');
     // the old AI trip helper is out of the menu
-    expect(\App\Filament\Pages\Ai\AiTrips::shouldRegisterNavigation())->toBeFalse()
-        ->and(\App\Support\Ai\AiFeatures::ALL['trips'][0])->toBe('Trip helper');
+    expect(AiTrips::shouldRegisterNavigation())->toBeFalse()
+        ->and(AiFeatures::ALL['trips'][0])->toBe('Trip helper');
 });
