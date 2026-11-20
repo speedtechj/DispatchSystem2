@@ -70,7 +70,39 @@ class TripPlanner
      *
      * @return Collection<string, array{key: string, name: string, province: string, city: string, barangay: string, ids: list<int>, n: int, prio: int, retry: int}>
      */
+    /** Memo for this request; the result is also cached across requests while the waiting boxes do not change. */
+    protected ?Collection $unitsMemo = null;
+
     public function units(): Collection
+    {
+        if ($this->unitsMemo) {
+            return $this->unitsMemo;
+        }
+        $key = 'planner-units:'.$this->mode.':'.$this->user->logistichub_id.':'.($this->warehouseOnly() ?? 'all').':'.($this->user->warehouse_id ?: 0).':'.$this->stamp();
+
+        return $this->unitsMemo = collect(\Illuminate\Support\Facades\Cache::remember($key, 600, fn () => $this->freshUnits()->all()));
+    }
+
+    /** Changes when a waiting box changes (scan, unload, trip, edit), a delivery is tried, or the warehouse areas change. */
+    protected function stamp(): string
+    {
+        try {
+            $q = $this->mode === 'hub'
+                ? Tripinvoice::query()->where('logistichub_id', $this->user->logistichub_id)->where('is_loaded', true)->where('hub_assigned', false)->where('is_delivered', false)
+                : Invoice::query()->where('is_verified', true)->where('is_delivered', false)->where('is_assigned', false);
+            $row = $q->selectRaw('count(*) as n, max(id) as m, max(updated_at) as u')->first();
+            $extra = [
+                DeliveryAttempt::max('id'),
+                \Illuminate\Support\Facades\Schema::hasTable('coverage_log') ? \Illuminate\Support\Facades\DB::table('coverage_log')->max('id') : 0,
+            ];
+
+            return md5(json_encode([$row?->n, $row?->m, (string) $row?->u, $extra]));
+        } catch (\Throwable) {
+            return (string) microtime(true);
+        }
+    }
+
+    protected function freshUnits(): Collection
     {
         if ($this->mode === 'hub') {
             $rows = Tripinvoice::query()->with('invdata')

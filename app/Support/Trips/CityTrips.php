@@ -35,7 +35,9 @@ class CityTrips
 
     public static function ready(): bool
     {
-        return Schema::hasTable('trip_cities');
+        static $ready = null;
+
+        return $ready ??= Schema::hasTable('trip_cities');
     }
 
     public static function isCityTrip(?Deliverylog $trip): bool
@@ -43,15 +45,29 @@ class CityTrips
         return $trip && static::ready() && TripCity::where('deliverylog_id', $trip->id)->exists();
     }
 
+    /** Kept for this request: Plan trips asks for the same lists many times in one click. */
+    protected ?TripPlanner $plannerMemo = null;
+
+    protected ?Collection $placesMemo = null;
+
+    protected ?array $coveredMemo = null;
+
+    protected ?Collection $trucksMemo = null;
+
     protected function planner(): TripPlanner
     {
-        return new TripPlanner($this->user, 'delivery');
+        return $this->plannerMemo ??= new TripPlanner($this->user, 'delivery');
     }
 
     /**
      * Waiting boxes by city: [key, province, city, boxes, space, receivers, biggest, days, prio, retry].
      */
     public function places(): Collection
+    {
+        return $this->placesMemo ??= $this->freshPlaces();
+    }
+
+    protected function freshPlaces(): Collection
     {
         $units = $this->planner()->units();
         $ids = $units->flatMap(fn ($u) => $u['ids']);
@@ -89,6 +105,11 @@ class CityTrips
     /** Cities already on an open trip (planned or loading, not locked): city key => trip number. */
     public function covered(): array
     {
+        return $this->coveredMemo ??= $this->freshCovered();
+    }
+
+    protected function freshCovered(): array
+    {
         if (! static::ready()) {
             return [];
         }
@@ -102,6 +123,11 @@ class CityTrips
 
     /** Trucks of the hub: free, out on a trip, kept, or off. */
     public function trucks(): Collection
+    {
+        return $this->trucksMemo ??= $this->freshTrucks();
+    }
+
+    protected function freshTrucks(): Collection
     {
         $all = Truck::where('logistichub_id', $this->user->logistichub_id)->orderBy('plate_no')->get();
         $usable = Rentals::usable(Truck::where('logistichub_id', $this->user->logistichub_id)->where('is_active', true))->pluck('id')->flip();
@@ -177,7 +203,7 @@ class CityTrips
         $rank = fn ($p) => [
             $provinceOrder ? (array_search(Str::lower($p['province']), array_map('strtolower', $provinceOrder), true) === false ? 99 : array_search(Str::lower($p['province']), array_map('strtolower', $provinceOrder), true)) : 0,
             ! empty($opt['first']) && Str::lower($p['province']) === Str::lower($opt['first']) ? 0 : 1,
-            -$p['urgent'] > 0 ? 0 : 1, -$p['days'], -$p['boxes'],
+            $p['urgent'] > 0 ? 0 : 1, -$p['days'], -$p['boxes'],
         ];
         $provs = $byProv->sortBy($rank)->values();
 

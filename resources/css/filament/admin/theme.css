@@ -4566,3 +4566,4 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-pt__topbtns { justify-content: flex-start; }
 .ds-ov__row .ds-ad__act { flex-wrap: nowrap; gap: 6px; justify-content: flex-end; }
 .ds-ov__row { grid-template-columns: .9fr 1.2fr .7fr 1.4fr 1.6fr; }
+.ds-pt__provs { display: flex; flex-direction: column; gap: inherit; }

@@ -5,13 +5,14 @@
             <span class="ds-pt__h"><span class="ds-pt__logo" aria-hidden="true">✦</span><h1>Plan trips</h1></span>
             <small>The AI makes trips by city: nearby cities of one province fill one truck. Boxes join when scanned onto the truck, so new containers are always included.</small>
         </span>
-        <span class="ds-pt__days">
+        {{-- the day only matters when you press Create: switching it happens in the browser, no wait --}}
+        <span class="ds-pt__days" x-data="{ day: $wire.entangle('day'), date: $wire.entangle('date') }">
             <span class="ds-fl__seg">
-                @foreach (['today' => 'Today', 'tomorrow' => 'Tomorrow', 'date' => 'Pick a date'] as $k => $l)
-                    <button type="button" wire:click="setDay('{{ $k }}')" @class(['is-on' => $day === $k])>{{ $l }}</button>
+                @foreach (['today' => [__('Today'), today()->toDateString()], 'tomorrow' => [__('Tomorrow'), today()->addDay()->toDateString()], 'date' => [__('Pick a date'), null]] as $k => [$l, $d])
+                    <button type="button" x-on:click="day = '{{ $k }}'{{ $d ? "; date = '".$d."'" : '' }}" :class="{ 'is-on': day === '{{ $k }}' }" @class(['is-on' => $day === $k])>{{ $l }}</button>
                 @endforeach
             </span>
-            @if ($day === 'date')<input type="date" wire:model.live="date" class="ds-te__input ds-pt__date" aria-label="Trip date">@endif
+            <input type="date" x-show="day === 'date'" x-model="date" @style(['display: none' => $day !== 'date']) class="ds-te__input ds-pt__date" aria-label="Trip date">
         </span>
     </header>
 
@@ -34,22 +35,22 @@
         <section class="ds-cb__card ds-pt__left">
             <span class="ds-pt__lhead"><b>Waiting, by city</b><small>{{ number_format($waitTotal) }} boxes</small></span>
             <small class="ds-pt__muted">Click a province to see its cities</small>
+            <span class="ds-pt__provs" x-data="{ open: $wire.entangle('open') }">
             @forelse ($provinces as $p)
                 <span @class(['ds-pt__prov', 'is-planned' => $p['planned']]) wire:key="p-{{ $p['key'] }}">
-                    <button type="button" class="ds-pt__provhead" wire:click="toggleOpen(@js($p['key']))" aria-expanded="{{ $open === $p['key'] ? 'true' : 'false' }}"><b>{{ $open === $p['key'] ? '▾' : '▸' }} {{ $p['name'] }}</b><span>{{ $p['boxes'] }} boxes</span></button>
+                    <button type="button" class="ds-pt__provhead" x-on:click="open = open === @js($p['key']) ? '' : @js($p['key'])" :aria-expanded="open === @js($p['key'])"><b><span x-text="open === @js($p['key']) ? '▾' : '▸'">{{ $open === $p['key'] ? '▾' : '▸' }}</span> {{ $p['name'] }}</b><span>{{ $p['boxes'] }} boxes</span></button>
                     <span class="ds-pt__bar"><i style="width: {{ round($p['boxes'] / $max * 100) }}%" @class(['is-old' => $p['days'] >= 4, 'is-mid' => $p['days'] === 3])></i></span>
                     <span class="ds-pt__provfoot"><span>{{ $p['days'] ? 'Oldest '.$p['days'].' '.Str::plural('day', $p['days']) : 'Today' }}</span><b @class(['is-in' => $p['planned']])>{{ $p['trip'] ? 'On '.$p['trip'] : ($p['planned'] ? 'In a trip' : 'Not planned') }}</b></span>
-                    @if ($open === $p['key'])
-                        <span class="ds-pt__cities">
+                    <span class="ds-pt__cities" x-show="open === @js($p['key'])" @style(['display: none' => $open !== $p['key']])>
                             @foreach ($p['cities'] as $c)
                                 <span><span>{{ $c['city'] }}@if (isset($covered[$c['key']])) <em>· {{ $covered[$c['key']] }}</em>@elseif (isset($draft[$c['key']])) <em>· in a trip</em>@endif</span><span class="ds-pt__muted">{{ $c['boxes'] }} · {{ $c['days'] ? $c['days'].' '.Str::plural('day', $c['days']) : 'today' }}</span></span>
                             @endforeach
-                        </span>
-                    @endif
+                    </span>
                 </span>
             @empty
                 <p class="ds-cb__muted">No boxes are waiting for a trip.</p>
             @endforelse
+            </span>
             @foreach ($transferOut as $t)
                 <a href="{{ $trUrl }}" class="ds-pt__transfer"><span>{{ $t['n'] }} {{ Str::plural('box', $t['n']) }} → transfer to {{ $t['name'] }} (not planned here)</span><b>Open ›</b></a>
             @endforeach

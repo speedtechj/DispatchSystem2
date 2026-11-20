@@ -21,7 +21,9 @@ class TruckSpace
 
     public static function ready(): bool
     {
-        return Schema::hasColumn('trucks', 'reserve_pct');
+        static $ready = null;
+
+        return $ready ??= Schema::hasColumn('trucks', 'reserve_pct');
     }
 
     public static function volume(?int $l, ?int $w, ?int $h): ?float

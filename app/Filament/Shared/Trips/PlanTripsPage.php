@@ -62,9 +62,12 @@ class PlanTripsPage extends Page
         return '';
     }
 
+    /** One per request: every list is read once per click. */
+    protected ?CityTrips $cityMemo = null;
+
     protected function city(): CityTrips
     {
-        return new CityTrips(Auth::user());
+        return $this->cityMemo ??= new CityTrips(Auth::user());
     }
 
     public function mount(): void
