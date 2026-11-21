@@ -51,9 +51,14 @@ class DriverTrip
     /** @return array{total: int, delivered: int, notDelivered: int, left: int, percent: int} */
     public function progress(): array
     {
-        $total = $this->boxes()->count();
-        $delivered = $this->boxes()->where('is_delivered', true)->count();
-        $notDelivered = $this->boxes()->where('is_delivered', false)->has('deliveryAttempts')->count();
+        // one database question (the driver app asks this on every tap)
+        $tried = \App\Models\DeliveryAttempt::query()->select('invoice_id')->whereColumn('delivery_attempts.invoice_id', 'tripinvoices.invoice_id')->limit(1)->toBase();
+        $r = $this->boxes()->toBase()->selectRaw('count(*) as total, sum(case when is_delivered = 1 then 1 else 0 end) as delivered')
+            ->selectRaw('sum(case when is_delivered = 0 and exists('.$tried->toSql().') then 1 else 0 end) as tried', $tried->getBindings())
+            ->first();
+        $total = (int) $r->total;
+        $delivered = (int) $r->delivered;
+        $notDelivered = (int) $r->tried;
 
         return [
             'total' => $total,

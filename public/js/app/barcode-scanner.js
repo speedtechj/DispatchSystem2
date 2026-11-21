@@ -85,6 +85,107 @@
         });
     }
 
+    // A tiny copy of the picture, to notice when the camera only sends black frames
+    const probe = document.createElement('canvas');
+    probe.width = 32;
+    probe.height = 18;
+    const probeCtx = probe.getContext('2d', { willReadFrequently: true });
+
+    function brightness(video) {
+        try {
+            probeCtx.drawImage(video, 0, 0, probe.width, probe.height);
+            const px = probeCtx.getImageData(0, 0, probe.width, probe.height).data;
+            let sum = 0;
+            for (let i = 0; i < px.length; i += 4) sum += px[i] + px[i + 1] + px[i + 2];
+            return sum / (px.length / 4) / 3;
+        } catch (e) {
+            return 255; // cannot read the picture: do not complain
+        }
+    }
+
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const homeScreenApp = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    const BLACK_TIP = 'The camera picture is black. Close other apps that use the camera, check that this site may use the camera, '
+        + (ios && homeScreenApp ? 'or close the app fully and open it again. ' : 'or reload the page. ')
+        + 'You can always type the code above.';
+
+    const TORCH_KEY = 'ds-torch-at';
+    const TORCH_KEEP = 10 * 60 * 1000; // the flashlight comes back on by itself within 10 minutes
+    const VIDEO = { width: { ideal: 1280 }, height: { ideal: 720 } }; // light and fast; the frame is read in full detail
+
+    /*
+     * Start the camera while the trip is still opening (tap on a trip), so the scan screen
+     * finds it running. Not used within 10 s: let go of it.
+     */
+    let warm = null;
+    window.dsWarmCamera = function (formats) {
+        try {
+            if (formats) createDetector(formats.map((f) => String(f).toLowerCase())).catch(() => {});
+            if (warm || !navigator.mediaDevices || !window.isSecureContext) return;
+            let saved = null;
+            try { saved = localStorage.getItem(CAMERA_KEY); } catch (e) {}
+            const w = { stream: null, timer: null };
+            warm = w;
+            navigator.mediaDevices.getUserMedia({ audio: false, video: saved ? { ...VIDEO, deviceId: { exact: saved } } : { ...VIDEO, facingMode: { ideal: 'environment' } } })
+                .then((st) => { if (warm === w) { w.stream = st; w.timer = setTimeout(() => { if (warm === w) { st.getTracks().forEach((t) => t.stop()); warm = null; } }, 10000); } else st.getTracks().forEach((t) => t.stop()); })
+                .catch(() => { if (warm === w) warm = null; });
+        } catch (e) { warm = null; }
+    };
+    function takeWarm() {
+        if (!warm || !warm.stream || !warm.stream.active) return null;
+        clearTimeout(warm.timer);
+        const st = warm.stream;
+        warm = null;
+        return st;
+    }
+
+    /*
+     * Box photos sent in the back: the crew scans the next box while a photo uploads.
+     * Each photo: shrunk on the phone, sent with its % shown, tried again 3 times.
+     */
+    let photoState = null;
+    function photos() {
+        if (!photoState) photoState = window.Alpine ? window.Alpine.reactive({ items: [] }) : { items: [] };
+        return photoState;
+    }
+    function sendPhoto(item, tries = 0) {
+        const fd = new FormData();
+        fd.append('photo', item.file, 'photo.jpg');
+        fd.append('invoice_id', item.invoiceId);
+        if (item.condition) fd.append('condition', item.condition);
+        if (item.note) fd.append('note', item.note);
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', item.url);
+        const token = document.querySelector('meta[name="csrf-token"]');
+        if (token) xhr.setRequestHeader('X-CSRF-TOKEN', token.content);
+        xhr.setRequestHeader('Accept', 'application/json');
+        xhr.upload.onprogress = (e) => { if (e.lengthComputable) item.p = Math.min(99, Math.round(e.loaded / e.total * 100)); };
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try { item.serverId = JSON.parse(xhr.responseText).id; } catch (e) {}
+                item.p = 100; item.done = true; item.failed = false; item.file = null;
+            } else if (xhr.status >= 500 && tries < 3) setTimeout(() => sendPhoto(item, tries + 1), 2000 * (tries + 1));
+            else { item.failed = true; try { item.why = JSON.parse(xhr.responseText).message; } catch (e) {} }
+        };
+        xhr.onerror = () => { if (tries < 3) setTimeout(() => sendPhoto(item, tries + 1), 2000 * (tries + 1)); else item.failed = true; };
+        xhr.send(fd);
+    }
+    window.dsPhotos = {
+        state: photos,
+        async add(file, info) {
+            const small = window.dsShrinkPhoto ? await window.dsShrinkPhoto(file) : file;
+            const item = { id: Date.now() + Math.random(), invoiceId: info.invoiceId, code: info.code || '', condition: info.condition || null, note: info.note || null,
+                url: info.url, file: small, thumb: URL.createObjectURL(small), p: 2, done: false, failed: false, serverId: null, why: null };
+            photos().items.push(item);
+            sendPhoto(photos().items[photos().items.length - 1]);
+        },
+        retry(item) { if (item.file) { item.failed = false; item.p = 2; sendPhoto(item); } },
+        going() { return photos().items.filter((i) => !i.done && !i.failed); },
+        saved() { return photos().items.filter((i) => i.done).length; },
+        failed() { return photos().items.filter((i) => i.failed); },
+        of(invoiceId) { return photos().items.filter((i) => String(i.invoiceId) === String(invoiceId)); },
+    };
+
     window.barcodeScanner = function (config) {
         const formats = (config.formats && config.formats.length ? config.formats : ['code_128', 'qr_code'])
             .map((f) => String(f).toLowerCase());
@@ -100,11 +201,23 @@
         let watchTimer = null;
         let observer = null;
         let onVisibilityChange = null;
+        let darkSince = 0;
+        let frame = 0;
+        let tried = new Set();
+        let onCommand = null;
+        let pending = { code: null, n: 0, at: 0 }; // a read waits for the same read once more
+        let unsureSince = 0;
+        let activity = 0;
+        let dimSince = 0;
+        const confirmReads = Math.max(1, config.confirm || 1);
+        const idleOff = config.idleOff || 0;
+        const hardAfter = config.hardAfter || 3000;
 
         return {
             scanning: false,
             loading: false,
             error: null,
+            hint: null,
             lastCode: null,
             lastAt: 0,
             manualCode: '',
@@ -114,6 +227,12 @@
             flash: false,
             torchSupported: false,
             torchOn: false,
+            paused: false,
+            hard: false,
+            typing: false,
+            typed: '',
+            darkTip: false,
+            offWhy: null,
 
             init() {
                 try { this.cameraId = localStorage.getItem(CAMERA_KEY) || null; } catch (e) {}
@@ -126,6 +245,15 @@
                     }
                 };
                 document.addEventListener('visibilitychange', onVisibilityChange);
+
+                // From the page: pause while a result is open, let go of the camera for the camera app
+                onCommand = (e) => {
+                    const d = (e && e.detail) || {};
+                    if (d.release) { this.stop(); return; }
+                    if ('paused' in d) this.setPaused(!!d.paused);
+                };
+                window.addEventListener('ds-scanner', onCommand);
+                window.dsScanner = this;
 
                 // Start when the scanner becomes visible (modal opened), stop when hidden (modal closed)
                 if ('IntersectionObserver' in window) {
@@ -141,6 +269,8 @@
 
             destroy() {
                 document.removeEventListener('visibilitychange', onVisibilityChange);
+                window.removeEventListener('ds-scanner', onCommand);
+                if (window.dsScanner === this) window.dsScanner = null;
                 if (observer) observer.disconnect();
                 clearTimeout(startTimer);
                 this.stop();
@@ -150,7 +280,7 @@
                 this.stoppedByUser = false;
                 if (!config.autoStart) return;
                 clearTimeout(startTimer);
-                startTimer = setTimeout(() => this.start(), 300); // let the modal finish opening
+                startTimer = setTimeout(() => this.start(), config.startDelay ?? 300); // let the modal finish opening
             },
 
             onHidden() {
@@ -158,10 +288,15 @@
                 this.stop();
             },
 
-            async start() {
+            async start(afterBlack = false) {
                 if (this.scanning || this.loading) return;
                 this.error = null;
                 this.stoppedByUser = false;
+                if (!afterBlack) {
+                    tried = new Set();
+                    this.hint = null;
+                }
+                darkSince = 0;
 
                 if (!window.isSecureContext) {
                     this.error = 'The camera only works over HTTPS (or on localhost). Open this page with https://';
@@ -179,9 +314,9 @@
                     // Load the decoder at the same time as the camera starts
                     const detectorPromise = createDetector(formats);
 
-                    const base = { width: { ideal: 1920 }, height: { ideal: 1080 } };
-                    let s;
-                    try {
+                    const base = VIDEO;
+                    let s = takeWarm();
+                    if (!s) try {
                         s = await navigator.mediaDevices.getUserMedia({
                             audio: false,
                             video: this.cameraId
@@ -200,13 +335,22 @@
                     if (my !== session) { s.getTracks().forEach((t) => t.stop()); return; }
                     stream = s;
 
+                    // Attach the camera only once the preview box is on screen:
+                    // iPhone home screen apps show a black picture otherwise.
+                    await this.$nextTick();
+                    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
                     const video = this.$refs.video;
                     video.muted = true;
                     video.setAttribute('muted', '');
                     video.setAttribute('playsinline', '');
+                    video.setAttribute('autoplay', '');
                     video.srcObject = stream;
                     try { await video.play(); } catch (e) {}
                     await waitForVideo(video);
+                    if (video.paused) {
+                        try { await video.play(); } catch (e) {}
+                    }
 
                     const track = stream.getVideoTracks()[0];
                     try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) {}
@@ -215,12 +359,22 @@
                         this.torchSupported = !!caps.torch;
                     } catch (e) { this.torchSupported = false; }
                     this.torchOn = false;
+                    let torchAt = 0;
+                    try { torchAt = Number(localStorage.getItem(TORCH_KEY) || 0); } catch (e) {}
+                    if (this.torchSupported && torchAt && Date.now() - torchAt < TORCH_KEEP) {
+                        try { await track.applyConstraints({ advanced: [{ torch: true }] }); this.torchOn = true; } catch (e) {}
+                    }
 
                     detector = await detectorPromise;
                     if (my !== session) return;
 
                     this.scanning = true;
                     this.loading = false;
+                    this.offWhy = null;
+                    activity = Date.now();
+                    pending = { code: null, n: 0, at: 0 };
+                    unsureSince = 0;
+                    this.hard = false;
                     this.watchHidden();
                     this.loop(my);
                     this.listCameras();
@@ -239,12 +393,42 @@
                 if (my !== session) return;
                 const video = this.$refs.video;
 
+                if (idleOff && !this.typing && Date.now() - activity > idleOff) {
+                    this.offWhy = 'No scan for ' + Math.round(idleOff / 60000) + ' minutes: camera and flashlight off to save battery.';
+                    this.stop();
+                    return;
+                }
+                if (unsureSince && Date.now() - pending.at > 1500) unsureSince = 0; // nothing read for a while: not a hard label
+                if (unsureSince && !this.hard && Date.now() - unsureSince > hardAfter) this.hard = true;
+
+                if (video.readyState >= 2 && video.videoWidth && ++frame % 3 === 0) {
+                    const light = brightness(video);
+                    if (light < 40 && light >= 8 && this.torchSupported && !this.torchOn) {
+                        dimSince = dimSince || Date.now();
+                        if (Date.now() - dimSince > 1500) this.darkTip = true;
+                    } else {
+                        dimSince = 0;
+                        this.darkTip = false;
+                    }
+                    if (light < 8) {
+                        darkSince = darkSince || Date.now();
+                        if (Date.now() - darkSince > 2500) {
+                            darkSince = 0;
+                            this.onBlackPicture(my);
+                            return;
+                        }
+                    } else {
+                        darkSince = 0;
+                        if (this.hint) this.hint = null;
+                    }
+                }
+
                 try {
-                    if (detector && video.readyState >= 2 && video.videoWidth) {
+                    if (detector && !this.paused && !this.typing && video.readyState >= 2 && video.videoWidth) {
                         const vw = video.videoWidth;
                         const vh = video.videoHeight;
-                        const cw = Math.floor(vw * 0.9);
-                        const ch = Math.floor(vh * 0.6);
+                        const cw = Math.floor(vw * 0.92);
+                        const ch = Math.floor(vh * (config.confirm > 1 ? 0.5 : 0.6));
                         const scale = Math.min(1, 1280 / cw);
 
                         canvas.width = Math.floor(cw * scale);
@@ -252,8 +436,8 @@
                         ctx.drawImage(video, (vw - cw) / 2, (vh - ch) / 2, cw, ch, 0, 0, canvas.width, canvas.height);
 
                         const results = await detector.detect(canvas);
-                        if (my === session && results && results.length) {
-                            this.onDetected(results[0].rawValue);
+                        if (my === session && !this.paused && results && results.length) {
+                            this.onRead(results[0].rawValue);
                         }
                     }
                 } catch (e) {}
@@ -263,7 +447,30 @@
                 }
             },
 
+            // The picture stayed black: try the other cameras once each, then explain.
+            async onBlackPicture(my) {
+                await this.listCameras();
+                let current = this.cameraId;
+                try { current = (stream && stream.getVideoTracks()[0].getSettings().deviceId) || current; } catch (e) {}
+                tried.add(current || 'auto');
+                const next = this.cameras.map((c) => c.id).find((id) => id && !tried.has(id));
+
+                if (next && tried.size <= this.cameras.length) {
+                    this.hint = 'The picture was black. Trying another camera…';
+                    this.cameraId = next;
+                    try { localStorage.setItem(CAMERA_KEY, next); } catch (e) {}
+                    await this.stop();
+                    await this.start(true);
+                    return;
+                }
+
+                this.hint = BLACK_TIP;
+                if (my === session && this.scanning) this.loop(my); // keep reading in case the picture comes back
+            },
+
             async stop() {
+                if (this.torchOn) { try { localStorage.setItem(TORCH_KEY, String(Date.now())); } catch (e) {} }
+                this.darkTip = false;
                 session++;
                 clearTimeout(loopTimer);
                 clearInterval(watchTimer);
@@ -297,6 +504,8 @@
                 try {
                     await track.applyConstraints({ advanced: [{ torch: !this.torchOn }] });
                     this.torchOn = !this.torchOn;
+                    this.darkTip = false;
+                    try { this.torchOn ? localStorage.setItem(TORCH_KEY, String(Date.now())) : localStorage.removeItem(TORCH_KEY); } catch (e) {}
                 } catch (e) {}
             },
 
@@ -329,9 +538,82 @@
                 }, 1000);
             },
 
+            // A read counts only when the same number is read again right after (blurry labels misread)
+            onRead(text) {
+                const code = String(text || '').trim();
+                if (!code) return;
+                const now = Date.now();
+                if (code === this.lastCode && now - this.lastAt < (config.cooldown ?? 2500)) return;
+                if (confirmReads <= 1) { this.onDetected(code); return; }
+                if (pending.code === code && now - pending.at < 1500) {
+                    pending.n++;
+                    pending.at = now;
+                    if (pending.n >= confirmReads) {
+                        pending = { code: null, n: 0, at: 0 };
+                        this.onDetected(code);
+                    }
+                    return;
+                }
+                pending = { code, n: 1, at: now };
+                unsureSince = unsureSince || now;
+            },
+
+            setPaused(p) {
+                this.paused = p;
+                if (p) return;
+                activity = Date.now();
+                this.lastAt = Date.now(); // the box still in front of the camera is not read again at once
+                pending = { code: null, n: 0, at: 0 };
+                if (!this.scanning && !this.loading && config.autoStart && this.$el.getClientRects().length) this.start();
+            },
+
+            // Hard to read: type the number on a keypad
+            openTyping() { this.typing = true; this.typed = ''; this.hard = false; unsureSince = 0; activity = Date.now(); },
+            closeTyping() { this.typing = false; this.typed = ''; activity = Date.now(); },
+            key(k) {
+                activity = Date.now();
+                if (k === '⌫') this.typed = this.typed.slice(0, -1);
+                else this.typed = (this.typed + k).slice(0, 20);
+            },
+            findTyped() {
+                const code = this.typed.trim();
+                if (!code) return;
+                this.typing = false;
+                this.typed = '';
+                this.lastCode = code;
+                this.lastAt = Date.now();
+                this.submit(code);
+            },
+
+            async turnTorchOn() { if (!this.torchOn) await this.toggleTorch(); },
+
+            // 📷 Take photo here: a still from the camera that is already on (no camera app)
+            async snapPhoto() {
+                const track = stream && stream.getVideoTracks()[0];
+                const video = this.$refs.video;
+                this.flash = true;
+                setTimeout(() => { this.flash = false; }, 160);
+                if (track && 'ImageCapture' in window) {
+                    try {
+                        const blob = await new window.ImageCapture(track).takePhoto();
+                        if (blob && blob.size) return new File([blob], 'photo.jpg', { type: blob.type || 'image/jpeg' });
+                    } catch (e) {}
+                }
+                if (!video || !video.videoWidth) return null;
+                const c = document.createElement('canvas');
+                c.width = video.videoWidth;
+                c.height = video.videoHeight;
+                c.getContext('2d').drawImage(video, 0, 0);
+                const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
+                return blob ? new File([blob], 'photo.jpg', { type: 'image/jpeg' }) : null;
+            },
+
             onDetected(text) {
                 const code = String(text || '').trim();
                 if (!code) return;
+                activity = Date.now();
+                unsureSince = 0;
+                this.hard = false;
                 const now = Date.now();
                 if (code === this.lastCode && now - this.lastAt < (config.cooldown ?? 2500)) return;
 
@@ -350,6 +632,7 @@
             submitManual() {
                 const code = this.manualCode.trim();
                 if (!code) return;
+                activity = Date.now();
                 this.lastCode = code;
                 this.lastAt = Date.now();
                 this.submit(code);

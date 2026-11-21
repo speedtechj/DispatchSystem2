@@ -64,7 +64,7 @@
                 @php($openList = $choices->where('mine', false)->values())
                 <p class="ds-sa__label">My trips</p>
                 @forelse ($mineList as $i => $c)
-                    <button type="button" class="ds-pk__mine" wire:click="pick({{ $c['id'] }})" wire:key="pm-{{ $c['id'] }}">
+                    <button type="button" class="ds-pk__mine" wire:click="pick({{ $c['id'] }})" x-on:click="window.dsWarmCamera && window.dsWarmCamera()" wire:key="pm-{{ $c['id'] }}">
                         <span class="ds-pk__row"><b>{{ $c['name'] }}</b><em>Open ›</em></span>
                         @if ($c['sub'])<small>{{ $c['sub'] }}</small>@endif
                         <span class="ds-pk__bar"><i style="width: {{ $c['total'] ? round($c['done'] / $c['total'] * 100) : 0 }}%"></i></span>
@@ -77,7 +77,7 @@
                 @forelse ($openList as $c)
                     <div class="ds-pk__open" wire:key="po-{{ $c['id'] }}">
                         <span><b>{{ $c['name'] }}</b><small>{{ $c['total'] }} {{ \Illuminate\Support\Str::plural('box', $c['total']) }}{{ $c['sub'] ? ' · '.$c['sub'] : '' }}</small></span>
-                        <button type="button" wire:click="takeTrip({{ $c['id'] }})" wire:loading.attr="disabled">Take this trip</button>
+                        <button type="button" wire:click="takeTrip({{ $c['id'] }})" x-on:click="window.dsWarmCamera && window.dsWarmCamera()" wire:loading.attr="disabled">Take this trip</button>
                     </div>
                 @empty
                     <div class="ds-sa__note">Every trip has a picker.</div>
@@ -85,7 +85,7 @@
                 <small class="ds-pk__foot">Trips of other people and trips already picked are not shown here.</small>
             @else
             @forelse ($choices as $i => $c)
-                <button type="button" @class(['ds-sa__choice', 'is-finished' => $c['finished']]) style="animation-delay: {{ $i * 50 }}ms" wire:click="pick({{ $c['id'] }})" wire:key="c-{{ $c['id'] }}">
+                <button type="button" @class(['ds-sa__choice', 'is-finished' => $c['finished']]) style="animation-delay: {{ $i * 50 }}ms" wire:click="pick({{ $c['id'] }})" x-on:click="window.dsWarmCamera && window.dsWarmCamera(@js(\App\Support\ScanModes::scanner()['formats']))" wire:key="c-{{ $c['id'] }}">
                     <span class="ds-sa__choicetext">
                         <strong>{{ $c['name'] }}</strong>
                         @if ($c['sub'])<small>{{ $c['sub'] }}</small>@endif
@@ -123,13 +123,13 @@
                 <span wire:poll.8s class="hidden"></span>
             @endif
             <div class="ds-sa__cam" wire:ignore
-                 x-data="barcodeScanner(@js(['method' => 'scan', 'formats' => ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'itf', 'qr_code'], 'autoStart' => true, 'continuous' => true, 'cooldown' => 2500, 'beep' => true]))">
+                 x-data="barcodeScanner(@js(\App\Support\ScanModes::scanner()))">
                 <video x-ref="video" playsinline muted autoplay></video>
                 <div class="ds-sa__frame" x-bind:class="{ 'is-hit': flash }"><i></i><i></i><i></i><i></i><span x-show="scanning" class="ds-sa__sweep"></span></div>
                 <p class="ds-sa__camtext" x-show="loading" x-cloak>Starting camera…</p>
-                <p class="ds-sa__camtext" x-show="! scanning && ! loading && ! error">Camera is off · tap the round button</p>
                 <p class="ds-sa__camtext is-error" x-show="error" x-text="error" x-cloak></p>
                 <p class="ds-sa__camtext is-hint" x-show="hint && ! error" x-text="hint" x-cloak></p>
+                @include('filament.scan.cam-extras', ['uploads' => true])
 
                 <div class="ds-sa__controls">
                     <label class="ds-sa__type">
@@ -158,6 +158,11 @@
                 <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button>
             </header>
 
+            <span class="hidden" wire:key="pz-{{ $sessionScans }}-{{ $status ?? 'none' }}-{{ $paused ? 1 : 0 }}" x-init="$dispatch('ds-scanner', { paused: @js($paused) })"></span>
+            @if (! $extrasReady)
+                <div @class(['ds-sx__skel', 'hidden' => ! in_array($this->mode, ['load', 'hub_load'], true)]) wire:init="loadExtras"><i></i><i></i><i></i><small>Load next and space: coming… you can scan already</small></div>
+            @endif
+
             @if (count($team) > 1)
                 <div class="ds-sx__team" aria-label="Who scanned">
                     @foreach (array_slice($team, 0, 4) as $m)<span @class(['is-me' => $m['me']])>{{ $m['name'] }} <b>{{ $m['n'] }}</b></span>@endforeach
@@ -185,14 +190,14 @@
 
             @if ($this->mode === 'pick')
                 @php($allPicked = ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total'])
-                @if ($pick)
-                    <div @class(['ds-sa__sheet', 'ds-pk__sheet', 'is-ok' => $pick['tone'] === 'ok', 'is-warn' => $pick['tone'] === 'warn', 'is-bad' => $pick['tone'] === 'bad']) wire:key="pk-{{ $sessionScans }}-{{ md5($pick['title'].$pick['code']) }}">
+                @if ($pickResult)
+                    <div @class(['ds-sa__sheet', 'ds-pk__sheet', 'is-ok' => $pickResult['tone'] === 'ok', 'is-warn' => $pickResult['tone'] === 'warn', 'is-bad' => $pickResult['tone'] === 'bad']) wire:key="pk-{{ $sessionScans }}-{{ md5($pickResult['title'].$pickResult['code']) }}">
                         <span class="ds-sa__grab"></span>
-                        <span class="ds-pk__hit"><b>{{ $pick['code'] ? 'Box '.$pick['code'] : '' }}</b><small>{{ ! empty($pick['spot']) ? 'Spot '.$pick['spot'] : (! empty($pick['section']) ? 'Section '.$pick['section'] : '') }}</small></span>
-                        <strong>{{ $pick['title'] }}</strong>
-                        <p class="ds-sa__msg">{{ $pick['why'] }}</p>
-                        @if ($pick['undo'])
-                            <button type="button" class="ds-pk__undo" wire:click="undoPick({{ $pick['undo'] }})">↶ Undo: I picked this by mistake</button>
+                        <span class="ds-pk__hit"><b>{{ $pickResult['code'] ? 'Box '.$pickResult['code'] : '' }}</b><small>{{ ! empty($pickResult['spot']) ? 'Spot '.$pickResult['spot'] : (! empty($pickResult['section']) ? 'Section '.$pickResult['section'] : '') }}</small></span>
+                        <strong>{{ $pickResult['title'] }}</strong>
+                        <p class="ds-sa__msg">{{ $pickResult['why'] }}</p>
+                        @if ($pickResult['undo'])
+                            <button type="button" class="ds-pk__undo" wire:click="undoPick({{ $pickResult['undo'] }})">↶ Undo: I picked this by mistake</button>
                         @endif
                         <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
                     </div>
@@ -304,28 +309,32 @@
                             <input type="text" class="ds-sa__note-in" wire:model.blur="note" maxlength="250" placeholder="What is wrong? (optional)" aria-label="What is wrong?">
                         @endif
 
-                        <div class="ds-sa__photos"
-                             x-data="{ busy: false, failed: false, pct: 0,
-                                take() { this.failed = false; this.$refs.file.value = ''; this.$refs.file.click() },
-                                async send(e) {
-                                    const file = e.target.files[0]; if (! file) return;
-                                    this.busy = true; this.pct = 0; let out = file;
-                                    out = window.dsShrinkPhoto ? await window.dsShrinkPhoto(file) : file;
-                                    $wire.upload('boxPhoto', out, () => $wire.saveBoxPhoto().then(() => { this.busy = false }), () => { this.busy = false; this.failed = true }, (ev) => { this.pct = ev.detail.progress });
-                                } }">
-                            <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
+                        <div class="ds-sa__photos ds-snap" wire:ignore
+                             x-data="{ rendered: @js($shots->pluck('id')->all()), inv: {{ (int) $box->id }}, code: @js($box->invoice), busy: false, msg: null,
+                                mine() { return window.dsPhotos ? window.dsPhotos.of(this.inv).filter((i) => ! this.rendered.includes(i.serverId)) : [] },
+                                info() { return { invoiceId: this.inv, code: this.code, condition: $wire.condition, note: $wire.note, url: @js(route('scan.box-photo')) } },
+                                async here() {
+                                    if (this.busy || ! window.dsScanner) return; this.busy = true; this.msg = null;
+                                    const f = await window.dsScanner.snapPhoto();
+                                    this.busy = false;
+                                    if (! f) { this.msg = 'The camera is off. Use Camera app.'; return; }
+                                    window.dsPhotos.add(f, this.info());
+                                },
+                                app() { window.dispatchEvent(new CustomEvent('ds-scanner', { detail: { release: true } })); this.$refs.file.value = ''; this.$refs.file.click() },
+                                picked(e) { const f = e.target.files[0]; if (f) window.dsPhotos.add(f, this.info()) } }">
+                            <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="picked($event)">
                             @foreach ($shots as $shot)
-                                <a href="{{ $shot->url() }}" target="_blank" class="ds-sa__shot"><img src="{{ $shot->url() }}" alt="Photo {{ $loop->iteration }}"></a>
+                                <a href="{{ $shot->url() }}" target="_blank" class="ds-sa__shot"><img src="{{ $shot->url() }}" alt="Photo {{ $loop->iteration }}"><b class="is-done">✓</b></a>
                             @endforeach
-                            <button type="button" class="ds-sa__addphoto" x-on:click="take()" x-bind:disabled="busy">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-                                <span x-show="! busy">{{ $shots->isEmpty() ? 'Add photo · optional' : 'Add another' }}</span>
-                                <span x-show="busy" x-cloak>Saving… <span x-text="pct + '%'"></span></span>
-                            </button>
-                            <p class="ds-sa__err" x-show="failed" x-cloak>The photo did not upload. Try again.</p>
+                            <template x-for="it in mine()" :key="it.id">
+                                <span class="ds-sa__shot" x-on:click="it.failed && window.dsPhotos.retry(it)"><img :src="it.thumb" alt="Photo"><b :class="{ 'is-done': it.done, 'is-bad': it.failed }" x-text="it.failed ? 'Retry' : (it.done ? '✓' : it.p + '%')"></b></span>
+                            </template>
+                            <button type="button" class="ds-snap__here" x-on:click="here()" x-bind:disabled="busy">📷 Take photo here</button>
+                            <button type="button" class="ds-snap__app" x-on:click="app()">Camera app<small>close-up</small></button>
+                            <p class="ds-snap__note" x-text="msg || (mine().length ? 'Uploads in the back. You can scan the next box now.' : (['damaged', 'wet', 'open'].includes($wire.condition) ? 'Damaged: take a photo. Camera app for a close-up with flash.' : 'Photo optional · Take photo here uses the camera that is already on.'))"></p>
                         </div>
                     @endif
-                    <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
+                    <button type="button" @class(['ds-sa__primary', 'is-light' => $this->photosOn()]) wire:click="dismiss">Scan next box</button>
                 </div>
             @elseif ($status === 'success' && $route)
                 <div class="ds-sa__sheet is-ok" wire:key="placed-{{ $sessionScans }}">

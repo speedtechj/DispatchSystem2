@@ -363,6 +363,23 @@ abstract class UnloadContainerPage extends Page
     }
 
     /** @return array{loaded: int, total: int, last?: ?string, issues?: int, unmanifested?: int} */
+    /**
+     * Progress of many containers in one database question (the Scan app list).
+     *
+     * @param  list<int>  $ids
+     * @return array<int, array{loaded: int, total: int}>
+     */
+    public function progressMany(array $ids): array
+    {
+        if (! $ids) {
+            return [];
+        }
+
+        return Invoice::whereIn('container_id', $ids)->selectRaw('container_id as c, count(*) as total, sum(case when is_verified = 1 then 1 else 0 end) as loaded')
+            ->groupBy('container_id')->toBase()->get()
+            ->mapWithKeys(fn ($r) => [(int) $r->c => ['loaded' => (int) $r->loaded, 'total' => (int) $r->total]])->all();
+    }
+
     public function progress(): array
     {
         $containerId = $this->data['container_id'] ?? null;

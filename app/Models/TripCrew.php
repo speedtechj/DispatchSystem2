@@ -10,6 +10,12 @@ class TripCrew extends Model
 {
     protected $guarded = [];
 
+    protected static function booted(): void
+    {
+        static::saved(fn () => \App\Support\TripFlow::forgetCrew());
+        static::deleted(fn () => \App\Support\TripFlow::forgetCrew());
+    }
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);

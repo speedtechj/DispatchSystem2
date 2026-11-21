@@ -88,8 +88,8 @@ it('lets a picker take a trip with no picker in the Scan app, and scan there', f
     expect(Picking::isPicker($this->trip, $this->ben))->toBeTrue()
         ->and(Picking::take($this->trip, $this->carla))->toBeFalse(); // already taken
 
-    $lw->call('scan', 'PK03')->assertSet('pick.title', 'Picked ✓')->assertSee('↶ Undo');
-    $lw->call('undoPick', $this->rows['PK03']->id)->assertSet('pick.title', '↶ Undone · back on the list');
+    $lw->call('scan', 'PK03')->assertSet('pickResult.title', 'Picked ✓')->assertSee('↶ Undo');
+    $lw->call('undoPick', $this->rows['PK03']->id)->assertSet('pickResult.title', '↶ Undone · back on the list');
 
     // next time: his one trip opens by itself
     Livewire::test(ScanApp::class)->call('open', 'pick')->assertSet('screen', 'scan')->assertSet('choice', $this->trip->id);

@@ -510,18 +510,19 @@ class Dashboard extends BaseDashboard
         }
 
         $stage = $has && \App\Support\TripFlow::ready() ? \App\Support\TripFlow::stage($trip->trip) : null;
+        $prog = $has ? $trip->progress() : null; // once per tap
 
         return [
             'trip' => $trip->trip,
             'stage' => $stage,
             'canTake' => $canTake = ($stage === 'ready' || ($stage === 'loading' && (\App\Support\Trips\TripLock::autoOnTake() && \App\Support\Trips\TripLock::isReady($trip->trip))))
                 && \App\Support\TripFlow::canTake($trip->trip, Auth::user()),
-            'stageCard' => $has && $stage ? $this->stageCard($stage, $trip->progress(), $canTake, $stage === 'loading' ? \App\Support\Trips\TripLock::missing($trip->trip) : '') : null,
+            'stageCard' => $has && $stage ? $this->stageCard($stage, $prog, $canTake, $stage === 'loading' ? \App\Support\Trips\TripLock::missing($trip->trip) : '') : null,
             'nextTrip' => $has && \App\Support\TripFlow::queueReady() ? \App\Support\TripFlow::nextAfter($trip->trip) : null,
             'closedTrip' => $closedTrip = ! $has && Auth::user() ? \App\Support\TripFlow::justClosedFor(Auth::user()) : null,
             'closedDelivered' => $closedTrip ? \App\Support\TripFlow::boxes($closedTrip)->where('is_delivered', true)->count() : 0,
-            'progress' => $has ? $trip->progress() : null,
-            'finished' => $has && $trip->isFinished(),
+            'progress' => $prog,
+            'finished' => $has && $prog['total'] > 0 && $prog['left'] === 0,
             'crew' => $trip->crewmates(),
             'priority' => $has && $this->screen === 'home' ? $trip->priority() : collect(),
             'areas' => $has && $this->screen === 'home' ? $trip->areas() : collect(),
@@ -534,7 +535,7 @@ class Dashboard extends BaseDashboard
             'problems' => $has && $this->screen === 'home' ? $trip->problems() : collect(),
             'delivered' => $has && $this->screen === 'home' ? $trip->deliveredToday() : collect(),
             'rows' => $has && $this->screen === 'list' ? $this->listRows() : collect(),
-            'counts' => $has && $this->screen === 'list' ? $this->listCounts() : [],
+            'counts' => $has && $this->screen === 'list' ? ['todo' => $prog['left'], 'delivered' => $prog['delivered'], 'missed' => $prog['notDelivered']] : [],
             'box' => $box,
             'risk' => $box && ! $box->is_delivered && Ai::switchedOn('risky') ? Risk::of($box) : null,
             'voiceOn' => Ai::enabled('voice'),

@@ -64,7 +64,7 @@ it('unloads a container box by box, with an optional photo, using the same rules
         ->call('open', 'unload')->assertSet('screen', 'pick')->assertSee($container->container_no)
         ->call('pick', $container->id)->assertSet('screen', 'scan')
         ->call('scan', $box->invoice)
-        ->assertSet('status', 'success')->assertSee('Verified · off the container')->assertSee('Add photo · optional')
+        ->assertSet('status', 'success')->assertSee('Verified · off the container')->assertSee('📷 Take photo here')->assertSee('Camera app')
         ->call('setCondition', 'damaged')->assertSee('What is wrong?')
         ->set('note', 'Corner crushed')
         ->set('boxPhoto', UploadedFile::fake()->image('p.jpg', 2000, 1500))

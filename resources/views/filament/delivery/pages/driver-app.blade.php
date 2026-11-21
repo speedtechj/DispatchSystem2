@@ -4,7 +4,7 @@
     $user = auth()->user();
     $initials = mb_strtoupper(mb_substr($user?->first_name ?? '', 0, 1).mb_substr($user?->last_name ?? '', 0, 1)) ?: '·';
     $photoJs = "{ busy: false, failed: false, pct: 0,
-        take() { this.failed = false; this.\$refs.file.value = ''; this.\$refs.file.click() },
+        take() { this.failed = false; window.dispatchEvent(new CustomEvent('ds-scanner', { detail: { release: true } })); this.\$refs.file.value = ''; this.\$refs.file.click() },
         async send(e) {
             const files = [...e.target.files]; if (! files.length) return;
             for (const file of files) {
@@ -91,7 +91,7 @@
                         </dl>
                     </div>
 
-                    <button type="button" class="ds-sa__primary ds-dr__scanbtn" wire:click="go('scan')">
+                    <button type="button" class="ds-sa__primary ds-dr__scanbtn" wire:click="go('scan')" x-on:click="window.dsWarmCamera && window.dsWarmCamera()">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
                         Scan a box to deliver
                     </button>
@@ -174,7 +174,7 @@
             <div class="ds-dr__listhead">
                 <button type="button" class="ds-sa__back" wire:click="go('home')" aria-label="Back">‹</button>
                 <strong>Boxes</strong>
-                <button type="button" class="ds-dr__scanmini" wire:click="go('scan')" aria-label="Scan a box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></button>
+                <button type="button" class="ds-dr__scanmini" wire:click="go('scan')" x-on:click="window.dsWarmCamera && window.dsWarmCamera()" aria-label="Scan a box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></button>
             </div>
             <label class="ds-dr__search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
                 <input type="search" wire:model.live.debounce.350ms="search" placeholder="Name, box number or barangay" aria-label="Search boxes">
@@ -219,13 +219,13 @@
     @if ($screen === 'scan')
         <section class="ds-sa__screen ds-sa__scan" wire:key="scan">
             <div class="ds-sa__cam" wire:ignore
-                 x-data="barcodeScanner(@js(['method' => 'scan', 'formats' => ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'itf', 'qr_code'], 'autoStart' => true, 'continuous' => true, 'cooldown' => 3000, 'beep' => true]))">
+                 x-data="barcodeScanner(@js(\App\Support\ScanModes::scanner('scan', 3000)))">
                 <video x-ref="video" playsinline muted autoplay></video>
                 <div class="ds-sa__frame" x-bind:class="{ 'is-hit': flash }"><i></i><i></i><i></i><i></i><span x-show="scanning" class="ds-sa__sweep"></span></div>
                 <p class="ds-sa__camtext" x-show="loading" x-cloak>Starting camera…</p>
-                <p class="ds-sa__camtext" x-show="! scanning && ! loading && ! error">Camera is off · tap the round button</p>
                 <p class="ds-sa__camtext is-error" x-show="error" x-text="error" x-cloak></p>
                 <p class="ds-sa__camtext is-hint" x-show="hint && ! error" x-text="hint" x-cloak></p>
+                @include('filament.scan.cam-extras')
                 <div class="ds-sa__controls">
                     <label class="ds-sa__type">
                         <input type="text" x-model="manualCode" x-on:keydown.enter.prevent="submitManual()" placeholder="Type a box number" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go" aria-label="Box number">
@@ -245,6 +245,8 @@
                 <span class="ds-sa__ring is-tiny"><svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill is-green" style="stroke-dashoffset: {{ $ring($p['delivered'], $p['total']) }}"/></svg></span>
                 <span class="ds-sa__count"><strong>{{ $p['delivered'] }}</strong><small>of {{ $p['total'] }}</small></span>
             </header>
+
+            <span class="hidden" wire:key="pz-{{ $sheet ?? 'none' }}-{{ $boxId ?? 0 }}" x-init="$dispatch('ds-scanner', { paused: @js((bool) $sheet) })"></span>
 
             @if ($just)
                 <div class="ds-dr__toast" wire:key="toast-{{ $just->id }}" x-data="{ left: 15 }" x-init="const t = setInterval(() => { left--; if (left <= 0) { clearInterval(t); $wire.set('justDelivered', null) } }, 1000)">

@@ -187,7 +187,7 @@ it('shows the size and the space used while loading in the Scan app', function (
 
     Filament::setCurrentPanel(Filament::getPanel('scan'));
     Livewire::test(ScanApp::class)
-        ->call('open', 'load')->call('pick', $trip->id)
+        ->call('open', 'load')->call('pick', $trip->id)->assertDontSee('0 / 20 space')->call('loadExtras')
         ->assertSee('0 / 20 space')
         ->call('scan', 'SX1')
         ->assertSee('XL · takes 2 space')

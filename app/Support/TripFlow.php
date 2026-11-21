@@ -247,6 +247,7 @@ class TripFlow
         // The old truck's team leaves the trip; people the office picked by hand stay.
         $oldTeam = $oldTruckId ? Truckcrew::where('truck_id', $oldTruckId)->pluck('crew') : collect();
         TripCrew::where('deliverylog_id', $trip->id)->whereNull('replaces_user_id')->whereIn('user_id', $oldTeam)->delete();
+        static::forgetCrew();
         if (! TripCrew::where('deliverylog_id', $trip->id)->exists()) {
             static::copyCrew($trip);
         }
@@ -266,19 +267,32 @@ class TripFlow
                 }
             } else {
                 TripCrew::where('deliverylog_id', $tripId)->where('user_id', $userId)->whereNull('replaces_user_id')->delete();
+                static::forgetCrew();
             }
         }
     }
 
     /** @return Collection<int, TripCrew> */
+    /** @var array<string, Collection> crew per trip, once per request (cleared when the crew changes) */
+    protected static array $crewMemo = [];
+
+    public static function forgetCrew(): void
+    {
+        static::$crewMemo = [];
+    }
+
     public static function crew(Deliverylog $trip): Collection
     {
         if (! static::ready()) {
             return collect();
         }
+        $key = spl_object_id(app()).':'.$trip->id;
+        if (isset(static::$crewMemo[$key])) {
+            return static::$crewMemo[$key];
+        }
         static::copyCrew($trip);
 
-        return TripCrew::with('user.workposition', 'replaces')->where('deliverylog_id', $trip->id)->orderBy('id')->get()
+        return static::$crewMemo[$key] = TripCrew::with('user.workposition', 'replaces')->where('deliverylog_id', $trip->id)->orderBy('id')->get()
             ->sortBy(fn ($c) => static::isLead($c) ? 0 : 1)->values();
     }
 
@@ -308,6 +322,7 @@ class TripFlow
         $team = Truckcrew::where('truck_id', $trip->truck_id)->pluck('crew')->map(fn ($i) => (int) $i)->unique()->values()->all();
         $out = array_values(array_diff($team, $userIds));
         TripCrew::where('deliverylog_id', $trip->id)->whereNotIn('user_id', $userIds)->delete();
+        static::forgetCrew();
         $users = User::with('workposition')->whereIn('id', $userIds)->get()->keyBy('id');
         foreach ($userIds as $i => $id) {
             $isNew = ! in_array($id, $team, true);

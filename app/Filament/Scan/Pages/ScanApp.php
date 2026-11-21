@@ -97,8 +97,14 @@ class ScanApp extends Page
     /** Show the finished and closed ones on the pick list too (greyed out). */
     public bool $showFinished = false;
 
+    /** The chosen trip or container as shown in the bar (kept, so it is not looked up on every tap). */
+    public ?array $targetInfo = null;
+
+    /** Load next, space, "Room for more": loaded right after the scan screen shows (board 51). */
+    public bool $extrasReady = false;
+
     /** Pick boxes: the last result (title, why, tone, undo). */
-    public ?array $pick = null;
+    public ?array $pickResult = null;
 
     public ?string $condition = null;
 
@@ -199,7 +205,7 @@ class ScanApp extends Page
     {
         $trip = $this->mode === 'pick' && $this->choice ? Deliverylog::find($this->choice) : null;
         if ($trip && \App\Support\Trips\Picking::isPicker($trip, Auth::user()) && \App\Support\Trips\Picking::undo($trip, $rowId, Auth::user())) {
-            $this->pick = ['title' => '↶ Undone · back on the list', 'why' => 'Put the box back where it was.', 'tone' => 'warn', 'undo' => null, 'code' => $this->pick['code'] ?? ''];
+            $this->pickResult = ['title' => '↶ Undone · back on the list', 'why' => 'Put the box back where it was.', 'tone' => 'warn', 'undo' => null, 'code' => $this->pickResult['code'] ?? ''];
             $this->status = 'warning';
         }
     }
@@ -209,7 +215,7 @@ class ScanApp extends Page
     {
         $trip = $this->mode === 'pick' && $this->choice ? Deliverylog::find($this->choice) : null;
         if ($trip && \App\Support\Trips\Picking::isPicker($trip, Auth::user()) && \App\Support\Trips\Picking::notFound($trip, $rowId, Auth::user())) {
-            $this->pick = ['title' => 'Marked not found', 'why' => 'The office sees it on Picking. Keep picking the rest.', 'tone' => 'warn', 'undo' => null, 'code' => ''];
+            $this->pickResult = ['title' => 'Marked not found', 'why' => 'The office sees it on Picking. Keep picking the rest.', 'tone' => 'warn', 'undo' => null, 'code' => ''];
             $this->status = 'warning';
         }
     }
@@ -217,15 +223,24 @@ class ScanApp extends Page
     public function pick(int $id): void
     {
         $station = $this->station();
-        if (! $station || ! $station->appChoices()->contains('id', $id)) {
+        $target = $station?->appChoices()->firstWhere('id', $id);
+        if (! $target) {
             Notification::make()->title('That one is not open for you any more.')->warning()->send();
 
             return;
         }
+        $this->targetInfo = ['id' => $id, 'name' => $target['name'] ?? '', 'sub' => $target['sub'] ?? null];
+        $this->extrasReady = false;
         $this->choice = $id;
         $this->returned = 0;
         $this->screen = 'scan';
         $this->clearResult();
+    }
+
+    /** Called by the scan screen once it shows. */
+    public function loadExtras(): void
+    {
+        $this->extrasReady = true;
     }
 
     public function toggleFinished(): void
@@ -244,8 +259,12 @@ class ScanApp extends Page
             return collect();
         }
 
-        return $station->appChoices()->values()->map(function (array $c, int $i) use ($modeKey) {
-            $p = $this->station($c['id'], $modeKey)->progress();
+        $choices = $station->appChoices()->values();
+        // one database question for all of them when the scan can do that
+        $many = method_exists($station, 'progressMany') ? $station->progressMany($choices->pluck('id')->all()) : null;
+
+        return $choices->map(function (array $c, int $i) use ($modeKey, $many) {
+            $p = $many !== null ? ($many[$c['id']] ?? ['loaded' => 0, 'total' => 0]) : $this->station($c['id'], $modeKey)->progress();
             $done = (int) ($p['loaded'] ?? 0);
             $total = (int) ($p['total'] ?? 0);
 
@@ -293,7 +312,7 @@ class ScanApp extends Page
 
     protected function clearResult(): void
     {
-        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass', 'hubTrip', 'pick');
+        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass', 'hubTrip', 'pickResult');
     }
 
     /** Called by the camera or the typed box number. */
@@ -517,9 +536,15 @@ class ScanApp extends Page
         $this->setInfo = property_exists($station, 'setInfo') ? $station->setInfo : null;
         $this->wrongHub = property_exists($station, 'wrongHub') ? $station->wrongHub : null;
         $this->hubTrip = property_exists($station, 'hubTrip') ? $station->hubTrip : null;
-        $this->pick = property_exists($station, 'pick') ? $station->pick : null;
+        $this->pickResult = property_exists($station, 'pick') ? $station->pick : null;
 
         if ($this->status === 'success') {
+            if ($this->invoiceId && $this->photosOn()) {
+                // photos of this box may be sent in the back (ScanPhotoController) for a while
+                $ok = collect(session('scan-app.photo-ok', []))->filter(fn ($v) => ($v['at'] ?? 0) > now()->subHours(2)->timestamp)->take(-40)->all();
+                $ok[$this->invoiceId] = ['mode' => $this->mode, 'choice' => $this->choice, 'at' => now()->timestamp];
+                session(['scan-app.photo-ok' => $ok]);
+            }
             $this->sessionScans++;
             $key = 'scan-app.today.'.now()->toDateString();
             session([$key => session($key, 0) + 1]);
@@ -626,16 +651,17 @@ class ScanApp extends Page
         if (in_array($this->screen, ['scan', 'done'], true) && $mode && $this->choice) {
             $station = $this->station();
             $progress = $station->progress();
-            $target = $station->appChoices()->firstWhere('id', $this->choice);
-            $loadNext = $this->screen === 'scan' && method_exists($station, 'loadNext') ? $station->loadNext() : null;
-            $team = method_exists($station, 'team') ? $station->team() : [];
+            $target = ($this->targetInfo['id'] ?? null) === $this->choice ? $this->targetInfo : $station->appChoices()->firstWhere('id', $this->choice);
+            $extras = $this->extrasReady || $this->screen === 'done';
+            $loadNext = $extras && $this->screen === 'scan' && method_exists($station, 'loadNext') ? $station->loadNext() : null;
+            $team = $extras && method_exists($station, 'team') ? $station->team() : [];
             $pickGroups = $this->mode === 'pick' && $this->screen === 'scan' ? $station->groups() : [];
-            $trucks = $this->mode === 'unload' && method_exists($station, 'truckStatus') ? $station->truckStatus() : [];
+            $trucks = $extras && $this->mode === 'unload' && method_exists($station, 'truckStatus') ? $station->truckStatus() : [];
             $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
             $countResult = $this->screen === 'done' && method_exists($station, 'countResult') ? $station->countResult() : null;
             $receiveResult = $this->screen === 'done' && method_exists($station, 'receiveResult') ? $station->receiveResult() : null;
             // Box sizes: space on the truck while loading (a big box takes more).
-            if (in_array($this->mode, ['load', 'hub_load'], true) && BoxSizes::on() && ($trip = Deliverylog::with('truck')->find($this->choice))) {
+            if ($extras && in_array($this->mode, ['load', 'hub_load'], true) && BoxSizes::on() && ($trip = Deliverylog::with('truck')->find($this->choice))) {
                 $space = BoxSizes::tripSpace($trip, $this->mode === 'hub_load');
                 if ($this->screen === 'done' && $this->mode === 'load' && ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total']) {
                     $topUp = TruckSpace::topUp($trip);
@@ -669,7 +695,9 @@ class ScanApp extends Page
             'countResult' => $countResult,
             'receiveResult' => $receiveResult,
             'topUp' => $topUp,
-            'cityTopUp' => $this->mode === 'load' && $this->choice && empty($this->topUpSkipped[(int) $this->choice]) && ($st = $this->station()) && method_exists($st, 'cityTopUp')
+            'extrasReady' => $this->extrasReady || $this->screen !== 'scan',
+            'paused' => $this->screen === 'scan' && (($this->status !== null && ($this->status !== 'success' || $this->photosOn())) || $this->bypass !== null),
+            'cityTopUp' => $this->extrasReady && $this->mode === 'load' && $this->choice && empty($this->topUpSkipped[(int) $this->choice]) && ($st = $this->station()) && method_exists($st, 'cityTopUp')
                 ? (function () use ($st) {
                     $st->data['deliverylog_id'] = $this->choice;
 

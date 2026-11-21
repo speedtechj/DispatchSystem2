@@ -60,6 +60,17 @@ class ScanModes
     }
 
     /**
+     * Camera settings of the Scan app and the Driver app (board 51): the box stickers and receipts are Code 39,
+     * section and spot labels are QR. A number counts when it is read twice the same; no scan for 2 minutes turns
+     * the camera off; after 3 s of unclear reads the crew can type the number.
+     */
+    public static function scanner(string $method = 'scan', int $cooldown = 2500): array
+    {
+        return ['method' => $method, 'formats' => ['code_39', 'qr_code'], 'autoStart' => true, 'continuous' => true, 'cooldown' => $cooldown, 'beep' => true,
+            'confirm' => 2, 'idleOff' => 120000, 'hardAfter' => 3000, 'startDelay' => 0];
+    }
+
+    /**
      * Partner hub: Receive container for hubs reached by sea, Receive truck for hubs reached by truck
      * (Settings · Hubs · island & sea). The other one shows only while something is arriving that way.
      */

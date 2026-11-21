@@ -398,6 +398,25 @@ abstract class LoadTripPage extends Page
         ];
     }
 
+    /**
+     * Progress of many trips in one database question (the Scan app trip list).
+     *
+     * @param  list<int>  $ids
+     * @return array<int, array{loaded: int, total: int}>
+     */
+    public function progressMany(array $ids): array
+    {
+        if (! $ids) {
+            return [];
+        }
+        $col = $this->tripColumn();
+        $loaded = $this->loadedColumn();
+
+        return Tripinvoice::whereIn($col, $ids)->selectRaw("{$col} as t, count(*) as total, sum(case when {$loaded} = 1 then 1 else 0 end) as loaded")
+            ->groupBy($col)->toBase()->get()
+            ->mapWithKeys(fn ($r) => [(int) $r->t => ['loaded' => (int) $r->loaded, 'total' => (int) $r->total]])->all();
+    }
+
     public function household(): array
     {
         $tripId = (int) ($this->data['deliverylog_id'] ?? 0);

@@ -5028,3 +5028,47 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sa__scan.is-pick .ds-sa__frame { top: 42%; height: min(30vw, 7rem); }
 .ds-sa__scan.is-pick > :not(.ds-sa__cam):not(.ds-sa__bar):not(.ds-sa__sheet) { margin: 0.75rem 1rem 0; }
 .ds-sa__scan.is-pick .ds-sa__camtext, .ds-sa__scan.is-pick .ds-sa__camtext.is-error, .ds-sa__scan.is-pick .ds-sa__camtext.is-hint { top: 5.6rem; }
+
+/* Scan app and Driver app camera (board 51): wide frame for the stickers, camera off, dark, hard to read, photos */
+.ds-sa__cam .ds-sa__frame { width: min(86vw, 21rem); height: min(30vw, 7.5rem); }
+.ds-cx__off { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem; background: #05090c; color: #fff; text-align: center; padding: 1.5rem; }
+.ds-cx__off span { display: grid; place-items: center; width: 4rem; height: 4rem; border-radius: 50%; background: rgb(255 255 255 / .1); font-size: 1.6rem; }
+.ds-cx__off b { font-size: 1rem; }
+.ds-cx__off small { max-width: 17rem; color: #9fb0bc; font-size: 0.8rem; line-height: 1.4; }
+.ds-cx__dark { position: absolute; left: 1rem; right: 1rem; top: 52%; z-index: 3; display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.65rem; border-radius: 0.8rem; background: rgb(10 18 25 / .88); box-shadow: inset 0 0 0 1px rgb(246 190 0 / .5); }
+.ds-cx__dark span { flex: 1; font-size: 0.82rem; font-weight: 800; color: #ffe08a; }
+.ds-cx__dark button { height: 2rem; padding: 0 0.8rem; border-radius: 0.6rem; background: var(--sa-gold); color: #0a1219; font-weight: 900; }
+.ds-cx__hard { position: absolute; left: 1rem; right: 1rem; top: 60%; z-index: 3; height: 3.4rem; border-radius: 1rem; background: var(--sa-gold); color: #0a1219; font-size: 1rem; font-weight: 900; }
+.ds-cx__type { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; flex-direction: column; gap: 0.5rem; padding: 0.9rem 1rem calc(env(safe-area-inset-bottom) + 1rem); border-radius: 1.5rem 1.5rem 0 0; background: #0f1d27; box-shadow: 0 -16px 40px rgb(0 0 0 / .45); }
+.ds-cx__type > small { color: #9fb0bc; font-size: 0.8rem; }
+.ds-cx__field { display: flex; align-items: center; gap: 0.5rem; height: 3.2rem; padding-left: 0.9rem; border-radius: 0.9rem; box-shadow: inset 0 0 0 2px var(--sa-gold); }
+.ds-cx__field b { font-size: 1.4rem; font-weight: 900; letter-spacing: .08em; }
+.ds-cx__field i { width: 2px; height: 1.6rem; background: var(--sa-gold); margin-right: auto; animation: ds-blink 1s steps(2) infinite; }
+.ds-cx__field button { height: 100%; padding: 0 1.2rem; border-radius: 0.9rem; background: var(--sa-gold); color: #0a1219; font-weight: 900; font-size: 1rem; }
+@keyframes ds-blink { 50% { opacity: 0; } }
+.ds-cx__keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; }
+.ds-cx__keys button { height: 3rem; border-radius: 0.8rem; background: rgb(255 255 255 / .1); color: #fff; font-size: 1.3rem; font-weight: 800; }
+.ds-cx__keys button:active { background: rgb(255 255 255 / .2); }
+.ds-cx__back { height: 2.4rem; color: #9fb0bc; font-weight: 800; }
+.ds-cx__chips { position: absolute; left: 1rem; right: 1rem; top: 50%; z-index: 2; display: flex; flex-wrap: wrap; gap: 0.35rem; pointer-events: none; }
+.ds-cx__chips span { height: 1.7rem; padding: 0 0.7rem; border-radius: 999px; font-size: 0.78rem; font-weight: 800; display: inline-flex; align-items: center; pointer-events: auto; }
+.ds-cx__chips .is-up { background: rgb(90 168 255 / .22); color: #a8d0ff; }
+.ds-cx__chips .is-ok { background: rgb(52 195 143 / .2); color: #7fe0b8; }
+.ds-cx__chips .is-bad { background: rgb(255 107 94 / .25); color: #ffb3ab; }
+.ds-cx__chips .is-torch { background: rgb(246 190 0 / .2); color: #ffe08a; }
+.ds-snap { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.ds-snap .ds-sa__shot { position: relative; width: 3.6rem; height: 3.6rem; flex: none; border-radius: 0.75rem; overflow: hidden; }
+.ds-snap .ds-sa__shot img { width: 100%; height: 100%; object-fit: cover; }
+.ds-snap .ds-sa__shot b { position: absolute; left: 0; right: 0; bottom: 0; text-align: center; font-size: 0.65rem; font-weight: 900; padding: 1px 0; background: rgb(0 0 0 / .6); color: #a8d0ff; }
+.ds-snap .ds-sa__shot b.is-done { color: #7fe0b8; }
+.ds-snap .ds-sa__shot b.is-bad { color: #ffb3ab; }
+.ds-snap__here { flex: 1; min-width: 9rem; height: 3.6rem; border-radius: 0.9rem; background: var(--sa-gold); color: #0a1219; font-size: 0.95rem; font-weight: 900; }
+.ds-snap__app { width: 5.5rem; height: 3.6rem; flex: none; border-radius: 0.9rem; background: rgb(255 255 255 / .1); color: #fff; font-size: 0.78rem; font-weight: 800; line-height: 1.2; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.ds-snap__app small { color: #9fb0bc; font-weight: 700; }
+.ds-snap__note { width: 100%; margin: 0; color: #9fb0bc; font-size: 0.8rem; }
+.ds-sa__primary.is-light { background: rgb(255 255 255 / .92); color: #0a1219; }
+.ds-sx__skel { position: absolute; top: calc(env(safe-area-inset-top) + 5.2rem); left: 1rem; right: 1rem; z-index: 3; display: flex; flex-direction: column; gap: 0.45rem; padding: 0.8rem 0.9rem; border-radius: 0.9rem; background: rgb(10 18 25 / .82); backdrop-filter: blur(8px); }
+.ds-sx__skel i { display: block; height: 0.7rem; border-radius: 0.35rem; background: rgb(255 255 255 / .1); animation: ds-skel 1.2s ease-in-out infinite; }
+.ds-sx__skel i:nth-child(1) { width: 60%; } .ds-sx__skel i:nth-child(2) { width: 85%; } .ds-sx__skel i:nth-child(3) { width: 40%; }
+.ds-sx__skel small { color: #7f93a1; font-size: 0.75rem; }
+@keyframes ds-skel { 50% { opacity: .45; } }

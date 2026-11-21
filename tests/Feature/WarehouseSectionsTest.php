@@ -75,7 +75,7 @@ beforeEach(function () {
 
 function unload($test)
 {
-    return Livewire::test(ScanApp::class)->call('open', 'unload')->call('pick', $test->container->id);
+    return Livewire::test(ScanApp::class)->call('open', 'unload')->call('pick', $test->container->id)->call('loadExtras');
 }
 
 it('finds the section from the province, and sends unclear addresses to Check address', function () {

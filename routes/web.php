@@ -69,6 +69,7 @@ Route::middleware(['web', 'auth'])->get('/trip-loading/{trip}', [LoadingListCont
     ->whereNumber('trip')->name('trip.loading-list');
 
 // Truck tracking: the Driver app sends locations during a trip; GPS trackers send to a secret link.
+Route::middleware(['web', 'auth', 'throttle:240,1'])->post('/scan/box-photo', [App\Http\Controllers\ScanPhotoController::class, 'store'])->name('scan.box-photo');
 Route::middleware(['web', 'auth', 'throttle:120,1'])->post('/delivery-track', [TrackController::class, 'driver'])->name('track.driver');
 Route::middleware(['throttle:600,1'])->match(['get', 'post'], '/track/in/{token}', [TrackController::class, 'tracker'])
     ->withoutMiddleware([ValidateCsrfToken::class, VerifyCsrfToken::class, 'Illuminate\Foundation\Http\Middleware\PreventRequestForgery'])
