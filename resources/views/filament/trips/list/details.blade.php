@@ -28,7 +28,7 @@
         @endforeach
     </div>
     @if ($names = \App\Filament\Tables\TripList::cityNames($trip))
-        <div class="ds-tl__cities"><b>Cities and municipalities</b><ul>@foreach ($names as $c)<li>{{ $c }}</li>@endforeach</ul></div>
+        <div class="ds-tl__cities"><b>Cities and municipalities <small>{{ count($names) }}</small></b><ul>@foreach ($names as $c)<li>{{ $c }}</li>@endforeach</ul></div>
     @endif
     <span class="ds-tl__btns">
         @if ($page)<x-filament::button tag="a" :href="$page::getUrl(['trip' => $trip->id])" icon="heroicon-m-arrow-top-right-on-square">Open the trip</x-filament::button>@endif
