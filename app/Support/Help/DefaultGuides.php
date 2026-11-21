@@ -731,6 +731,28 @@ class DefaultGuides
                 'related' => ['warehouse-sections'], 'sort' => 26,
             ],
             [
+                'slug' => 'pick-boxes', 'topic' => 'trips', 'icon' => '📦', 'apps' => ['warehouse', 'company', 'scan'],
+                'title_en' => 'Pick the boxes of a trip', 'title_tl' => 'I-pick ang mga box ng trip',
+                'summary_en' => 'Before Load truck, pickers take each box of the trip from its section. Many phones can pick one trip together.',
+                'summary_tl' => 'Bago ang Load truck, kukunin ng mga picker ang bawat box ng trip sa seksyon nito. Puwedeng sabay-sabay ang maraming phone sa isang trip.',
+                'when_en' => 'A trip is planned and its boxes are still in the sections.',
+                'when_tl' => 'May trip na at nasa mga seksyon pa ang mga box.',
+                'steps' => [
+                    $s('Give the trip its pickers', 'Picking → press Use on the ✦ suggestion, or + to add people. A trip with no picker: anyone free can press Take this trip in the Scan app.', 'Bigyan ng picker ang trip', 'Picking → pindutin ang Use sa ✦ suggestion, o + para magdagdag. Walang picker? Puwedeng pindutin ng kahit sinong libre ang Take this trip sa Scan app.'),
+                    $s('Pick and scan', 'Scan app → Pick boxes → your trip. Walk the list spot by spot and section by section; scan each box you take. Combo boxes: the phone says where the rest are.', 'Kunin at i-scan', 'Scan app → Pick boxes → ang trip mo. Sundan ang listahan, spot por spot at seksyon por seksyon; i-scan ang bawat box na kukunin. Combo: sasabihin ng phone kung nasaan ang iba.'),
+                    $s('Then load', 'All picked: the trip is Ready to load. Use Load truck as usual.', 'Saka i-load', 'Lahat na-pick: Ready to load na ang trip. Gamitin ang Load truck gaya ng dati.'),
+                ],
+                'result_en' => 'The boxes of the trip wait at the truck, nothing is left in the sections.',
+                'result_tl' => 'Nasa tabi ng truck na ang mga box ng trip, walang naiwan sa seksyon.',
+                'problems' => [
+                    $p('"Not for this trip"', 'Put the box back in the section the phone shows. Nothing changed.', '"Not for this trip"', 'Ibalik ang box sa seksyong sinasabi ng phone. Walang nagbago.'),
+                    $p('Picked by mistake', 'Press ↶ Undo on the phone or on Picking: the box is back on the list.', 'Na-pick nang mali', 'Pindutin ang ↶ Undo sa phone o sa Picking: babalik ang box sa listahan.'),
+                    $p('The box is not in its section', 'Press Not found on the box. The office sees it on Picking; keep picking the rest.', 'Wala ang box sa seksyon', 'Pindutin ang Not found sa box. Makikita ng office sa Picking; ituloy ang iba.'),
+                ],
+                'pages' => ['pages.picking'], 'links' => ['warehouse' => 'pages.picking', 'company' => 'pages.picking'],
+                'related' => ['load-truck', 'warehouse-sections'], 'sort' => 27,
+            ],
+            [
                 'slug' => 'return-shipments', 'topic' => 'boxes', 'icon' => '↩️', 'apps' => ['company', 'warehouse', 'admin', 'scan'],
                 'title_en' => 'Send boxes back to the warehouse', 'title_tl' => 'Ibalik ang mga box sa bodega',
                 'summary_en' => 'Returns and wrong-hub boxes go on a return shipment (RET-0001). The warehouse scans them in; then they are back in the pool, in their section.',

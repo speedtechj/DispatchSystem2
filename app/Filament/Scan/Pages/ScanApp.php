@@ -97,6 +97,9 @@ class ScanApp extends Page
     /** Show the finished and closed ones on the pick list too (greyed out). */
     public bool $showFinished = false;
 
+    /** Pick boxes: the last result (title, why, tone, undo). */
+    public ?array $pick = null;
+
     public ?string $condition = null;
 
     public string $note = '';
@@ -158,6 +161,57 @@ class ScanApp extends Page
         $this->showFinished = false;
         $this->screen = 'pick';
         $this->clearResult();
+        // Pick boxes: one trip given to you opens by itself.
+        if ($mode === 'pick' && ($mine = $this->station()?->appChoices()->where('mine', true)) && $mine->count() === 1) {
+            $this->pick($mine->first()['id']);
+        }
+    }
+
+    /** Pick boxes: take a trip that has no picker yet. */
+    public function takeTrip(int $id): void
+    {
+        $trip = $this->mode === 'pick' ? $this->station()?->appChoices()->firstWhere('id', $id) : null;
+        $model = $trip ? Deliverylog::find($id) : null;
+        if (! $model || ! \App\Support\Trips\Picking::take($model, Auth::user())) {
+            Notification::make()->title('Someone else took that trip.')->warning()->send();
+
+            return;
+        }
+        $this->pick($id);
+    }
+
+    /** Pick boxes: all picked, go on with Load truck for the same trip. */
+    public function goLoad(): void
+    {
+        $trip = $this->choice;
+        $key = collect(['load', 'hub_load'])->first(fn ($k) => isset($this->modes()[$k]));
+        if (! $key) {
+            return;
+        }
+        $this->open($key);
+        if ($trip && $this->station()?->appChoices()->contains('id', $trip)) {
+            $this->pick($trip);
+        }
+    }
+
+    /** Pick boxes: picked by mistake. */
+    public function undoPick(int $rowId): void
+    {
+        $trip = $this->mode === 'pick' && $this->choice ? Deliverylog::find($this->choice) : null;
+        if ($trip && \App\Support\Trips\Picking::isPicker($trip, Auth::user()) && \App\Support\Trips\Picking::undo($trip, $rowId, Auth::user())) {
+            $this->pick = ['title' => '↶ Undone · back on the list', 'why' => 'Put the box back where it was.', 'tone' => 'warn', 'undo' => null, 'code' => $this->pick['code'] ?? ''];
+            $this->status = 'warning';
+        }
+    }
+
+    /** Pick boxes: the box is not in its section. */
+    public function notFound(int $rowId): void
+    {
+        $trip = $this->mode === 'pick' && $this->choice ? Deliverylog::find($this->choice) : null;
+        if ($trip && \App\Support\Trips\Picking::isPicker($trip, Auth::user()) && \App\Support\Trips\Picking::notFound($trip, $rowId, Auth::user())) {
+            $this->pick = ['title' => 'Marked not found', 'why' => 'The office sees it on Picking. Keep picking the rest.', 'tone' => 'warn', 'undo' => null, 'code' => ''];
+            $this->status = 'warning';
+        }
     }
 
     public function pick(int $id): void
@@ -239,7 +293,7 @@ class ScanApp extends Page
 
     protected function clearResult(): void
     {
-        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass', 'hubTrip');
+        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass', 'hubTrip', 'pick');
     }
 
     /** Called by the camera or the typed box number. */
@@ -463,6 +517,7 @@ class ScanApp extends Page
         $this->setInfo = property_exists($station, 'setInfo') ? $station->setInfo : null;
         $this->wrongHub = property_exists($station, 'wrongHub') ? $station->wrongHub : null;
         $this->hubTrip = property_exists($station, 'hubTrip') ? $station->hubTrip : null;
+        $this->pick = property_exists($station, 'pick') ? $station->pick : null;
 
         if ($this->status === 'success') {
             $this->sessionScans++;
@@ -574,6 +629,7 @@ class ScanApp extends Page
             $target = $station->appChoices()->firstWhere('id', $this->choice);
             $loadNext = $this->screen === 'scan' && method_exists($station, 'loadNext') ? $station->loadNext() : null;
             $team = method_exists($station, 'team') ? $station->team() : [];
+            $pickGroups = $this->mode === 'pick' && $this->screen === 'scan' ? $station->groups() : [];
             $trucks = $this->mode === 'unload' && method_exists($station, 'truckStatus') ? $station->truckStatus() : [];
             $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
             $countResult = $this->screen === 'done' && method_exists($station, 'countResult') ? $station->countResult() : null;
@@ -624,6 +680,7 @@ class ScanApp extends Page
             'splitReasons' => SetSplit::REASONS,
             'box' => $box = ($this->invoiceId ? Invoice::find($this->invoiceId) : null),
             'space' => $space ?? null,
+            'pickGroups' => $pickGroups ?? [],
             'boxSize' => $box && BoxSizes::on() ? ['name' => BoxSizes::nameOfType($box->boxtype), 'space' => BoxSizes::spaceOf($box->boxtype)] : null,
             'conditions' => BoxPhoto::CONDITIONS,
             'shots' => $this->status === 'success' ? $this->shots() : collect(),

@@ -30,13 +30,13 @@ beforeEach(function () {
 
 it('shows Receive truck to hubs reached by truck, and Receive container to hubs reached by sea', function () {
     $this->hub->forceFill(['by_sea' => false])->save();
-    expect(array_keys(ScanModes::for($this->user)))->toBe(['hub_load', 'return', 'truck_receive']);
+    expect(array_keys(ScanModes::for($this->user)))->toBe(['pick', 'hub_load', 'return', 'truck_receive']);
 
     // A sea hub sees Receive truck only while a truck is arriving.
     $this->hub->forceFill(['by_sea' => true])->save();
-    expect(array_keys(ScanModes::for($this->user)))->toBe(['hub_load', 'return', 'ship_receive', 'truck_receive']);
+    expect(array_keys(ScanModes::for($this->user)))->toBe(['pick', 'hub_load', 'return', 'ship_receive', 'truck_receive']);
     Tripinvoice::whereKey($this->rows->modelKeys())->update(['logistichub_id' => $this->main->id]);
-    expect(array_keys(ScanModes::for($this->user)))->toBe(['hub_load', 'return', 'ship_receive']);
+    expect(array_keys(ScanModes::for($this->user)))->toBe(['pick', 'hub_load', 'return', 'ship_receive']);
 });
 
 it('receives the truck box by box, and opens a Missing box issue for each box not scanned', function () {

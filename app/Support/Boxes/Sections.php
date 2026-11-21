@@ -35,7 +35,7 @@ class Sections
             return collect();
         }
 
-        return static::$memo[(int) $warehouseId] ??= WhSection::query()->with(array_merge(['hub:id,hub_name', 'toWarehouse:id,name'], Schema::hasTable('wh_spots') ? ['spots'] : []))
+        return static::$memo[spl_object_id(app()).':'.(int) $warehouseId] ??= WhSection::query()->with(array_merge(['hub:id,hub_name', 'toWarehouse:id,name'], Schema::hasTable('wh_spots') ? ['spots'] : []))
             ->where('is_active', true)
             ->where(fn ($q) => $q->whereNull('warehouse_id')->when($warehouseId, fn ($q) => $q->orWhere('warehouse_id', $warehouseId)))
             ->orderBy('sort')->orderBy('code')->get();

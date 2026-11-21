@@ -4939,3 +4939,92 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sx__spots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 6px; }
 .ds-sx__spots button { height: 54px; border: 0; border-radius: 14px; background: rgb(255 255 255 / .08); color: #fff; font: inherit; font-weight: 900; font-size: 18px; cursor: pointer; }
 .ds-sx__skip { width: 100%; height: 46px; margin-top: 8px; border: 0; border-radius: 14px; background: rgb(255 255 255 / .06); color: #c8d3dc; font: inherit; font-weight: 800; cursor: pointer; }
+
+/* Scan app · Pick boxes (board 49) */
+.ds-pk__mine { display: flex; flex-direction: column; gap: 0.4rem; width: 100%; padding: 0.9rem; border-radius: 1.2rem; text-align: left; color: inherit; background: rgb(246 190 0 / .14); box-shadow: inset 0 0 0 1px rgb(246 190 0 / .5); }
+.ds-pk__mine small { color: #9fb0bc; font-size: 0.8rem; }
+.ds-pk__row { display: flex; justify-content: space-between; align-items: center; }
+.ds-pk__row b { font-size: 1.15rem; }
+.ds-pk__row em { font-style: normal; font-size: 0.75rem; font-weight: 800; color: var(--sa-gold); }
+.ds-pk__bar { height: 6px; border-radius: 99px; background: rgb(255 255 255 / .1); overflow: hidden; }
+.ds-pk__bar i { display: block; height: 100%; background: var(--sa-ok); }
+.ds-pk__open { display: flex; align-items: center; gap: 0.6rem; padding: 0.75rem 0.9rem; border-radius: 1.2rem; background: rgb(255 255 255 / .05); }
+.ds-pk__open > span { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ds-pk__open small { color: #9fb0bc; font-size: 0.8rem; }
+.ds-pk__open button { height: 2.5rem; padding: 0 0.9rem; border-radius: 0.75rem; background: var(--sa-gold); color: #0e2433; font-weight: 900; flex: none; }
+.ds-pk__foot { display: block; color: #7f93a1; font-size: 0.78rem; line-height: 1.45; }
+.ds-pk__list { display: flex; flex-direction: column; gap: 0.5rem; }
+.ds-pk__group { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.65rem 0.75rem; border-radius: 0.9rem; background: rgb(255 255 255 / .05); }
+.ds-pk__gh { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.ds-pk__gh b { font-size: 0.9rem; }
+.ds-pk__gh b i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; }
+.ds-pk__gh small { font-weight: 800; color: #9fb0bc; }
+.ds-pk__gh small.is-done { color: var(--sa-ok); }
+.ds-pk__boxes { display: flex; flex-wrap: wrap; gap: 5px; }
+.ds-pk__box { height: 28px; padding: 0 9px; border-radius: 8px; font-size: 0.78rem; font-weight: 800; display: inline-flex; align-items: center; gap: 5px; background: rgb(255 255 255 / .08); color: #fff; }
+.ds-pk__box small { font-weight: 700; opacity: .75; font-size: 0.68rem; }
+.ds-pk__box.is-combo { box-shadow: inset 0 0 0 1px rgb(90 168 255 / .7); }
+.ds-pk__box.is-picked { background: rgb(52 195 143 / .16); color: #7fe0b8; }
+.ds-pk__box.is-mine { background: rgb(52 195 143 / .3); color: #fff; }
+.ds-pk__box.is-missing { background: rgb(240 169 59 / .2); color: #f3c98a; }
+.ds-pk__hit { display: flex; justify-content: space-between; align-items: center; }
+.ds-pk__hit small { font-weight: 800; color: #c8d3dc; }
+.ds-pk__sheet strong { font-size: 1.2rem; }
+.ds-pk__sheet.is-ok strong { color: #7fe0b8; }
+.ds-pk__sheet.is-warn strong { color: #f3c98a; }
+.ds-pk__sheet.is-bad strong { color: #ff9d93; }
+.ds-pk__undo { height: 2.6rem; border-radius: 0.8rem; background: #fff; color: #8a1f1f; font-weight: 800; }
+.ds-pk__ready { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.9rem; border-radius: 1.1rem; background: rgb(52 195 143 / .14); box-shadow: inset 0 0 0 1px rgb(52 195 143 / .45); }
+.ds-pk__ready b { color: #7fe0b8; font-size: 1.05rem; }
+.ds-pk__ready span { color: #c8d3dc; font-size: 0.88rem; }
+
+/* Picking (office, board 49) */
+.ds-pg { display: flex; flex-direction: column; gap: 1rem; }
+.ds-pg__card { background: #fff; border-radius: 1rem; box-shadow: 0 1px 0 #e3e8ec, 0 12px 32px -20px rgb(14 36 51 / .25); overflow: hidden; }
+.dark .ds-pg__card { background: rgb(255 255 255 / .04); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .08); }
+.ds-pg__head, .ds-pg__row { display: grid; grid-template-columns: 150px 1.1fr 1.6fr 1.3fr 140px; gap: 12px; padding: 11px 16px; align-items: center; }
+.ds-pg__head { font-size: 12px; font-weight: 800; color: #6b7b88; border-bottom: 1px solid #eef1f4; }
+.ds-pg__row { border-bottom: 1px solid #f3f5f7; }
+.dark .ds-pg__head, .dark .ds-pg__row { border-color: rgb(255 255 255 / .06); }
+.ds-pg__trip { display: flex; flex-direction: column; }
+.ds-pg__trip b { font-size: 15px; }
+.ds-pg__trip small, .ds-pg__secs { color: #6b7b88; font-size: 12px; }
+.ds-pg__pickers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; position: relative; }
+.ds-pg__chip { height: 28px; padding: 0 5px 0 10px; border-radius: 999px; background: #fff7dc; box-shadow: inset 0 0 0 1px #ecd58a; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 800; color: #0e2433; }
+.ds-pg__chip button { width: 20px; height: 20px; border-radius: 50%; background: #fff; font-weight: 900; color: #8a5a00; }
+.ds-pg__add { height: 28px; padding: 0 10px; border-radius: 10px; font-size: 12px; font-weight: 800; box-shadow: inset 0 0 0 1px #b9cfe6; color: #1d5f99; background: #fff; }
+.ds-pg__none { color: #8a5a00; font-weight: 700; font-size: 12px; }
+.ds-pg__sug { width: 100%; display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-radius: 10px; background: #fff7dc; color: #0e2433; }
+.ds-pg__sug small { flex: 1; font-weight: 700; }
+.ds-pg__sug small span { color: #6b7b88; font-weight: 600; }
+.ds-pg__sug button { height: 26px; padding: 0 12px; border-radius: 10px; background: #e5b94a; font-size: 12px; font-weight: 800; color: #0e2433; }
+.ds-pg__pop { position: absolute; z-index: 30; top: 32px; left: 0; width: 240px; max-height: 260px; overflow: auto; background: #fff; border-radius: 12px; box-shadow: 0 18px 40px -16px rgb(14 36 51 / .45), inset 0 0 0 1px #e3e8ec; padding: 6px; display: flex; flex-direction: column; }
+.dark .ds-pg__pop { background: #1b2a36; }
+.ds-pg__pop button { text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
+.ds-pg__pop button:hover { background: #f3f5f7; }
+.dark .ds-pg__pop button:hover { background: rgb(255 255 255 / .06); }
+.ds-pg__pop small { color: #6b7b88; }
+.ds-pg__prog { display: flex; flex-direction: column; gap: 5px; }
+.ds-pg__prog > span:first-child { height: 8px; border-radius: 99px; background: #eef1f4; overflow: hidden; }
+.ds-pg__prog > span:first-child i { display: block; height: 100%; background: #17895e; }
+.ds-pg__prog > small { font-weight: 700; color: #33424e; font-size: 12px; }
+.dark .ds-pg__prog > small { color: #c8d3dc; }
+.ds-pg__miss { color: #8a5a00; font-weight: 700; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ds-pg__miss button { font-size: 11px; font-weight: 800; color: #1d5f99; text-decoration: underline; }
+.ds-pg__st { justify-self: start; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 800; display: inline-flex; align-items: center; }
+.ds-pg__st.is-ready { background: #e6f6ef; color: #17895e; }
+.ds-pg__st.is-picking { background: #e8f1fb; color: #1d5f99; }
+.ds-pg__st.is-wait { background: #fff1c2; color: #8a5a00; }
+.ds-pg__log { padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.ds-pg__log > span { display: flex; gap: 10px; font-size: 13px; padding: 3px 0; border-bottom: 1px solid #f3f5f7; }
+.dark .ds-pg__log > span { border-color: rgb(255 255 255 / .06); }
+.ds-pg__log small { color: #6b7b88; width: 64px; flex: none; }
+.ds-pg__empty { padding: 28px 16px; color: #6b7b88; text-align: center; }
+@media (max-width: 900px) { .ds-pg__head { display: none; } .ds-pg__row { grid-template-columns: 1fr; } }
+
+/* Pick boxes: a shorter camera, the pick list under it */
+.ds-sa__scan.is-pick { display: flex; flex-direction: column; padding-bottom: 2rem; }
+.ds-sa__scan.is-pick .ds-sa__cam { position: relative; inset: auto; height: 50dvh; min-height: 22rem; flex: none; }
+.ds-sa__scan.is-pick .ds-sa__frame { top: 42%; height: min(30vw, 7rem); }
+.ds-sa__scan.is-pick > :not(.ds-sa__cam):not(.ds-sa__bar):not(.ds-sa__sheet) { margin: 0.75rem 1rem 0; }
+.ds-sa__scan.is-pick .ds-sa__camtext, .ds-sa__scan.is-pick .ds-sa__camtext.is-error, .ds-sa__scan.is-pick .ds-sa__camtext.is-hint { top: 5.6rem; }

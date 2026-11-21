@@ -346,6 +346,7 @@ class Help
             'wh_load', 'wh_unload' => 'warehouse-transfer',
             'port', 'ship_receive' => 'sea-shipments',
             'count' => 'section-count',
+            'pick' => 'pick-boxes',
             'ret_receive' => 'return-shipments',
             default => 'scan-tips',
         };

@@ -59,6 +59,31 @@
             <button type="button" class="ds-sa__pill" wire:click="home"><span aria-hidden="true">‹</span> Back</button>
             <header class="ds-sa__title ds-sa__title--help"><span><small>{{ $def['label'] }}</small><strong>Choose the {{ $def['kind'] }}</strong></span><button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help', { slug: '{{ \App\Support\Help\Help::forScanMode($this->mode) }}' })" aria-label="Help">?</button></header>
 
+            @if ($this->mode === 'pick')
+                @php($mineList = $choices->where('mine', true)->values())
+                @php($openList = $choices->where('mine', false)->values())
+                <p class="ds-sa__label">My trips</p>
+                @forelse ($mineList as $i => $c)
+                    <button type="button" class="ds-pk__mine" wire:click="pick({{ $c['id'] }})" wire:key="pm-{{ $c['id'] }}">
+                        <span class="ds-pk__row"><b>{{ $c['name'] }}</b><em>Open ›</em></span>
+                        @if ($c['sub'])<small>{{ $c['sub'] }}</small>@endif
+                        <span class="ds-pk__bar"><i style="width: {{ $c['total'] ? round($c['done'] / $c['total'] * 100) : 0 }}%"></i></span>
+                        <small class="is-num">{{ $c['done'] }} of {{ $c['total'] }} picked</small>
+                    </button>
+                @empty
+                    <div class="ds-sa__note">No trip given to you yet. Take one below, or ask the office.</div>
+                @endforelse
+                <p class="ds-sa__label">No picker yet · your hub</p>
+                @forelse ($openList as $c)
+                    <div class="ds-pk__open" wire:key="po-{{ $c['id'] }}">
+                        <span><b>{{ $c['name'] }}</b><small>{{ $c['total'] }} {{ \Illuminate\Support\Str::plural('box', $c['total']) }}{{ $c['sub'] ? ' · '.$c['sub'] : '' }}</small></span>
+                        <button type="button" wire:click="takeTrip({{ $c['id'] }})" wire:loading.attr="disabled">Take this trip</button>
+                    </div>
+                @empty
+                    <div class="ds-sa__note">Every trip has a picker.</div>
+                @endforelse
+                <small class="ds-pk__foot">Trips of other people and trips already picked are not shown here.</small>
+            @else
             @forelse ($choices as $i => $c)
                 <button type="button" @class(['ds-sa__choice', 'is-finished' => $c['finished']]) style="animation-delay: {{ $i * 50 }}ms" wire:click="pick({{ $c['id'] }})" wire:key="c-{{ $c['id'] }}">
                     <span class="ds-sa__choicetext">
@@ -74,6 +99,7 @@
             @empty
                 <div class="ds-sa__note">Nothing left to scan for {{ strtolower($def['label']) }}. Everything open is 100% scanned.</div>
             @endforelse
+            @endif
 
             @if ($finishedCount)
                 <button type="button" class="ds-sa__more" wire:click="toggleFinished">
@@ -85,7 +111,7 @@
 
     {{-- ============================== scan ============================== --}}
     @if ($screen === 'scan' && $def)
-        <section class="ds-sa__screen ds-sa__scan" wire:key="scan-{{ $this->mode }}-{{ $choice }}">
+        <section @class(['ds-sa__screen', 'ds-sa__scan', 'is-pick' => $this->mode === 'pick']) wire:key="scan-{{ $this->mode }}-{{ $choice }}">
             @if ($aiFlag)
                 <div class="ds-sa__aiflag" wire:key="aiflag-{{ $aiFlag->id }}">
                     <span class="ds-sa__aibadge">AI</span>
@@ -157,7 +183,44 @@
                 </div>
             @endif
 
-            @if ($bypass)
+            @if ($this->mode === 'pick')
+                @php($allPicked = ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total'])
+                @if ($pick)
+                    <div @class(['ds-sa__sheet', 'ds-pk__sheet', 'is-ok' => $pick['tone'] === 'ok', 'is-warn' => $pick['tone'] === 'warn', 'is-bad' => $pick['tone'] === 'bad']) wire:key="pk-{{ $sessionScans }}-{{ md5($pick['title'].$pick['code']) }}">
+                        <span class="ds-sa__grab"></span>
+                        <span class="ds-pk__hit"><b>{{ $pick['code'] ? 'Box '.$pick['code'] : '' }}</b><small>{{ ! empty($pick['spot']) ? 'Spot '.$pick['spot'] : (! empty($pick['section']) ? 'Section '.$pick['section'] : '') }}</small></span>
+                        <strong>{{ $pick['title'] }}</strong>
+                        <p class="ds-sa__msg">{{ $pick['why'] }}</p>
+                        @if ($pick['undo'])
+                            <button type="button" class="ds-pk__undo" wire:click="undoPick({{ $pick['undo'] }})">↶ Undo: I picked this by mistake</button>
+                        @endif
+                        <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
+                    </div>
+                @endif
+                @if ($allPicked)
+                    <div class="ds-pk__ready"><b>✓ All {{ $progress['total'] }} boxes picked</b><span>Ready to load. Bring them to the truck.</span>
+                        <button type="button" class="ds-sa__primary" wire:click="goLoad">Go to Load truck</button></div>
+                @endif
+                <div class="ds-pk__list" wire:poll.6s.visible>
+                    @foreach ($pickGroups as $g)
+                        <div class="ds-pk__group" wire:key="pg-{{ md5($g['name']) }}">
+                            <span class="ds-pk__gh"><b><i style="background: {{ $g['color'] }}"></i>{{ $g['name'] }}</b><small @class(['is-done' => $g['done'] >= $g['total']])>{{ $g['done'] }} of {{ $g['total'] }}</small></span>
+                            <span class="ds-pk__boxes">
+                                @foreach ($g['boxes'] as $b)
+                                    @if ($b['picked'])
+                                        <span @class(['ds-pk__box', 'is-picked', 'is-mine' => $b['byId'] === auth()->id()]) title="Picked by {{ $b['by'] }}">✓ {{ $b['code'] }}<small>{{ $b['byId'] === auth()->id() ? 'you' : $b['by'] }}</small></span>
+                                    @elseif ($b['missing'])
+                                        <span class="ds-pk__box is-missing" title="Not found by {{ $b['missBy'] }}">? {{ $b['code'] }}<small>not found</small></span>
+                                    @else
+                                        <button type="button" @class(['ds-pk__box', 'is-combo' => $b['combo']]) wire:click="notFound({{ $b['id'] }})" wire:confirm="Can't find {{ $b['code'] }} in its place? Mark it not found.">{{ $b['code'] }}@if ($b['combo'])<small>combo</small>@endif</button>
+                                    @endif
+                                @endforeach
+                            </span>
+                        </div>
+                    @endforeach
+                    <small class="ds-pk__foot">Scan each box you take. Tap a box you cannot find to mark it not found. Every phone on this trip sees the same list.</small>
+                </div>
+            @elseif ($bypass)
                 <div class="ds-sa__sheet is-warn" wire:key="bypass-{{ $bypass['code'] }}">
                     <span class="ds-sa__grab"></span>
                     @if ($bypass['need'] === 'office')

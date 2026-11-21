@@ -51,6 +51,7 @@ class Menu
             'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Trips & delivery', 'Delivery invoices', 2],
             'Pages\\PlanTrips' => ['Trips & delivery', null, 0],
             'Pages\\NewBoxes' => ['Trips & delivery', null, 0],
+            'Pages\\Picking' => ['Trips & delivery', null, 1],
             'Pages\\AddressesToCheck' => ['Trips & delivery', null, 2],
             'Pages\\Overrides' => ['Trips & delivery', null, 2],
             'Pages\\WarehouseTransfers' => ['Trips & delivery', null, 2],
@@ -119,6 +120,7 @@ class Menu
             'Resources\\Whdeliverylogs\\WhdeliverylogResource' => ['Trips', 'Transfers to other warehouses', 2],
             'Pages\\PlanTrips' => ['Trips', null, 0],
             'Pages\\NewBoxes' => ['Trips', null, 0],
+            'Pages\\Picking' => ['Trips', null, 1],
             'Pages\\AddressesToCheck' => ['Trips', null, 2],
             'Pages\\Overrides' => ['Trips', null, 2],
             'Pages\\WarehouseTransfers' => ['Trips', null, 2],
@@ -150,6 +152,7 @@ class Menu
             'Pages\\IncomingBoxes' => ['Coming in', null, 2],
 
             'Pages\\PlanTrips' => ['Delivery', null, 0],
+            'Pages\\Picking' => ['Delivery', null, 1],
             'Resources\\Deliverylogs\\DeliverylogResource' => ['Delivery', 'Delivery trips', 1],
             'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Delivery', 'Delivery invoices', 2],
             'Pages\\NotDelivered' => ['Delivery', null, 3],
