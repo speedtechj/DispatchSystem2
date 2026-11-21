@@ -2,6 +2,11 @@
 
 namespace App\Models;
 
+use App\Models\Boxes\WhSection;
+use App\Models\Boxes\WhSpot;
+use App\Models\Maps\BarangayFill;
+use App\Support\Boxes\BoxSets;
+use App\Support\Maps\Barangays;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -28,21 +33,27 @@ class Invoice extends Model
         // the customer's set: all boxes for the same receiver, phone and city
         static::saving(function (Invoice $invoice): void {
             if (! $invoice->set_key || $invoice->isDirty(['receiver_name', 'receiver_mobile_no', 'receiver_city'])) {
-                $invoice->set_key = \App\Support\Boxes\BoxSets::keyFor($invoice->receiver_name, $invoice->receiver_mobile_no, $invoice->receiver_city);
+                $invoice->set_key = BoxSets::keyFor($invoice->receiver_name, $invoice->receiver_mobile_no, $invoice->receiver_city);
             }
         });
         // no barangay on the manifest: queue it so the system fills it in (Addresses to check)
-        static::created(fn (Invoice $invoice) => \App\Support\Maps\Barangays::queue($invoice));
+        static::created(fn (Invoice $invoice) => Barangays::queue($invoice));
     }
 
     public function barangayFill()
     {
-        return $this->hasOne(\App\Models\Maps\BarangayFill::class);
+        return $this->hasOne(BarangayFill::class);
     }
 
     public function whSection()
     {
-        return $this->belongsTo(\App\Models\Boxes\WhSection::class, 'wh_section_id');
+        return $this->belongsTo(WhSection::class, 'wh_section_id');
+    }
+
+    /** The spot inside its section (C2), when spots are used. */
+    public function whSpot()
+    {
+        return $this->belongsTo(WhSpot::class, 'wh_spot_id');
     }
 
     public function verifiedBy()

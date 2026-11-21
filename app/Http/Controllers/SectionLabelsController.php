@@ -28,6 +28,15 @@ class SectionLabelsController extends Controller
                     'qr' => preg_replace('/<desc>.*?<\/desc>/s', '', preg_replace('/^.*?(<svg)/s', '$1', $svg))];
             });
 
+        // spots inside sections, when used (board 50): one label per spot, "C2 · Nueva Ecija"
+        if (Sections::spotsOn($warehouse->id)) {
+            $qr = fn (string $t) => preg_replace('/<desc>.*?<\/desc>/s', '', preg_replace('/^.*?(<svg)/s', '$1', (new DNS2D)->getBarcodeSVG($t, 'QRCODE,M', 10, 10, '#0b1620')));
+            $spots = WhSection::with('spots')->where('warehouse_id', $warehouse->id)->where('is_active', true)->where('use_spots', true)->orderBy('sort')->orderBy('code')->get()
+                ->flatMap(fn (WhSection $s) => $s->spots->map(fn ($p) => ['code' => $p->code, 'name' => 'Spot '.$p->code.' · section '.$s->code.' · '.($s->name ?: $s->goesTo()), 'color' => $s->color,
+                    'provinces' => '', 'qr' => $qr($p->qrText())]));
+            $sections = $sections->concat($spots);
+        }
+
         return response()->view('boxes.section-labels', ['warehouse' => $warehouse, 'sections' => $sections]);
     }
 }

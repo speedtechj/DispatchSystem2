@@ -349,6 +349,17 @@ class ScanApp extends Page
         $this->message = $station->lastMessage;
     }
 
+    /** Unload: put the box on a spot of its section, or Skip (spots are optional, board 50). */
+    public function setSpot(?int $spotId = null): void
+    {
+        $station = $this->station();
+        if ($this->mode !== 'unload' || ! $this->invoiceId || ! $station || ! method_exists($station, 'setSpot') || ! $station->setSpot($this->invoiceId, $spotId)) {
+            return;
+        }
+        $this->route = $station->route;
+        $this->message = $station->lastMessage;
+    }
+
     /** Unload, TRUCK screen: bring another box of the customer from its section onto the truck too. */
     public function addSetBox(int $boxId): void
     {

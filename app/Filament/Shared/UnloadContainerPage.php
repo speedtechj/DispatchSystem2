@@ -3,15 +3,20 @@
 namespace App\Filament\Shared;
 
 use App\Filament\Concerns\ScansInvoices;
+use App\Models\Boxes\WhSection;
+use App\Models\Boxes\WhSpot;
 use App\Models\Boxissue;
 use App\Models\Container;
 use App\Models\Invoice;
 use App\Models\Invoiceissue;
 use App\Models\Unmanifested;
 use App\Models\User;
+use App\Models\Whtripinvoice;
 use App\Support\Boxes\BoxSets;
 use App\Support\Boxes\Crossdock;
 use App\Support\Boxes\Sections;
+use App\Support\Boxes\TruckSets;
+use App\Support\Warehouses\Coverage;
 use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\MarkdownEditor;
@@ -22,6 +27,7 @@ use Filament\Pages\Page;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Locked;
@@ -135,6 +141,11 @@ abstract class UnloadContainerPage extends Page
 
             return;
         }
+        if ($spot = Sections::spotFromCode($code)) {
+            $this->placeOnSpot($container, $spot);
+
+            return;
+        }
 
         $invoice = Invoice::where('container_id', $container->id)->where('invoice', $code)->first();
 
@@ -155,7 +166,7 @@ abstract class UnloadContainerPage extends Page
 
         if ($invoice->is_verified) {
             $who = $invoice->verified_by && $invoice->verified_by !== Auth::id() ? User::find($invoice->verified_by)?->first_name : null;
-            $when = $invoice->verified_at ? \Illuminate\Support\Carbon::parse($invoice->verified_at)->format('g:i A') : null;
+            $when = $invoice->verified_at ? Carbon::parse($invoice->verified_at)->format('g:i A') : null;
             $this->route = Sections::tile($invoice->whSection);
             $this->scanResult('warning', "{$code} was already verified".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $invoice);
 
@@ -176,12 +187,12 @@ abstract class UnloadContainerPage extends Page
         $this->setInfo = BoxSets::atUnload($invoice);
 
         // Two warehouses: a box that another warehouse delivers goes to the transfer for it.
-        if ($home = \App\Support\Warehouses\Coverage::transferTo($invoice, $warehouseId)) {
+        if ($home = Coverage::transferTo($invoice, $warehouseId)) {
             $to = Sections::of($warehouseId)->first(fn ($s) => (int) $s->to_warehouse_id === $home);
             if ($to) {
                 $section = $to;
             } else {
-                $name = \App\Support\Warehouses\Coverage::name($home);
+                $name = Coverage::name($home);
                 $invoice->forceFill(['wh_section_id' => null, 'sectioned_at' => now()])->save();
                 $this->route = ['kind' => 'transfer', 'code' => 'T', 'name' => 'Transfer → '.$name, 'color' => '#c97a00'];
 
@@ -196,20 +207,70 @@ abstract class UnloadContainerPage extends Page
         if ($trip = Crossdock::load($invoice, $warehouseId, $section)) {
             $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => null])->save();
             $this->route = ['kind' => 'truck', 'code' => 'TRUCK', 'name' => $trip->warehouse?->name ?? $section->goesTo(), 'trip' => $trip->trip_number, 'plate' => $trip->truck?->plate_no, 'color' => '#e2700c'];
-            $this->setInfo = \App\Support\Boxes\TruckSets::card($invoice, $trip, $warehouseId) ?? $this->setInfo;
+            $this->setInfo = TruckSets::card($invoice, $trip, $warehouseId) ?? $this->setInfo;
 
             return "{$code} verified · onto truck {$trip->trip_number}.";
         }
 
         $label = Sections::labelScan($warehouseId);
-        $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => $label ? null : now()])->save();
-        $this->route = Sections::tile($section) + ['pending' => $label, 'why' => $section->kind === 'check' ? Sections::whyCheck($invoice) : null];
+        $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => $label ? null : now()]
+            + (\Illuminate\Support\Facades\Schema::hasColumn('invoices', 'wh_spot_id') ? ['wh_spot_id' => null] : []))->save();
+        $this->route = Sections::tile($section) + ['pending' => $label, 'why' => $section->kind === 'check' ? Sections::whyCheck($invoice) : null]
+            + $this->spotChoice($section, $invoice);
 
         return "{$code} verified · section {$section->code}.";
     }
 
+    /** Spots of the section (optional, board 50): the crew scans the spot's QR, taps one, or skips. */
+    protected function spotChoice(WhSection $section, Invoice $invoice): array
+    {
+        $spots = Sections::spotsOf($section);
+
+        return $spots->isEmpty() ? [] : ['spots' => $spots->map(fn ($p) => ['id' => $p->id, 'code' => $p->code])->values()->all(), 'spot' => null, 'invoiceId' => $invoice->id];
+    }
+
+    /** Put the box on a spot of its section, or no spot (Skip). */
+    public function setSpot(int $invoiceId, ?int $spotId): bool
+    {
+        $container = $this->selectedContainer();
+        $invoice = $container ? Invoice::where('container_id', $container->id)->find($invoiceId) : null;
+        if (! $invoice || ! $invoice->wh_section_id) {
+            return false;
+        }
+        $spot = $spotId ? WhSpot::where('wh_section_id', $invoice->wh_section_id)->find($spotId) : null;
+        if ($spotId && ! $spot) {
+            return false;
+        }
+        $invoice->forceFill(['wh_spot_id' => $spot?->id])->save();
+        $section = $invoice->whSection;
+        $this->route = Sections::tile($section) + $this->spotChoice($section, $invoice);
+        $this->route['spot'] = $spot?->code ?? 'skip';
+        $this->lastInvoiceId = $invoice->id;
+        $this->lastStatus = 'success';
+        $this->lastMessage = $spot ? "{$invoice->invoice} on spot {$spot->code}." : "{$invoice->invoice} in section {$section?->code} (no spot).";
+
+        return true;
+    }
+
+    /** A spot's QR was scanned: the last box this person scanned for that section goes on it. */
+    protected function placeOnSpot(Container $container, WhSpot $spot): void
+    {
+        $box = Invoice::where('container_id', $container->id)->where('verified_by', Auth::id())->where('wh_section_id', $spot->wh_section_id)
+            ->orderByDesc('verified_at')->orderByDesc('id')->first();
+        $this->route = Sections::tile($spot->section);
+        if (! $box) {
+            $this->scanResult('warning', "Spot {$spot->code}: none of your boxes are for section {$spot->section?->code}.");
+
+            return;
+        }
+        $this->setSpot($box->id, $spot->id);
+        $this->scanResult('success', "{$box->invoice} on spot {$spot->code}.", $box);
+        $this->route = Sections::tile($spot->section) + $this->spotChoice($spot->section, $box);
+        $this->route['spot'] = $spot->code;
+    }
+
     /** Section-label scan (when switched on): the boxes this person scanned for that section are now there. */
-    protected function placeInSection(Container $container, \App\Models\Boxes\WhSection $section): void
+    protected function placeInSection(Container $container, WhSection $section): void
     {
         $warehouseId = $this->warehouseId($container);
         if (! Sections::labelScan($warehouseId)) {
@@ -221,7 +282,7 @@ abstract class UnloadContainerPage extends Page
             ->whereNotNull('wh_section_id')->whereNull('sectioned_at')->get();
         $here = Crossdock::here($warehouseId)->pluck('id');
         if ($here->isNotEmpty()) {
-            $onTruck = \App\Models\Whtripinvoice::whereIn('whdeliverylog_id', $here)->whereIn('invoice_id', $pending->pluck('id'))->pluck('invoice_id')->all();
+            $onTruck = Whtripinvoice::whereIn('whdeliverylog_id', $here)->whereIn('invoice_id', $pending->pluck('id'))->pluck('invoice_id')->all();
             $pending = $pending->reject(fn ($b) => in_array($b->id, $onTruck, true));
         }
         $mine = $pending->where('wh_section_id', $section->id);
@@ -273,11 +334,11 @@ abstract class UnloadContainerPage extends Page
         $of = $container ? Invoice::where('container_id', $container->id)->find($ofInvoiceId) : null;
         $warehouseId = $this->warehouseId($container);
         $trip = $of ? Crossdock::tripOf($of, $warehouseId) : null;
-        $box = $trip ? \App\Support\Boxes\TruckSets::add($of, $boxId, $trip, $warehouseId) : null;
+        $box = $trip ? TruckSets::add($of, $boxId, $trip, $warehouseId) : null;
         if (! $box) {
             return null;
         }
-        $this->setInfo = \App\Support\Boxes\TruckSets::card($of, $trip, $warehouseId);
+        $this->setInfo = TruckSets::card($of, $trip, $warehouseId);
 
         return $box->invoice;
     }

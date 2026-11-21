@@ -20,7 +20,7 @@ class WhSection extends Model
 
     protected function casts(): array
     {
-        return ['provinces' => 'array', 'is_active' => 'boolean'];
+        return ['provinces' => 'array', 'cities' => 'array', 'use_spots' => 'boolean', 'is_active' => 'boolean'];
     }
 
     public function warehouse(): BelongsTo
@@ -41,6 +41,11 @@ class WhSection extends Model
     public function invoices(): HasMany
     {
         return $this->hasMany(Invoice::class, 'wh_section_id');
+    }
+
+    public function spots(): HasMany
+    {
+        return $this->hasMany(WhSpot::class, 'wh_section_id')->orderBy('sort')->orderBy('id');
     }
 
     /** What the QR label on this section says. */

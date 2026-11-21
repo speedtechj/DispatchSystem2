@@ -187,7 +187,13 @@
                             @if (($route['kind'] ?? '') === 'truck')<em>✓ Already loaded on trip {{ $route['trip'] }}. No need to scan it again.</em>@endif
                             @if (! empty($route['why']))<em>{{ $route['why'] }}</em>@endif
                             @if (! empty($route['pending']))<em>Then scan the QR on section {{ $route['code'] }}.</em>@endif
+                            @if (! empty($route['spot']) && $route['spot'] !== 'skip')<em>✓ Spot {{ $route['spot'] }}</em>@elseif (($route['spot'] ?? null) === 'skip')<em>No spot · in section {{ $route['code'] }}</em>@endif
                         </div>
+                        @if (! empty($route['spots']) && empty($route['spot']))
+                            <span class="ds-sx__spoth">Spot? scan its QR, tap one, or skip</span>
+                            <span class="ds-sx__spots">@foreach ($route['spots'] as $sp)<button type="button" wire:click="setSpot({{ $sp['id'] }})">{{ $sp['code'] }}</button>@endforeach</span>
+                            <button type="button" class="ds-sx__skip" wire:click="setSpot">Skip · just section {{ $route['code'] }}</button>
+                        @endif
                         @if (($route['kind'] ?? '') === 'truck')
                             <button type="button" class="ds-sx__link" wire:click="putInSection">Put in section instead</button>
                         @endif
