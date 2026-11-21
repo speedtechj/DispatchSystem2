@@ -1,6 +1,7 @@
 <?php
 
 use App\Filament\Resources\Deliverylogs\Pages\ListDeliverylogs;
+use App\Filament\Tables\TripList;
 use App\Models\Deliverylog;
 use App\Models\Invoice;
 use App\Models\Truck;
@@ -48,5 +49,8 @@ it('saves how each trip was made and shows it in the list, with tabs, filters an
     $page->assertTableActionExists('details');
     $html = view('filament.trips.list.details', ['trip' => $ai])->render();
     expect($html)->toContain('How this trip was made')->toContain('Plan trips with the AI: “Tarlac first, keep one truck free”');
-    expect(\App\Filament\Tables\TripList::madeKey(Deliverylog::whereNull('made_by')->firstOrFail()))->toBe('manual');
+    // board 47: every city and municipality as a bullet list, no box counts
+    $names = TripList::cityNames($ai);
+    expect($names)->not->toBeEmpty()->and($html)->toContain('Cities and municipalities')->toContain('<li>'.e($names[0]).'</li>');
+    expect(TripList::madeKey(Deliverylog::whereNull('made_by')->firstOrFail()))->toBe('manual');
 });

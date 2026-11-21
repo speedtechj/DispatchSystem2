@@ -4693,6 +4693,8 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-tl__facts b { font-size: 14px; }
 .ds-tl__cities { display: flex; flex-direction: column; gap: 6px; }
 .ds-tl__cities > span { display: flex; flex-wrap: wrap; gap: 6px; }
+.ds-tl__cities ul { margin: 0; padding: 2px 0 0 22px; list-style: disc; display: flex; flex-direction: column; gap: 6px; font-size: 15px; font-weight: 700; }
+.ds-tl__cities li::marker { color: #6b7b88; }
 .ds-tl__cities i { height: 28px; padding: 0 10px; border-radius: 999px; background: #eef6ff; color: #1d5f99; font-size: 13px; font-weight: 700; font-style: normal; display: flex; align-items: center; }
 .ds-tl__btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .ds-tl__hint { color: #6b7b88; font-size: 12px; }

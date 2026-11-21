@@ -27,7 +27,9 @@
             <span><small>{{ $label }}</small><b>{{ $value }}</b></span>
         @endforeach
     </div>
-    <div class="ds-tl__cities"><b>Cities</b><span>@foreach (array_filter(explode(', ', preg_replace('/ \+\d+$/', '', $g['cities']))) as $c)<i>{{ $c }}</i>@endforeach</span></div>
+    @if ($names = \App\Filament\Tables\TripList::cityNames($trip))
+        <div class="ds-tl__cities"><b>Cities and municipalities</b><ul>@foreach ($names as $c)<li>{{ $c }}</li>@endforeach</ul></div>
+    @endif
     <span class="ds-tl__btns">
         @if ($page)<x-filament::button tag="a" :href="$page::getUrl(['trip' => $trip->id])" icon="heroicon-m-arrow-top-right-on-square">Open the trip</x-filament::button>@endif
         @php($stops = collect(\Filament\Facades\Filament::getCurrentPanel()?->getPages() ?? [])->first(fn ($p) => class_basename($p) === 'TripStops'))

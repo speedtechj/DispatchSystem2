@@ -125,6 +125,20 @@ class TripList
         return ['to' => $prov ?: ($list->isEmpty() ? 'Not set yet' : 'Direct'), 'cities' => $cityText, 'dot' => '#17895e'];
     }
 
+    /** Every city and municipality of the trip, in stop order (board 47). */
+    public static function cityNames(Model $trip): array
+    {
+        $cities = TripCity::where('deliverylog_id', $trip->id)->orderBy('id')->pluck('city');
+        if ($cities->isEmpty()) {
+            $cities = DB::table('tripinvoices')->join('invoices', 'invoices.id', '=', 'tripinvoices.invoice_id')
+                ->where(fn ($q) => $q->where('tripinvoices.deliverylog_id', $trip->id)->orWhere('tripinvoices.deliveryloghub_id', $trip->id))
+                ->whereNotNull('invoices.receiver_city')->where('invoices.receiver_city', '!=', '')
+                ->orderBy('invoices.receiver_city')->distinct()->pluck('invoices.receiver_city');
+        }
+
+        return $cities->map(fn ($c) => Str::title(Str::squish((string) $c)))->unique()->values()->all();
+    }
+
     public static function crew(Model $trip)
     {
         return (static::primed('crew', $trip->id) ?? TripCrew::with('user.workposition')->where('deliverylog_id', $trip->id)->get())->sortBy(fn ($c) => TripFlow::isLead($c) ? 0 : 1)->values();
