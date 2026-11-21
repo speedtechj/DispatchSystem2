@@ -20,7 +20,7 @@ class Ai
     public static function enabled(string $feature): bool
     {
         $s = AiSetting::current();
-        if (! $s->isOn($feature)) {
+        if (! $s->isOn($feature) || ! AiAccess::allows($feature)) {
             return false;
         }
         $needsKey = AiFeatures::ALL[$feature][3] ?? true;
@@ -31,7 +31,8 @@ class Ai
     /** The feature is switched on (it may still be paused by the limit or a missing key). */
     public static function switchedOn(string $feature): bool
     {
-        return AiSetting::current()->isOn($feature);
+        // and this person may use it (Settings → AI → Who can use AI)
+        return AiSetting::current()->isOn($feature) && AiAccess::allows($feature);
     }
 
     public static function overLimit(): bool

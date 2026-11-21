@@ -19,8 +19,16 @@ class AiSetting extends Model
 
     protected static ?self $memo = null;
 
+    /** The app the memo belongs to (a new app per test or per worker restart starts clean). */
+    protected static ?int $memoApp = null;
+
     public static function current(): self
     {
+        if (static::$memoApp !== spl_object_id(app())) {
+            static::$memoApp = spl_object_id(app());
+            static::$memo = null;
+        }
+
         return static::$memo ??= Cache::remember('ai.settings', 300, fn () => static::query()->first() ?? new static([
             'model_fast' => 'claude-haiku-5-5', 'model_smart' => 'claude-sonnet-5-5', 'monthly_limit' => 20, 'features' => [],
         ]));

@@ -30,6 +30,9 @@
     @if ($tab === 'hubs' && $hubsOn)
         @include('filament.trips.plan-hubs')
     @else
+    @if ($aiHidden)
+    <p class="ds-cb__card ds-pt__noai">The trips are planned with the system rules: oldest boxes first, nearby cities on one truck. Create this trip and Create all work as usual.</p>
+    @else
     <section class="ds-cb__card ds-pt__ask">
         <span class="ds-pt__spark" aria-hidden="true">✦</span>
         <span class="ds-pt__asktext">
@@ -44,6 +47,7 @@
             <input type="text" wire:model="instruction" class="ds-te__input" placeholder="Or type it: “{{ $top ?? 'Bulacan' }} first, keep one truck”" @disabled(! $aiOn) title="{{ $aiOn ? '' : 'Switch on the AI trip helper in Settings → AI' }}">
         </form>
     </section>
+    @endif
 
     <div class="ds-pt__grid">
         <section class="ds-cb__card ds-pt__left">

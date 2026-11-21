@@ -15,8 +15,15 @@ class AppSetting extends Model
 
     protected static ?array $memo = null;
 
+    /** The app the memo belongs to (a new app per test or per worker restart starts clean). */
+    protected static ?int $memoApp = null;
+
     public static function get(string $key, mixed $default = null): mixed
     {
+        if (static::$memoApp !== spl_object_id(app())) {
+            static::$memoApp = spl_object_id(app());
+            static::$memo = null;
+        }
         $all = static::$memo ??= Cache::remember('app.settings', 600, fn () => Schema::hasTable('app_settings') ? static::pluck('value', 'key')->all() : []);
 
         return array_key_exists($key, $all) && $all[$key] !== null ? $all[$key] : $default;

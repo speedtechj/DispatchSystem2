@@ -1,5 +1,11 @@
 <x-filament-panels::page>
+    <nav class="ds-aa__tabs" aria-label="AI settings">
+        @foreach (['helpers' => 'AI helpers', 'access' => 'Who can use AI', 'usage' => 'Usage'] as $k => $l)
+            <button type="button" wire:click="setTab('{{ $k }}')" @class(['is-on' => $tab === $k])>{{ $l }}</button>
+        @endforeach
+    </nav>
     <form wire:submit="save" class="ds-ai ds-ai-set">
+        @if ($tab === 'helpers')
         <section class="ds-board__panel">
             <div class="ds-board__panel-head"><h2>1 · Your Anthropic API key</h2>
                 <span class="ds-ai__pill {{ $hasKey ? 'is-ok' : 'is-off' }}">{{ $hasKey ? 'Key saved · ends with '.$keyEnd : 'No key yet' }}</span>
@@ -45,6 +51,8 @@
             <div class="ds-ai-set__save"><x-filament::button type="submit">Save</x-filament::button></div>
         </section>
 
+        @endif
+        @if ($tab === 'usage')
         <section class="ds-board__panel">
             <div class="ds-board__panel-head"><h2>3 · Spending and models</h2></div>
             @php($pct = $limitNow > 0 ? min(100, round($spent / $limitNow * 100)) : 0)
@@ -72,5 +80,9 @@
                 <li>The AI only suggests. A person decides on damaged boxes, manifest rows, texts and emails.</li>
             </ul>
         </section>
+        @endif
+        @if ($tab === 'access')
+            @include('filament.pages.ai-access')
+        @endif
     </form>
 </x-filament-panels::page>

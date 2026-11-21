@@ -2,10 +2,12 @@
 
 namespace App\Filament\Shared\Trips;
 
+use App\Models\Ai\AiSetting;
 use App\Models\Deliverylog;
 use App\Models\Logistichub;
 use App\Models\Tripinvoice;
 use App\Support\Ai\Ai;
+use App\Support\Ai\AiAccess;
 use App\Support\Hubs\HubAreas;
 use App\Support\Sms\SmsSettings;
 use App\Support\Tracking\Tracker;
@@ -443,6 +445,8 @@ class PlanTripsPage extends Page
             'unload' => $c->unloadingNow(),
             'top' => $this->topProvince(),
             'aiOn' => Ai::enabled('trips'),
+            // on for the company, but this person is not picked (Settings → AI → Who can use AI)
+            'aiHidden' => AiSetting::current()->isOn('trips') && ! AiAccess::allows('trips'),
             'tops' => collect($this->trips)->keys()->mapWithKeys(fn ($i) => [$i => $this->topOptions($i)])->all(),
             'sets' => collect($this->trips)->map(fn ($t) => $t['on'] ? $c->sets(collect($t['cities'])->pluck('key')->all()) : [])->all(),
             'changedAny' => collect($this->trips)->contains(fn ($t) => ! empty($t['changed'])),

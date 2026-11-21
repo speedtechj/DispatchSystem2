@@ -4,7 +4,11 @@ namespace App\Filament\Pages;
 
 use App\Models\Ai\AiSetting;
 use App\Models\Ai\AiUsage;
+use App\Models\Panelcategory;
+use App\Models\User;
+use App\Models\Workposition;
 use App\Support\Ai\Ai;
+use App\Support\Ai\AiAccess;
 use App\Support\Ai\AiFeatures;
 use App\Support\Ai\AiUnavailable;
 use BackedEnum;
@@ -42,6 +46,21 @@ class AiSettings extends Page
 
     public ?string $testResult = null;
 
+    /** helpers · access · usage */
+    public string $tab = 'helpers';
+
+    /** Who can use AI (board 48): "all" or "picked". */
+    public string $accessMode = 'all';
+
+    /** @var list<int> */
+    public array $accessUsers = [];
+
+    /** feature => "all" | list of user ids (own list); missing = same as above. @var array<string, string|list<int>> */
+    public array $accessOver = [];
+
+    /** The person shown in the preview. */
+    public ?int $previewUser = null;
+
     public bool $testOk = false;
 
     public static function canAccess(): bool
@@ -63,6 +82,86 @@ class AiSettings extends Page
         foreach (array_keys(AiFeatures::ALL) as $k) {
             $this->enabled[$k] = $s->isOn($k);
         }
+        $a = AiAccess::get();
+        $this->accessMode = $a['mode'];
+        $this->accessUsers = $a['users'];
+        $this->accessOver = $a['over'];
+        $this->previewUser = $a['users'][0] ?? null;
+    }
+
+    // ---------------------------------------------------------------- Who can use AI (board 48)
+
+    public function setTab(string $tab): void
+    {
+        $this->tab = in_array($tab, ['helpers', 'access', 'usage'], true) ? $tab : 'helpers';
+    }
+
+    public function setMode(string $mode): void
+    {
+        $this->accessMode = $mode === 'picked' ? 'picked' : 'all';
+    }
+
+    public function addUser(int $id, ?string $feature = null): void
+    {
+        if (! User::whereKey($id)->exists()) {
+            return;
+        }
+        if ($feature) {
+            $list = is_array($this->accessOver[$feature] ?? null) ? $this->accessOver[$feature] : [];
+            $this->accessOver[$feature] = array_values(array_unique([...$list, $id]));
+
+            return;
+        }
+        $this->accessUsers = array_values(array_unique([...$this->accessUsers, $id]));
+        $this->previewUser ??= $id;
+    }
+
+    public function removeUser(int $id, ?string $feature = null): void
+    {
+        if ($feature) {
+            $this->accessOver[$feature] = array_values(array_diff(is_array($this->accessOver[$feature] ?? null) ? $this->accessOver[$feature] : [], [$id]));
+
+            return;
+        }
+        $this->accessUsers = array_values(array_diff($this->accessUsers, [$id]));
+    }
+
+    /** Add everyone of a position (workposition id) or a panel (panelcategory code). */
+    public function addGroup(string $group): void
+    {
+        [$kind, $val] = array_pad(explode(':', $group, 2), 2, '');
+        $ids = match ($kind) {
+            'pos' => User::where('workposition_id', (int) $val)->pluck('id'),
+            'panel' => User::whereHas('panelcategory', fn ($q) => $q->where('code', $val))->pluck('id'),
+            default => collect(),
+        };
+        $this->accessUsers = array_values(array_unique([...$this->accessUsers, ...$ids->map(fn ($i) => (int) $i)->all()]));
+    }
+
+    /** Same as above → Everyone → Own list → Same as above. */
+    public function setWho(string $feature, string $who): void
+    {
+        if (! isset(AiFeatures::ALL[$feature])) {
+            return;
+        }
+        if ($who === 'all') {
+            $this->accessOver[$feature] = 'all';
+        } elseif ($who === 'own') {
+            $this->accessOver[$feature] = is_array($this->accessOver[$feature] ?? null) ? $this->accessOver[$feature] : $this->accessUsers;
+        } else {
+            unset($this->accessOver[$feature]);
+        }
+    }
+
+    public function saveAccess(): void
+    {
+        AiAccess::put(['mode' => $this->accessMode, 'users' => $this->accessUsers, 'over' => $this->accessOver]);
+        Notification::make()->title($this->accessMode === 'picked' ? 'Saved: AI only for the picked people' : 'Saved: AI for everyone')->success()->send();
+    }
+
+    protected function accessNow(): array
+    {
+        return ['mode' => $this->accessMode, 'users' => $this->accessUsers, 'over' => $this->accessOver];
     }
 
     protected function row(): AiSetting
@@ -126,7 +225,18 @@ class AiSettings extends Page
         $key = $s->hasKey() ? (string) $s->api_key : '';
         $month = AiUsage::where('created_at', '>=', now()->startOfMonth());
 
+        $a = $this->accessNow();
+        $users = User::with('workposition:id,position_description', 'panelcategory:id,code,description')->orderBy('first_name')->get();
+        $who = fn ($u) => $u ? trim(($u->first_name ?? '').' '.($u->last_name ?? '')) ?: $u->email : '';
+        $role = fn ($u) => $u?->workposition?->position_description ?: ($u?->panelcategory?->description ?? '');
+        $prev = $users->firstWhere('id', $this->previewUser) ?? $users->first();
+
         return [
+            'access' => $a, 'users' => $users, 'who' => $who, 'role' => $role, 'prev' => $prev,
+            'auto' => AiAccess::AUTO,
+            'groups' => Workposition::orderBy('position_description')->get()->map(fn ($w) => ['key' => 'pos:'.$w->id, 'name' => 'all '.$w->position_description])
+                ->merge(Panelcategory::orderBy('description')->get()->map(fn ($p) => ['key' => 'panel:'.$p->code, 'name' => 'all in '.$p->description])),
+            'can' => fn (string $f, $u) => AiAccess::allows($f, $u, $a),
             'features' => AiFeatures::ALL,
             'hasKey' => $s->hasKey(),
             'keyEnd' => $key ? substr($key, -4) : '',
