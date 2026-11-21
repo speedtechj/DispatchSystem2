@@ -4,6 +4,7 @@ namespace App\Filament\Shared\Trips;
 
 use App\Models\Deliverylog;
 use App\Models\Logistichub;
+use App\Models\Tripinvoice;
 use App\Support\Ai\Ai;
 use App\Support\Hubs\HubAreas;
 use App\Support\Sms\SmsSettings;
@@ -257,7 +258,7 @@ class PlanTripsPage extends Page
 
     public function toggleTrip(int $i): void
     {
-        if (isset($this->trips[$i]) && $this->mayChange()) {
+        if (isset($this->trips[$i]) && empty($this->trips[$i]['madeAs']) && $this->mayChange()) {
             $this->trips[$i]['on'] = ! $this->trips[$i]['on'];
             $this->trips[$i]['changed'] = true;
             $this->trips[$i]['changedNote'] = $this->trips[$i]['on'] ? 'Switched off, then on again' : 'Switched off';
@@ -336,15 +337,37 @@ class PlanTripsPage extends Page
         $this->made = [];
     }
 
+    /** Create every trip switched on (Create all). */
     public function create(): void
     {
+        $this->createTrips(collect($this->trips)->filter(fn ($t) => empty($t['madeAs']))->all(), true);
+    }
+
+    /** Create only this trip (board 46): the other trips stay as they are. */
+    public function createOne(int $i): void
+    {
+        if (! isset($this->trips[$i]) || ! empty($this->trips[$i]['madeAs'])) {
+            return;
+        }
+        $made = $this->createTrips([$i => ['on' => true] + $this->trips[$i]], false);
+        if ($made) {
+            $m = $made[0];
+            $this->trips[$i]['madeAs'] = ['id' => $m['id'], 'number' => $m['number'],
+                'boxes' => Tripinvoice::where(fn ($q) => $q->where('deliverylog_id', $m['id'])->orWhere('deliveryloghub_id', $m['id']))->count()];
+            $this->trips[$i]['on'] = false;
+        }
+    }
+
+    /** @return list<array{id: int, number: string, truck: ?string}> */
+    protected function createTrips(array $trips, bool $all): array
+    {
         $date = Carbon::parse($this->date ?: today());
-        $changed = collect($this->trips)->filter(fn ($t) => ! empty($t['changed']));
+        $changed = collect($trips)->filter(fn ($t) => ! empty($t['changed']));
         if ($changed->isNotEmpty() && TripRules::need('change_plan', Auth::user()) === 'reason') {
             if (! in_array($this->planReason, TripRules::reasons(), true)) {
                 Notification::make()->title('Pick why you changed the AI plan')->warning()->send();
 
-                return;
+                return [];
             }
             foreach ($changed as $t) {
                 TripRules::record('change_plan', Auth::user(), $this->planReason, ['note' => $t['province'].' › '.collect($t['cities'])->pluck('city')->join(', ').($t['on'] ? '' : ' (switched off)')]);
@@ -352,19 +375,24 @@ class PlanTripsPage extends Page
         }
         $this->city()->made = ['ai' => $this->ai, 'instruction' => trim($this->instruction), 'reason' => $this->planReason];
         try {
-            $this->made = $this->city()->create($this->trips, $date);
+            $made = $this->city()->create(array_values($trips), $date);
         } catch (\Throwable $e) {
             report($e);
             Notification::make()->title('Could not create the trips')->body($e->getMessage())->danger()->send();
 
-            return;
+            return [];
         }
-        if ($this->made) {
-            Notification::make()->title(count($this->made).' '.Str::plural('trip', count($this->made)).' created')->success()->send();
+        if ($made) {
+            Notification::make()->title(count($made) === 1 && ! $all ? 'Trip '.$made[0]['number'].' created with its boxes · the other trips stay here'
+                : count($made).' '.Str::plural('trip', count($made)).' created')->success()->send();
         }
-        $made = $this->made;
-        $this->replan();
-        $this->made = $made;
+        if ($all) {
+            $this->made = $made;
+            $this->replan();
+            $this->made = $made;
+        }
+
+        return $made;
     }
 
     public function give(int $tripId, int $truckId): void
@@ -407,7 +435,9 @@ class PlanTripsPage extends Page
 
                 return $t + ['i' => $i, 'truck' => $truck, 'pct' => $pct, 'path' => collect($t['cities'])->pluck('city')->join(', ')];
             }),
-            'onTrips' => collect($this->trips)->where('on', true),
+            'onTrips' => collect($this->trips)->where('on', true)->filter(fn ($t) => empty($t['madeAs'])),
+            'leftTrips' => collect($this->trips)->filter(fn ($t) => empty($t['madeAs']))->count(),
+            'tripsPage' => collect(Filament::getCurrentPanel()?->getResources() ?? [])->first(fn ($r) => class_basename($r) === 'DeliverylogResource'),
             'trucks' => $trucks, 'kept' => $this->kept,
             'waitingTrips' => $waitingTrips, 'freeTruck' => $freeTruck,
             'unload' => $c->unloadingNow(),

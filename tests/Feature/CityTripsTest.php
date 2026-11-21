@@ -113,3 +113,22 @@ it('does not text receivers of a city trip before it is locked', function () {
     Livewire::test(Scanload::class)->set('data.deliverylog_id', $trip->id)->call('scan', 'TAR1');
     expect(SmsEvents::outForDelivery($trip->fresh()))->toBe(0);
 });
+
+it('creates only the trip you pick; the other trips stay to make later (board 46)', function () {
+    $page = Livewire::test(PlanTrips::class);
+    $trips = $page->get('trips');
+    expect(count($trips))->toBeGreaterThanOrEqual(2);
+    $bulacan = collect($trips)->search(fn ($t) => $t['province'] === 'Bulacan');
+    $page->assertSee('Create this trip')->call('createOne', $bulacan);
+    expect(Deliverylog::whereHas('cities')->count())->toBe(1);
+    $trip = Deliverylog::whereHas('cities', fn ($q) => $q->where('city', 'Malolos'))->firstOrFail();
+    expect(Tripinvoice::where('deliverylog_id', $trip->id)->count())->toBe(9)
+        ->and($page->get('trips')[$bulacan]['madeAs']['number'])->toBe($trip->trip_number);
+    $page->assertSee($trip->trip_number.' made · 9 boxes on it')->assertSee('not made yet')
+        ->assertSee('Tarlac'); // still here, not made
+
+    // Create all now makes only the trips not made yet
+    $page->call('create');
+    expect(Deliverylog::whereHas('cities')->count())->toBe(2)
+        ->and(Deliverylog::whereHas('cities', fn ($q) => $q->where('city', 'Malolos'))->count())->toBe(1);
+});

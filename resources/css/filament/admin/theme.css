@@ -4834,3 +4834,11 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-ws__trip b.ds-ws__to { font-size: 20px; }
 .ds-ws__trip small { font-size: 13px; }
 .ds-ws__trip button { height: 40px; border: 0; border-radius: 12px; background: #fff; font: inherit; font-weight: 800; color: #8a5a00; cursor: pointer; }
+
+/* ── Plan trips: Create this trip (board 46) ── */
+.ds-pt__one { display: flex; justify-content: flex-end; align-items: center; gap: 12px; border-top: 1px solid #eef1f4; padding-top: 12px; }
+.ds-pt__one .ds-nt__go { height: 38px; padding: 0 18px; font-size: 13px; }
+.ds-pt__one.is-made { justify-content: space-between; }
+.ds-pt__madeone { font-size: 13px; font-weight: 800; padding: 7px 12px; border-radius: 999px; background: #e6f6ef; color: #17895e; }
+.ds-pt__trip.is-made { box-shadow: inset 0 0 0 2px #8fd3b4, 0 12px 32px -18px rgb(14 36 51 / .25); }
+.dark .ds-pt__one { border-color: rgb(255 255 255 / .08); }

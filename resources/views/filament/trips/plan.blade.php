@@ -80,13 +80,13 @@
         <section class="ds-pt__mid">
             <span class="ds-pt__lhead"><b class="ds-pt__big">Suggested trips</b><small>{{ $ai ? '✦ ' : '' }}{{ $note }}</small></span>
             @if ($made)
-                <span class="ds-pt__made">✓ {{ count($made) }} {{ Str::plural('trip', count($made)) }} created: {{ collect($made)->pluck('number')->join(', ') }}. Boxes join when they are scanned onto the truck.</span>
+                <span class="ds-pt__made">✓ {{ count($made) }} {{ Str::plural('trip', count($made)) }} created: {{ collect($made)->pluck('number')->join(', ') }}. Their boxes are on them (not loaded yet).</span>
             @endif
             @forelse ($cards as $t)
-                <article @class(['ds-cb__card', 'ds-pt__trip', 'is-off' => ! $t['on']]) wire:key="t-{{ $t['i'] }}-{{ $t['province'] }}">
+                <article @class(['ds-cb__card', 'ds-pt__trip', 'is-off' => ! $t['on'] && empty($t['madeAs']), 'is-made' => ! empty($t['madeAs'])]) wire:key="t-{{ $t['i'] }}-{{ $t['province'] }}">
                     <span class="ds-pt__trow">
-                        <button type="button" role="switch" aria-checked="{{ $t['on'] ? 'true' : 'false' }}" aria-label="Include this trip" wire:click="toggleTrip({{ $t['i'] }})" @class(['ds-te__switch', 'ds-ad__smswitch', 'is-on' => $t['on']])><i></i></button>
-                        <span class="ds-pt__tname"><b>{{ $t['province'] }} <span>› {{ $t['path'] }}</span></b><small>New trip · number given when you press Create</small></span>
+                        <button type="button" role="switch" aria-checked="{{ $t['on'] ? 'true' : 'false' }}" aria-label="Include this trip" wire:click="toggleTrip({{ $t['i'] }})" @disabled(! empty($t['madeAs'])) @class(['ds-te__switch', 'ds-ad__smswitch', 'is-on' => $t['on'] && empty($t['madeAs'])])><i></i></button>
+                        <span class="ds-pt__tname"><b>{{ $t['province'] }} <span>› {{ $t['path'] }}</span></b><small>{{ ! empty($t['madeAs']) ? 'Made · '.$t['madeAs']['number'] : ($t['on'] ? 'New trip · number given when you press Create' : 'Switched off: not in Create all') }}</small></span>
                         <button type="button" wire:click="cycleTruck({{ $t['i'] }})" @class(['ds-pt__truck', 'is-free' => $t['truck'] && $t['truck']['state'] === 'free', 'is-busy' => $t['truck'] && $t['truck']['state'] === 'busy'])>🚚 {{ $t['truck'] ? $t['truck']['plate'] : 'No truck yet' }}@if ($t['truck'] && $t['truck']['state'] === 'busy') · after {{ $t['truck']['on'] }}@endif <span>▾</span></button>
                     </span>
                     <span class="ds-pt__stops">
@@ -122,16 +122,23 @@
                             @endforeach
                         </span>
                     @endif
+                    {{-- board 46: make only this trip; the others stay here --}}
+                    @if (empty($t['madeAs']))
+                        <span class="ds-pt__one"><button type="button" class="ds-nt__go" wire:click="createOne({{ $t['i'] }})" wire:loading.attr="disabled">Create this trip</button></span>
+                    @else
+                        <span class="ds-pt__one is-made"><span class="ds-pt__madeone">✓ {{ $t['madeAs']['number'] }} made · {{ $t['madeAs']['boxes'] }} {{ Str::plural('box', $t['madeAs']['boxes']) }} on it</span>
+                            @if ($tripsPage)<a href="{{ $tripsPage::getUrl('index') }}" class="ds-te__link">Open in Delivery trips ›</a>@endif</span>
+                    @endif
                 </article>
             @empty
                 <p class="ds-cb__card ds-cb__muted">Nothing to plan: every waiting city is already on a trip, or no boxes are waiting.</p>
             @endforelse
             <span class="ds-pt__sum">
-                <span><b>{{ $onTrips->count() }} {{ Str::plural('trip', $onTrips->count()) }} · about {{ $onTrips->sum('load') }} boxes</b><small>{{ $atHub ? 'Trip numbers with your hub code · the boxes go on the trip when you press Create' : 'Trip numbers and their boxes now (combos together)' }} · @if ($smsOn)SMS to receivers when the trip is locked{{ ($noSms = $onTrips->filter(fn ($t) => ! ($t['sms'] ?? true))->count()) ? ', except '.$noSms.' '.Str::plural('trip', $noSms) : '' }}@else No SMS (off in @if ($smsUrl)<a href="{{ $smsUrl }}" class="ds-pt__smslink">SMS settings ›</a>@else SMS settings @endif)@endif</small></span>
+                <span><b>{{ $leftTrips < count($cards) ? $leftTrips.' '.Str::plural('trip', $leftTrips).' not made yet · '.$onTrips->count().' switched on' : $onTrips->count().' '.Str::plural('trip', $onTrips->count()).' · about '.$onTrips->sum('load').' boxes' }}</b><small>Create this trip makes one · Create all makes every trip switched on · {{ $atHub ? 'Trip numbers with your hub code · the boxes go on the trip when you press Create' : 'Trip numbers and their boxes now (combos together)' }} · @if ($smsOn)SMS to receivers when the trip is locked{{ ($noSms = $onTrips->filter(fn ($t) => ! ($t['sms'] ?? true))->count()) ? ', except '.$noSms.' '.Str::plural('trip', $noSms) : '' }}@else No SMS (off in @if ($smsUrl)<a href="{{ $smsUrl }}" class="ds-pt__smslink">SMS settings ›</a>@else SMS settings @endif)@endif</small></span>
                 @if ($changedAny && $needPlan === 'reason')
                     <select wire:model="planReason" class="ds-wc__sel" aria-label="Why did you change the AI plan?"><option value="">Why did you change the plan?</option>@foreach ($reasons as $r)<option value="{{ $r }}">{{ $r }}</option>@endforeach</select>
                 @endif
-                <button type="button" wire:click="create" wire:loading.attr="disabled" @disabled(! $onTrips->count())>{{ $made && ! $onTrips->count() ? '✓ Created' : 'Create '.$onTrips->count().' '.Str::plural('trip', $onTrips->count()) }}</button>
+                <button type="button" wire:click="create" wire:loading.attr="disabled" @disabled(! $onTrips->count())>{{ $made && ! $onTrips->count() ? '✓ Created' : 'Create all '.$onTrips->count().' switched on' }}</button>
             </span>
         </section>
 
