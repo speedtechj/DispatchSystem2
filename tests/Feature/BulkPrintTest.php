@@ -20,7 +20,7 @@ beforeEach(function () {
     $this->admin = User::where('email', 'admin@example.com')->firstOrFail();
     $this->actingAs($this->admin);
     Filament::setCurrentPanel(Filament::getPanel('admin'));
-    config(['snappy.pdf.binary' => '/nowhere/wkhtmltopdf']);
+    config(['snappy.pdf.binary' => '/nowhere/wkhtmltopdf', 'snappy.pdf.search' => false]);
 });
 
 it('prints up to 15 receipts in one go, and refuses more', function () {
@@ -61,6 +61,7 @@ it('lets Admin change how many receipts one print may hold', function () {
         ->set('bulkLimit', 20)->call('save')->assertHasNoErrors();
 
     expect(InvoiceController::bulkLimit())->toBe(20);
+    config(['snappy.pdf.binary' => '/nowhere/wkhtmltopdf', 'snappy.pdf.search' => false]);
     $this->get('/tripinv/print?ids='.implode(',', range(1, 16)))->assertStatus(503); // 16 is fine now (no PDF program here)
     $this->get('/tripinv/print?ids='.implode(',', range(1, 21)))->assertStatus(422);
 });

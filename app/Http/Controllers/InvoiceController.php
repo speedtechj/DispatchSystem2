@@ -108,20 +108,23 @@ class InvoiceController extends Controller
     /** @param  list<string>  $pages  one receipt per page */
     protected function pdf(array $pages, string $name): Response
     {
-        $binary = config('snappy.pdf.binary');
+        $binary = \App\Support\Pdf\WkBinary::find();
 
-        // A clear message instead of a crash when the PDF program isn't installed on this computer.
-        if (! is_string($binary) || ! is_executable($binary)) {
+        // A clear message instead of a crash when the PDF program isn't found on this computer or domain.
+        if (! $binary) {
             return response(
                 "Cannot create the PDF receipt.\n\n"
-                ."The PDF program (wkhtmltopdf) was not found at: {$binary}\n\n"
-                ."Install wkhtmltopdf on this computer, then set its path in .env, for example:\n"
-                ."WKHTML_PDF_BINARY=/usr/local/bin/wkhtmltopdf\n\n"
-                ."Then run: php artisan config:clear\n",
+                ."The PDF program (wkhtmltopdf) was not found. Looked in:\n  "
+                .implode("\n  ", \App\Support\Pdf\WkBinary::candidates())."\n\n"
+                ."Put wkhtmltopdf in one of these places (on Plesk: /var/www/vhosts/<your domain>/bin/wkhtmltopdf),\n"
+                ."or set its path in .env, for example:\n"
+                ."WKHTML_PDF_BINARY=/var/www/vhosts/icargoxpress.net/bin/wkhtmltopdf\n\n"
+                ."Then run: php artisan optimize:clear\n",
                 503,
                 ['Content-Type' => 'text/plain; charset=utf-8'],
             );
         }
+        config(['snappy.pdf.binary' => $binary]);
 
         $pdf = PDF::loadHTML(count($pages) === 1 ? $pages[0] : $this->onePerPage($pages));
 

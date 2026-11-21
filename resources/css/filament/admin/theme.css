@@ -5072,3 +5072,17 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sx__skel i:nth-child(1) { width: 60%; } .ds-sx__skel i:nth-child(2) { width: 85%; } .ds-sx__skel i:nth-child(3) { width: 40%; }
 .ds-sx__skel small { color: #7f93a1; font-size: 0.75rem; }
 @keyframes ds-skel { 50% { opacity: .45; } }
+
+/* Which camera (board 52) */
+.ds-cx__cam { position: absolute; left: 1rem; top: 26%; z-index: 2; height: 1.75rem; padding: 0 0.7rem; border-radius: 999px; display: inline-flex; align-items: center; font-size: 0.78rem; font-weight: 800; background: rgb(255 255 255 / .12); color: #e6edf2; backdrop-filter: blur(6px); }
+.ds-cx__cam.is-front { background: rgb(255 107 94 / .25); color: #ffb3ab; }
+.ds-cx__dark.is-front { box-shadow: inset 0 0 0 1px rgb(255 107 94 / .6); }
+.ds-cx__dark.is-front span { color: #ffb3ab; }
+.ds-cx__cams > b { font-size: 1.05rem; }
+.ds-cx__cams > button:not(.ds-cx__back) { display: flex; align-items: center; gap: 0.6rem; padding: 0.75rem; border-radius: 0.9rem; text-align: left; color: #fff; background: rgb(255 255 255 / .05); }
+.ds-cx__cams > button.is-on { background: rgb(52 195 143 / .14); box-shadow: inset 0 0 0 1px rgb(52 195 143 / .5); }
+.ds-cx__cams > button.is-front { opacity: .75; }
+.ds-cx__cams > button > span:first-child { font-size: 1.1rem; }
+.ds-cx__cams > button > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; }
+.ds-cx__cams > button small { color: #9fb0bc; font-size: 0.78rem; }
+.ds-cx__cams > button em { font-style: normal; font-weight: 900; color: #34c38f; }

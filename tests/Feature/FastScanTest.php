@@ -113,3 +113,15 @@ it('has no property named like an action, so every button works in the browser',
         expect($props->intersect($methods)->values()->all())->toBe([], $class);
     }
 });
+
+it('always opens a back camera and never keeps the front camera by itself (board 52)', function () {
+    $js = file_get_contents(resource_path('js/barcode-scanner.js'));
+    expect($js)->toContain("facingMode: { exact: 'environment' }")
+        ->toContain("localStorage.removeItem('bb-scanner-camera')") // old saved camera (could be the front one) forgotten
+        ->toContain('filter((c) => !isFront(c.label))')            // a black picture tries back cameras only
+        ->not->toContain('this.$el.getClientRects()');            // buttons that hide themselves no longer stop the camera
+
+    $container = Container::where('warehouse_id', $this->user->warehouse_id)->firstOrFail();
+    Livewire::test(ScanApp::class)->call('open', 'unload')->call('pick', $container->id)
+        ->assertSee('Switch camera')->assertSee('Choose the camera')->assertSee('Use a back camera?');
+});

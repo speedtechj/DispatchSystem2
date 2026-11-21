@@ -128,7 +128,7 @@ it('keeps users out of panels they do not belong to', function () {
 });
 
 it('explains a missing PDF program instead of crashing', function () {
-    config(['snappy.pdf.binary' => '/nowhere/wkhtmltopdf']);
+    config(['snappy.pdf.binary' => '/nowhere/wkhtmltopdf', 'snappy.pdf.search' => false]);
     $admin = User::where('email', 'admin@example.com')->firstOrFail();
     $invoice = \App\Models\Invoice::firstOrFail();
 

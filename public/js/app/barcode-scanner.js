@@ -1,7 +1,11 @@
 (function () {
     // ZXing (WebAssembly) barcode decoder — used when the phone has no built-in BarcodeDetector (e.g. iPhone)
     const PONYFILL_URL = 'https://fastly.jsdelivr.net/npm/barcode-detector@3/dist/iife/ponyfill.min.js';
-    const CAMERA_KEY = 'bb-scanner-camera';
+    // Only a camera the crew chose with 🔄 is kept (board 52). The old key also held cameras the
+    // scanner jumped to by itself (sometimes the front camera): it is forgotten.
+    const CAMERA_KEY = 'ds-scanner-camera-chosen';
+    try { localStorage.removeItem('bb-scanner-camera'); } catch (e) {}
+    const isFront = (label) => /front|user|selfie|facetime/i.test(String(label || ''));
 
     const scripts = {};
     function loadScript(src) {
@@ -117,6 +121,25 @@
      * Start the camera while the trip is still opening (tap on a trip), so the scan screen
      * finds it running. Not used within 10 s: let go of it.
      */
+    /*
+     * Open a camera: the chosen one, else a back camera for sure ("exact"), else whatever the phone
+     * calls the back camera (computers with one camera).
+     */
+    async function openStream(id) {
+        const tries = id ? [{ ...VIDEO, deviceId: { exact: id } }] : [];
+        tries.push({ ...VIDEO, facingMode: { exact: 'environment' } }, { ...VIDEO, facingMode: { ideal: 'environment' } });
+        let last = null;
+        for (const video of tries) {
+            try {
+                return await navigator.mediaDevices.getUserMedia({ audio: false, video });
+            } catch (e) {
+                if (e && e.name === 'NotAllowedError') throw e;
+                last = e;
+            }
+        }
+        throw last;
+    }
+
     let warm = null;
     window.dsWarmCamera = function (formats) {
         try {
@@ -126,7 +149,7 @@
             try { saved = localStorage.getItem(CAMERA_KEY); } catch (e) {}
             const w = { stream: null, timer: null };
             warm = w;
-            navigator.mediaDevices.getUserMedia({ audio: false, video: saved ? { ...VIDEO, deviceId: { exact: saved } } : { ...VIDEO, facingMode: { ideal: 'environment' } } })
+            openStream(saved)
                 .then((st) => { if (warm === w) { w.stream = st; w.timer = setTimeout(() => { if (warm === w) { st.getTracks().forEach((t) => t.stop()); warm = null; } }, 10000); } else st.getTracks().forEach((t) => t.stop()); })
                 .catch(() => { if (warm === w) warm = null; });
         } catch (e) { warm = null; }
@@ -205,6 +228,9 @@
         let frame = 0;
         let tried = new Set();
         let onCommand = null;
+        // The scanner's own box. Not this.$el: called from a button inside it, this.$el is that button,
+        // and a button that hides itself (Camera off · tap to scan) made the camera stop again.
+        let root = null;
         let pending = { code: null, n: 0, at: 0 }; // a read waits for the same read once more
         let unsureSince = 0;
         let activity = 0;
@@ -223,6 +249,10 @@
             manualCode: '',
             cameras: [],
             cameraId: null,
+            autoCam: null,
+            currentId: null,
+            facing: 'back',
+            camList: false,
             stoppedByUser: false,
             flash: false,
             torchSupported: false,
@@ -235,12 +265,13 @@
             offWhy: null,
 
             init() {
+                root = this.$el;
                 try { this.cameraId = localStorage.getItem(CAMERA_KEY) || null; } catch (e) {}
 
                 onVisibilityChange = () => {
                     if (document.hidden) {
                         this.stop();
-                    } else if (config.autoStart && !this.stoppedByUser && this.$el.getClientRects().length) {
+                    } else if (config.autoStart && !this.stoppedByUser && root.getClientRects().length) {
                         this.start();
                     }
                 };
@@ -261,7 +292,7 @@
                         const entry = entries[entries.length - 1];
                         entry.isIntersecting ? this.onShown() : this.onHidden();
                     }, { threshold: 0.01 });
-                    observer.observe(this.$el);
+                    observer.observe(root);
                 } else if (config.autoStart) {
                     setTimeout(() => this.start(), 300);
                 }
@@ -294,6 +325,7 @@
                 this.stoppedByUser = false;
                 if (!afterBlack) {
                     tried = new Set();
+                    this.autoCam = null; // a camera tried after a black picture is not kept
                     this.hint = null;
                 }
                 darkSince = 0;
@@ -314,23 +346,13 @@
                     // Load the decoder at the same time as the camera starts
                     const detectorPromise = createDetector(formats);
 
-                    const base = VIDEO;
-                    let s = takeWarm();
-                    if (!s) try {
-                        s = await navigator.mediaDevices.getUserMedia({
-                            audio: false,
-                            video: this.cameraId
-                                ? { ...base, deviceId: { exact: this.cameraId } }
-                                : { ...base, facingMode: { ideal: 'environment' } },
-                        });
-                    } catch (e) {
-                        if (!this.cameraId || e.name === 'NotAllowedError') throw e;
-                        this.forgetCamera(); // saved camera no longer exists → use back camera
-                        s = await navigator.mediaDevices.getUserMedia({
-                            audio: false,
-                            video: { ...base, facingMode: { ideal: 'environment' } },
-                        });
-                    }
+                    const want = this.autoCam || this.cameraId;
+                    let s = afterBlack || want ? null : takeWarm();
+                    if (!s) s = await openStream(want);
+                    try {
+                        const set = s.getVideoTracks()[0].getSettings();
+                        if (this.cameraId && set.deviceId && set.deviceId !== this.cameraId) this.forgetCamera(); // the chosen camera is gone
+                    } catch (e) {}
 
                     if (my !== session) { s.getTracks().forEach((t) => t.stop()); return; }
                     stream = s;
@@ -353,6 +375,11 @@
                     }
 
                     const track = stream.getVideoTracks()[0];
+                    try {
+                        const set = track.getSettings();
+                        this.currentId = set.deviceId || null;
+                        this.facing = set.facingMode ? (set.facingMode === 'user' ? 'front' : 'back') : (isFront(track.label) ? 'front' : 'back');
+                    } catch (e) { this.facing = isFront(track.label) ? 'front' : 'back'; }
                     try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) {}
                     try {
                         const caps = track.getCapabilities ? track.getCapabilities() : {};
@@ -377,7 +404,7 @@
                     this.hard = false;
                     this.watchHidden();
                     this.loop(my);
-                    this.listCameras();
+                    this.listCameras(true);
                 } catch (e) {
                     if (my === session) {
                         this.error = describeError(e);
@@ -449,16 +476,16 @@
 
             // The picture stayed black: try the other cameras once each, then explain.
             async onBlackPicture(my) {
-                await this.listCameras();
-                let current = this.cameraId;
+                await this.listCameras(true);
+                let current = this.autoCam || this.cameraId;
                 try { current = (stream && stream.getVideoTracks()[0].getSettings().deviceId) || current; } catch (e) {}
                 tried.add(current || 'auto');
-                const next = this.cameras.map((c) => c.id).find((id) => id && !tried.has(id));
+                // never the front camera, and not kept: the next start tries the back camera again
+                const next = this.cameras.filter((c) => !isFront(c.label)).map((c) => c.id).find((id) => id && !tried.has(id));
 
                 if (next && tried.size <= this.cameras.length) {
-                    this.hint = 'The picture was black. Trying another camera…';
-                    this.cameraId = next;
-                    try { localStorage.setItem(CAMERA_KEY, next); } catch (e) {}
+                    this.hint = 'The picture was black. Trying another back camera…';
+                    this.autoCam = next;
                     await this.stop();
                     await this.start(true);
                     return;
@@ -509,8 +536,8 @@
                 } catch (e) {}
             },
 
-            async listCameras() {
-                if (this.cameras.length) return;
+            async listCameras(force = false) {
+                if (this.cameras.length && !force) return;
                 try {
                     const devices = await navigator.mediaDevices.enumerateDevices(); // no permission popup
                     this.cameras = devices
@@ -524,17 +551,34 @@
                 try { localStorage.removeItem(CAMERA_KEY); } catch (e) {}
             },
 
+            // 🔄 Switch camera: back cameras first, the front one last
+            camChoices() {
+                const backs = this.cameras.filter((c) => !isFront(c.label));
+                const fronts = this.cameras.filter((c) => isFront(c.label));
+                return [
+                    ...backs.map((c, i) => ({ id: c.id, front: false, name: i ? 'Back camera ' + (i + 1) : 'Back camera',
+                        sub: i ? (/wide|ultra/i.test(c.label) ? 'Wide · for big labels up close' : 'Another back camera') : 'Main · best for barcodes' })),
+                    ...fronts.map((c, i) => ({ id: c.id, front: true, name: fronts.length > 1 ? 'Front camera ' + (i + 1) : 'Front camera', sub: 'Only if the back camera is broken' })),
+                ];
+            },
+            backCamera() {
+                const first = this.camChoices().find((c) => !c.front);
+                this.useCamera(first ? first.id : null);
+            },
             async useCamera(id) {
+                this.camList = false;
+                this.autoCam = null;
                 this.cameraId = id || null;
                 try { id ? localStorage.setItem(CAMERA_KEY, id) : localStorage.removeItem(CAMERA_KEY); } catch (e) {}
-                if (this.scanning) { await this.stop(); await this.start(); }
+                await this.stop();
+                await this.start();
             },
 
             // Backup: stop the camera if the modal closed and the observer missed it
             watchHidden() {
                 clearInterval(watchTimer);
                 watchTimer = setInterval(() => {
-                    if (!this.$el.isConnected || this.$el.getClientRects().length === 0) this.stop();
+                    if (!root.isConnected || root.getClientRects().length === 0) this.stop();
                 }, 1000);
             },
 
@@ -564,7 +608,7 @@
                 activity = Date.now();
                 this.lastAt = Date.now(); // the box still in front of the camera is not read again at once
                 pending = { code: null, n: 0, at: 0 };
-                if (!this.scanning && !this.loading && config.autoStart && this.$el.getClientRects().length) this.start();
+                if (!this.scanning && !this.loading && config.autoStart && root.getClientRects().length) this.start();
             },
 
             // Hard to read: type the number on a keypad

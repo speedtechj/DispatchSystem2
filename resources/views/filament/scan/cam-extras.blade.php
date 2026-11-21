@@ -2,8 +2,22 @@
 <button type="button" class="ds-cx__off" x-show="! scanning && ! loading && ! error" x-on:click="start()" x-cloak>
     <span>📷</span><b>Camera off · tap to scan</b><small x-show="offWhy" x-text="offWhy"></small>
 </button>
-<div class="ds-cx__dark" x-show="darkTip && scanning && ! typing" x-cloak>
+<span class="ds-cx__cam" x-show="scanning && ! typing" x-bind:class="{ 'is-front': facing === 'front' }" x-text="facing === 'front' ? '🤳 Front camera' : '📷 ' + ((camChoices().find((c) => c.id === currentId) || { name: 'Back camera' }).name)" x-cloak></span>
+<div class="ds-cx__dark is-front" x-show="facing === 'front' && scanning && ! typing && ! camList" x-cloak>
+    <span>Front camera: it cannot see the box. Use a back camera?</span><button type="button" x-on:click="backCamera()">Back camera</button>
+</div>
+<div class="ds-cx__dark" x-show="darkTip && facing !== 'front' && scanning && ! typing" x-cloak>
     <span>🌙 Dark here · turn on the flashlight?</span><button type="button" x-on:click="turnTorchOn()">Turn on</button>
+</div>
+<div class="ds-cx__type ds-cx__cams" x-show="camList" x-on:click.outside="camList = false" x-cloak>
+    <b>Choose the camera</b>
+    <small>Back cameras scan best. Your choice is kept on this phone.</small>
+    <template x-for="c in camChoices()" :key="c.id">
+        <button type="button" x-on:click="useCamera(c.id)" x-bind:class="{ 'is-on': c.id === currentId, 'is-front': c.front }">
+            <span x-text="c.front ? '🤳' : '📷'"></span><span><b x-text="c.name"></b><small x-text="c.sub"></small></span><em x-text="c.id === currentId ? '✓' : ''"></em>
+        </button>
+    </template>
+    <button type="button" class="ds-cx__back" x-on:click="camList = false">Close</button>
 </div>
 <button type="button" class="ds-cx__hard" x-show="hard && scanning && ! typing && ! paused" x-on:click="openTyping()" x-cloak>⌨ Hard to read? Type the number</button>
 <div class="ds-cx__type" x-show="typing" x-cloak>
