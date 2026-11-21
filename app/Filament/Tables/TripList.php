@@ -19,6 +19,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -262,14 +263,16 @@ class TripList
     /** All / Planned / Loading / On the road / Done. */
     public static function tabs(Builder $base): array
     {
-        $loaded = fn ($w) => $w->select(DB::raw(1))->from('tripinvoices')->where('tripinvoices.is_loaded', true)
-            ->where(fn ($x) => $x->whereColumn('tripinvoices.deliverylog_id', 'deliverylogs.id')->orWhereColumn('tripinvoices.deliveryloghub_id', 'deliverylogs.id'));
+        // speed: two EXISTS, one per column, so each uses its index (an OR across two columns scans every box)
+        $on = fn (string $col) => fn ($w) => $w->select(DB::raw(1))->from('tripinvoices')->where('tripinvoices.is_loaded', true)->whereColumn('tripinvoices.'.$col, 'deliverylogs.id');
+        $hasLoaded = fn (Builder $b) => $b->where(fn ($x) => $x->whereExists($on('deliverylog_id'))->orWhereExists($on('deliveryloghub_id')));
+        $noneLoaded = fn (Builder $b) => $b->whereNotExists($on('deliverylog_id'))->whereNotExists($on('deliveryloghub_id'));
         $taken = Schema::hasColumn('deliverylogs', 'taken_at');
         $back = Schema::hasColumn('deliverylogs', 'back_at');
         $q = [
             'work' => fn (Builder $b) => $b->where('deliverylogs.is_active', true),
-            'planned' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->whereNotExists($loaded),
-            'loading' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->whereExists($loaded),
+            'planned' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->tap($noneLoaded),
+            'loading' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNull('deliverylogs.taken_at'))->tap($hasLoaded),
             'road' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($taken, fn ($x) => $x->whereNotNull('deliverylogs.taken_at'), fn ($x) => $x->whereRaw('1 = 0'))
                 ->when($back, fn ($x) => $x->whereNull('deliverylogs.back_at')),
             'back' => fn (Builder $b) => $b->where('deliverylogs.is_active', true)->when($back, fn ($x) => $x->whereNotNull('deliverylogs.back_at'), fn ($x) => $x->whereRaw('1 = 0')),
@@ -279,8 +282,17 @@ class TripList
         // board 45c: only trips still at work by default; done trips stay in the Done tab
         $labels = ['work' => 'Still at work', 'planned' => 'Planned', 'loading' => 'Loading', 'road' => 'On the road', 'back' => 'Coming back', 'done' => 'Done', 'all' => 'All'];
 
+        // speed: the 7 tab counts are counted once and kept 30 seconds, not on every filter click
+        $counts = null;
+        $count = function (string $k) use (&$counts, $q, $base) {
+            $counts ??= Cache::remember('trip-tabs:'.md5($base->toSql().serialize($base->getBindings())), 30,
+                fn () => collect($q)->map(fn ($fn) => $fn(clone $base)->count())->all());
+
+            return $counts[$k] ?? null;
+        };
+
         return collect($q)->mapWithKeys(fn ($fn, $k) => [$k => Tab::make($labels[$k])
-            ->badge(fn () => $fn((clone $base))->count())
+            ->badge(fn () => $count($k))
             ->modifyQueryUsing(fn (Builder $query) => $fn($query))])->all();
     }
 }
