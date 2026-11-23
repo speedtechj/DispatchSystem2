@@ -5118,6 +5118,8 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__frame { top: 22%; }
 .ds-pk__next { position: absolute; left: 1rem; top: calc(env(safe-area-inset-top) + 5.2rem); z-index: 3; max-width: calc(100% - 2rem); height: 1.9rem; padding: 0 0.8rem; border-radius: 999px; display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 800; color: #9ef0e6; background: rgb(46 196 182 / .22); backdrop-filter: blur(6px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ds-pk__toast { position: absolute; left: 1rem; right: 1rem; top: 46%; z-index: 6; display: flex; align-items: center; gap: 0.6rem; padding: 0.75rem 0.9rem; border-radius: 1rem; color: #0a1219; box-shadow: 0 16px 30px -16px rgb(0 0 0 / .6); }
+/* dark text on every colour: a general .ds-sa .is-bad rule made the text the same pink as the box */
+.ds-sa .ds-pk__toast.is-ok, .ds-sa .ds-pk__toast.is-warn, .ds-sa .ds-pk__toast.is-bad { color: #0a1219; }
 .ds-pk__toast.is-ok { background: #34c38f; }
 .ds-pk__toast.is-warn { background: #f3c98a; }
 .ds-pk__toast.is-bad { background: #ff8a7e; }

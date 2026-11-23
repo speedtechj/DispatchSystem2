@@ -138,3 +138,9 @@ it('shows the start screen at once, then the to-do counts and Continue (board 54
 
     $lw->call('continueLast')->assertSet('screen', 'scan')->assertSet('mode', 'unload')->assertSet('choice', $container->id);
 });
+
+it('keeps the text of the Pick boxes messages readable on every colour', function () {
+    // a general ".ds-sa .is-bad" rule once made the text the same pink as the message box
+    expect(file_get_contents(resource_path('css/filament/admin/theme.css')))
+        ->toContain('.ds-sa .ds-pk__toast.is-ok, .ds-sa .ds-pk__toast.is-warn, .ds-sa .ds-pk__toast.is-bad { color: #0a1219; }');
+});
