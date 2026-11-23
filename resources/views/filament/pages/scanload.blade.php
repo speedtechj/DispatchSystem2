@@ -18,12 +18,17 @@
         </x-slot>
 
         <x-slot name="result">
+            @if ($this->which)
+                @include('filament.partials.which-box', ['which' => $this->which, 'choose' => 'chooseWhich', 'cancel' => 'cancelWhich'])
+            @endif
+            @unless ($this->which)
             <x-scan.result
                 :invoice="$this->lastInvoice()"
                 :status="$lastStatus"
                 :title="$lastMessage"
                 :meta="method_exists($this, 'lastReason') ? ['Driver said' => $this->lastReason()] : []"
             />
+            @endunless
             @if (($fu = (property_exists($this, 'wrongHub') ? $this->wrongHub : null)) && ($fu['kind'] ?? null) === 'full')
                 <div class="ds-ld__early is-full"><strong>Truck full · {{ $fu['code'] }} does not fit</strong><span>{{ $fu['for'] }}. Put it back{{ $fu['section'] !== '—' ? ' in section '.$fu['section'] : '' }}.</span><x-filament::button size="sm" color="gray" wire:click="loadAnyway">It still fits · load anyway</x-filament::button></div>
             @endif

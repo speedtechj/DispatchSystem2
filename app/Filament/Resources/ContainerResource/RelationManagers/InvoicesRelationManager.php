@@ -85,6 +85,8 @@ class InvoicesRelationManager extends RelationManager
     {
         return $table
             ->defaultSort('created_at', 'desc')
+            // board 58: one number on 2 rows of this container (different receivers): the crew will be asked Which one?
+            ->description(fn () => \App\Support\Boxes\SameNumber::inContainer((int) $this->getOwnerRecord()->getKey()))
             ->columns([
                 TextColumn::make('company')
                     ->label('Company')

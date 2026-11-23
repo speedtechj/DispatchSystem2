@@ -147,7 +147,12 @@ abstract class UnloadContainerPage extends Page
             return;
         }
 
-        $invoice = Invoice::where('container_id', $container->id)->where('invoice', $code)->first();
+        // board 58: two boxes with this number in the container still to unload → Which one?
+        $same = Invoice::where('container_id', $container->id)->where('invoice', $code)->orderBy('id')->get();
+        $invoice = $this->whichRow($code, $same, fn ($i) => $i, fn ($i) => (bool) $i->is_verified);
+        if ($invoice === false) {
+            return;
+        }
 
         if (! $invoice) {
             $this->missingCode = $code;
@@ -168,14 +173,20 @@ abstract class UnloadContainerPage extends Page
             $who = $invoice->verified_by && $invoice->verified_by !== Auth::id() ? User::find($invoice->verified_by)?->first_name : null;
             $when = $invoice->verified_at ? Carbon::parse($invoice->verified_at)->format('g:i A') : null;
             $this->route = Sections::tile($invoice->whSection);
-            $this->scanResult('warning', "{$code} was already verified".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $invoice);
+            $this->scanResult('warning', $same->count() > 1 && $same->every(fn ($i) => $i->is_verified)
+                ? "Already unloaded: all {$same->count()} boxes with number {$code}. Leave this one."
+                : "{$code} was already verified".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $invoice);
 
             return;
         }
 
         $invoice->forceFill(['is_verified' => true, 'verified_at' => now(), 'verified_by' => Auth::id()])->save();
 
-        $this->scanResult('success', $this->sendToSection($container, $invoice), $invoice);
+        $msg = $this->sendToSection($container, $invoice);
+        if ($same->count() > 1) {
+            $msg .= $this->whichSuffix($same->filter(fn ($i) => $i->is_verified || $i->is($invoice))->count(), $same->count(), $invoice);
+        }
+        $this->scanResult('success', $msg, $invoice);
     }
 
     /** After the box is verified: pick its section, or load it straight onto the waiting truck. */

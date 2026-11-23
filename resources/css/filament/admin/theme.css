@@ -5176,3 +5176,22 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .fi-ta-row.ds-row-delivered > td { opacity: .5; }
 .fi-ta-row.ds-row-delivered:hover > td { opacity: .8; }
 .ds-same-no .fi-ta-text-description, .ds-same-no p:last-child { color: #b45309 !important; font-weight: 700; }
+
+/* Which one? on a desk scanner (board 58) */
+.ds-which-desk { display: flex; flex-direction: column; gap: 0.7rem; padding: 1rem; margin-bottom: 0.75rem; border-radius: 1rem; background: #fff8e1; box-shadow: inset 0 0 0 1px #f3d37a; }
+.dark .ds-which-desk { background: rgb(255 210 77 / .08); box-shadow: inset 0 0 0 1px rgb(255 210 77 / .3); }
+.ds-which-desk__head { display: flex; align-items: center; gap: 0.6rem; }
+.ds-which-desk__head > span:first-child { width: 2rem; height: 2rem; flex: none; border-radius: 50%; display: grid; place-items: center; background: #ffd24d; color: #0a1219; font-weight: 900; }
+.ds-which-desk__head > span:last-child { display: flex; flex-direction: column; }
+.ds-which-desk__head strong { font-size: 1rem; }
+.ds-which-desk__head small, .ds-which-desk__hint { color: #6b7b88; font-size: 0.8rem; }
+.ds-which-desk__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.6rem; }
+.ds-which-desk__opt { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 0.8rem 0.9rem 0.8rem 2.6rem; border-radius: 0.8rem; text-align: left; background: #fff; box-shadow: 0 1px 0 #e3e8ec, 0 8px 20px -16px rgb(14 36 51 / .4); }
+.dark .ds-which-desk__opt { background: rgb(255 255 255 / .05); }
+.ds-which-desk__opt:hover { box-shadow: inset 0 0 0 2px #f6be00; }
+.ds-which-desk__opt kbd { position: absolute; left: 0.8rem; top: 0.85rem; width: 1.3rem; height: 1.3rem; border-radius: 0.35rem; display: grid; place-items: center; font-size: 0.75rem; font-weight: 800; background: #0e2433; color: #fff; }
+.ds-which-desk__opt strong { font-size: 1.1rem; }
+.ds-which-desk__opt small { color: #33424e; font-size: 0.82rem; }
+.ds-which-desk__opt em { font-style: normal; color: #6b7b88; font-size: 0.75rem; }
+.ds-sa .ds-which { z-index: 60; }
+.ds-which__of { display: inline-block; margin-left: 0.35rem; padding: 0 0.45rem; border-radius: 999px; background: #ffd24d; color: #0a1219; font-weight: 800; font-size: 0.72rem; }

@@ -44,7 +44,12 @@ class ReturnReceiveStation extends Page
 
             return;
         }
-        $r = Returns::receive($rs, $code, Auth::user()?->warehouse_id);
+        $r = Returns::receive($rs, $code, Auth::user()?->warehouse_id, $this->pinInvoice);
+        if ($r['status'] === 'which') {
+            $this->askWhich($code, $r['boxes']);
+
+            return;
+        }
         $this->route = Sections::tile($r['box']?->invoice?->whSection);
         $this->scanResult($r['status'], $r['message'], $r['box']?->invoice);
     }

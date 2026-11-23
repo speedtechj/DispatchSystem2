@@ -148,11 +148,13 @@ it('answers staff questions using look-ups on your own data', function () {
 it('reads a manifest, marks duplicates, and saves only the ticked boxes', function () {
     aiOn(['manifest']);
     $container = Container::where('is_unloaded', false)->firstOrFail();
-    $existing = Invoice::firstOrFail()->invoice;
+    $old = Invoice::firstOrFail();
+    $old->forceFill(['container_id' => $container->id])->saveQuietly();
+    $existing = $old->invoice;
     Http::fake(['api.anthropic.com/*' => Http::response(claude(json_encode(['consolidator' => 'LBC Toronto', 'rows' => [
         ['NEW-1', 'Ana Cruz', 'Jose Ramos', 'Purok 3', 'Pusok', 'Lapu-Lapu City', 'Cebu', '09171234567', '', 'Jumbo', '', 'Lapu2 = Lapu-Lapu City', ''],
         ['NEW-2', 'Ana Cruz', 'Liza Gomez', 'Blk 4', 'Lahug', 'Cebu City', 'Cebu', '', '', 'Regular', '', '', 'No phone'],
-        [$existing, 'X', 'Y', 'Z', 'B', 'C', 'P', '0917', '', '', '', '', ''],
+        [$existing, 'X', $old->receiver_name, 'Z', 'B', 'C', 'P', '0917', '', '', '', '', ''],
         ['NEW-1', 'Ana Cruz', 'Jose Ramos', 'Purok 3', 'Pusok', 'Lapu-Lapu City', 'Cebu', '09171234567', '', 'Jumbo', '', '', ''],
     ]])))]);
     $csv = UploadedFile::fake()->createWithContent('manifest.csv', "Invoice,Sender,Receiver,Address\nNEW-1,Ana,Jose,Lapu2\n");

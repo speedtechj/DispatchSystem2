@@ -226,12 +226,19 @@ class Picking
      *
      * @return array{status: string, title: string, why: string, invoice: ?Invoice, undo: ?int, tone: string}
      */
-    public static function scan(Deliverylog $trip, User $u, string $code): array
+    /** @param  int|null  $pin  the box (invoice id) picked in Which one? (board 58) */
+    public static function scan(Deliverylog $trip, User $u, string $code, ?int $pin = null): array
     {
         $code = trim($code);
-        // two boxes with this number on the trip: the one not picked yet first (board 57)
-        $row = static::rows($trip)->with('invdata')->where('invoice', $code)->orderByRaw('case when picked_at is null then 0 else 1 end')->first();
-        $same = $row ? static::rows($trip)->where('invoice', $code)->count() : 0;
+        // board 58: two boxes with this number on the trip not picked yet → ask Which one?
+        $all = static::rows($trip)->with('invdata')->where('invoice', $code)->get()->sortBy(fn ($r) => [$r->picked_at ? 1 : 0, $r->id])->values();
+        $open = $all->whereNull('picked_at');
+        if (! $pin && $open->count() > 1) {
+            return ['status' => 'which', 'tone' => 'warn', 'invoice' => null, 'undo' => null, 'boxes' => $open->pluck('invdata')->filter()->values(),
+                'title' => $open->count().' boxes have number '.$code, 'why' => 'Which one? Look at the receiver on the sticker.'];
+        }
+        $row = ($pin ? $all->first(fn ($r) => (int) $r->invoice_id === $pin) : null) ?? $all->first();
+        $same = $all->count();
         if (! $row) {
             $any = Tripinvoice::with('invdata')->where('invoice', $code)->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))->latest('id')->first();
             $other = $any ? Deliverylog::whereKey($any->deliveryloghub_id ?: $any->deliverylog_id)->value('trip_number') : null;
@@ -274,7 +281,8 @@ class Picking
             $done = static::rows($trip)->where('invoice', $code)->whereNotNull('picked_at')->count();
 
             return ['status' => 'success', 'tone' => $done < $same ? 'warn' : 'ok', 'invoice' => $inv, 'undo' => $row->id,
-                'title' => "Picked · {$done} of {$same} with this number", 'why' => $done < $same ? "Another box has number {$code} on this trip: pick it too." : "Both boxes with number {$code} are picked."];
+                'title' => "Picked · {$done} of {$same}".($inv?->receiver_name ? ' · '.\Illuminate\Support\Str::title(\Illuminate\Support\Str::lower($inv->receiver_name)) : ''),
+                'why' => $done < $same ? "Another box has number {$code} on this trip: pick it too." : "All {$same} boxes with number {$code} are picked."];
         }
 
         return ['status' => 'success', 'tone' => 'ok', 'invoice' => $inv, 'undo' => $row->id,

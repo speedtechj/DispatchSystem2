@@ -79,7 +79,10 @@ abstract class ShipmentScanStation extends Page
         // two boxes with this number in the shipment: the one not scanned yet first (board 57)
         $rows = Tripinvoice::with('invdata.whSection')->whereIn('deliverylog_id', $this->myTripIds($s))->where('invoice', $code)->latest('id')->get();
         $got = $rows->isEmpty() ? collect() : SeaShipmentScan::where('sea_shipment_id', $s->id)->whereIn('invoice_id', $rows->pluck('invoice_id'))->where('step', static::$step)->pluck('invoice_id');
-        $row = $rows->first(fn ($r) => ! $got->contains($r->invoice_id)) ?? $rows->first();
+        $row = $this->whichRow($code, $rows->sortBy('id')->values(), fn ($r) => $r->invdata, fn ($r) => $got->contains($r->invoice_id)); // board 58
+        if ($row === false) {
+            return;
+        }
         $same = $rows->count();
         if (! $row) {
             $other = $this->invoicesMatching($code)->first();
@@ -122,7 +125,7 @@ abstract class ShipmentScanStation extends Page
         }
         // received at the partner hub: the box goes on the hub's trip of its city (board 45d)
         $placed = static::$step === 'received' ? $this->placeOnHubTrip($row) : null;
-        $this->scanResult('success', "{$code} ".(static::$step === 'port' ? 'handed over at the port.' : 'received.').($placed ? ' → '.$placed['trip'] : ''), $row->invdata);
+        $this->scanResult('success', "{$code} ".(static::$step === 'port' ? 'handed over at the port' : 'received').$this->whichSuffix($got->count() + 1, $same, $row->invdata).'.'.($placed ? ' → '.$placed['trip'] : ''), $row->invdata);
     }
 
     public function progress(): array

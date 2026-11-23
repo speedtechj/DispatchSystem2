@@ -77,9 +77,15 @@ class Returns
      *
      * @return array{status: string, message: string, box: ?WrongHubBox}
      */
-    public static function receive(ReturnShipment $rs, string $code, ?int $warehouseId): array
+    /** @param  int|null  $pin  the box (invoice id) picked in Which one? (board 58) */
+    public static function receive(ReturnShipment $rs, string $code, ?int $warehouseId, ?int $pin = null): array
     {
-        $w = WrongHubBox::with('invoice')->where('return_shipment_id', $rs->id)->whereHas('invoice', fn ($q) => $q->where('invoice', $code))->first();
+        $all = WrongHubBox::with('invoice')->where('return_shipment_id', $rs->id)->whereHas('invoice', fn ($q) => $q->where('invoice', $code))->orderBy('id')->get();
+        $open = $all->where('status', '!=', 'back')->values();
+        if (! $pin && $open->count() > 1) {
+            return ['status' => 'which', 'message' => $open->count()." boxes have number {$code}. Which one?", 'box' => null, 'boxes' => $open->pluck('invoice')->filter()->values()];
+        }
+        $w = ($pin ? $all->firstWhere('invoice_id', $pin) : null) ?? $open->first() ?? $all->first();
         if (! $w) {
             return ['status' => 'danger', 'message' => "{$code} is not on return shipment {$rs->code}.", 'box' => null];
         }

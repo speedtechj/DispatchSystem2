@@ -125,14 +125,13 @@ abstract class LoadTripPage extends Page
             return;
         }
 
-        // two boxes with this number on the trip: the one not loaded yet first (board 57)
-        $tripinvoice = Tripinvoice::with('invdata')
-            ->where($this->tripColumn(), $trip->id)
-            ->where('invoice', $code)
-            ->orderByRaw('coalesce('.$this->loadedColumn().', 0) asc')
-            ->latest('id')
-            ->first();
-        $sameOnTrip = $tripinvoice ? Tripinvoice::where($this->tripColumn(), $trip->id)->where('invoice', $code)->count() : 0;
+        // board 58: two boxes with this number on the trip still to load → Which one? (the receiver on the sticker)
+        $sameRows = Tripinvoice::with('invdata')->where($this->tripColumn(), $trip->id)->where('invoice', $code)->orderBy('id')->get();
+        $tripinvoice = $this->whichRow($code, $sameRows, fn ($r) => $r->invdata, fn ($r) => (bool) $r->{$this->loadedColumn()});
+        if ($tripinvoice === false) {
+            return;
+        }
+        $sameOnTrip = $sameRows->count();
 
         $this->bypass = null;
         $box = $tripinvoice?->invdata ?? \App\Support\Boxes\SameNumber::best($code, Auth::user()?->warehouse_id);
@@ -256,7 +255,7 @@ abstract class LoadTripPage extends Page
         }
 
         $done = $sameOnTrip > 1 ? Tripinvoice::where($this->tripColumn(), $trip->id)->where('invoice', $code)->where($this->loadedColumn(), true)->count() : 0;
-        $this->scanResult('success', "{$code} loaded".\App\Support\Boxes\SameNumber::suffix($done, $sameOnTrip).($sameOnTrip > $done && $sameOnTrip > 1 ? ': scan the other one too' : '').'.', $tripinvoice->invdata);
+        $this->scanResult('success', "{$code} loaded".$this->whichSuffix($done, $sameOnTrip, $tripinvoice->invdata).'.', $tripinvoice->invdata);
     }
 
     /** The box's section is for another partner hub than the one this trip goes to. */

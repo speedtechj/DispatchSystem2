@@ -117,7 +117,9 @@ class ManifestReader
     /** Mark duplicates and rows that can't be saved; pick which ones are ticked to save. */
     public function check(array $rows, Container $container): array
     {
-        $existing = Invoice::whereIn('invoice', array_column($rows, 'invoice'))->pluck('container_id', 'invoice');
+        // two sender companies can use one number (board 58): only the same box twice is blocked
+        $existing = Invoice::whereIn('invoice', array_column($rows, 'invoice'))->get(['invoice', 'container_id', 'receiver_name'])->groupBy('invoice');
+        $who = fn ($n) => mb_strtolower(preg_replace('/\s+/', ' ', trim((string) $n)));
         $seen = [];
         foreach ($rows as $i => &$r) {
             $notes = [];
@@ -125,12 +127,16 @@ class ManifestReader
             if ($r['invoice'] === '') {
                 $notes[] = 'No box number';
                 $blocking = true;
-            } elseif (isset($seen[$r['invoice']])) {
-                $notes[] = 'Listed twice in this file';
+            } elseif (in_array($who($r['receiver_name']), $seen[$r['invoice']] ?? [], true)) {
+                $notes[] = 'Listed twice in this file (a copied row)';
                 $blocking = true;
-            } elseif ($existing->has($r['invoice'])) {
-                $notes[] = (int) $existing[$r['invoice']] === (int) $container->id ? 'Already in this container' : 'Already in another container';
+            } elseif (($here = ($existing[$r['invoice']] ?? collect())->where('container_id', $container->id))->contains(fn ($x) => $who($x->receiver_name) === $who($r['receiver_name']))) {
+                $notes[] = 'Already in this container';
                 $blocking = true;
+            } elseif (! empty($seen[$r['invoice']]) || $here->isNotEmpty()) {
+                $notes[] = '⚠ Same number as another box in this container (other receiver): saved as 2 boxes';
+            } elseif (isset($existing[$r['invoice']])) {
+                $notes[] = 'Same number as a box in another container (other sender)';
             }
             if ($r['receiver_name'] === '' || $r['receiver_address'].$r['receiver_city'] === '') {
                 $notes[] = 'No receiver or address';
@@ -142,7 +148,7 @@ class ManifestReader
             if ($r['problem'] !== '' && ! in_array($r['problem'], $notes, true)) {
                 $notes[] = $r['problem'];
             }
-            $seen[$r['invoice']] = true;
+            $seen[$r['invoice']][] = $who($r['receiver_name']);
             $r['notes'] = implode(' · ', array_unique($notes));
             $r['blocking'] = $blocking;
             $r['save'] = ! $blocking;
@@ -159,7 +165,8 @@ class ManifestReader
         $consolidatorCode = (string) ($container->consolidator?->code ?? '');
         $added = 0;
         foreach ($rows as $r) {
-            if (empty($r['save']) || ! empty($r['blocking']) || Invoice::where('invoice', $r['invoice'])->exists()) {
+            if (empty($r['save']) || ! empty($r['blocking'])
+                || Invoice::where('container_id', $container->id)->where('invoice', $r['invoice'])->where('receiver_name', $r['receiver_name'])->exists()) {
                 continue;
             }
             Invoice::create([

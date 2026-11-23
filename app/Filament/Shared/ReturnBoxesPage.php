@@ -117,14 +117,12 @@ abstract class ReturnBoxesPage extends Page
             return;
         }
 
-        // two boxes with this number on the trip: one not delivered and not returned yet first (board 57)
-        $box = Tripinvoice::with('invdata')
-            ->where($this->tripColumn(), $trip->id)
-            ->where('invoice', $code)
-            ->latest('id')
-            ->get()
-            ->sortBy(fn ($r) => ($r->is_delivered ? 2 : 0) + ($r->invdata?->is_returned ? 1 : 0))
-            ->first();
+        // board 58: two boxes with this number still on the truck → Which one? (the receiver on the sticker)
+        $box = $this->whichRow($code, Tripinvoice::with('invdata')->where($this->tripColumn(), $trip->id)->where('invoice', $code)->orderBy('id')->get(),
+            fn ($r) => $r->invdata, fn ($r) => (bool) $r->is_delivered || (bool) $r->invdata?->is_returned);
+        if ($box === false) {
+            return;
+        }
 
         if (! $box) {
             $invoice = $this->invoicesMatching($code)->first();

@@ -91,9 +91,14 @@ abstract class WarehouseTripScanPage extends Page
         // two boxes with this number: the one on this trip and not done yet first (board 57)
         $matches = $this->invoicesMatching($code);
         $rows = $matches->isEmpty() ? collect() : Whtripinvoice::with('whdeliverylog:id,trip_number')->whereIn('invoice_id', $matches->pluck('id'))->latest('id')->get();
-        $row = $rows->first(fn ($r) => (int) $r->whdeliverylog_id === (int) $trip->id && ! $r->{$this->doneColumn()})
-            ?? $rows->first(fn ($r) => (int) $r->whdeliverylog_id === (int) $trip->id)
-            ?? $rows->first();
+        // board 58: two boxes with this number on this trip still to do → Which one?
+        $here = $rows->filter(fn ($r) => (int) $r->whdeliverylog_id === (int) $trip->id)->sortBy('id')->values();
+        $row = $here->isNotEmpty()
+            ? $this->whichRow($code, $here, fn ($r) => $matches->firstWhere('id', $r->invoice_id), fn ($r) => (bool) $r->{$this->doneColumn()})
+            : $rows->first();
+        if ($row === false) {
+            return;
+        }
         $invoice = $row ? $matches->firstWhere('id', $row->invoice_id) : $matches->first();
 
         if (! $row) {
@@ -131,7 +136,7 @@ abstract class WarehouseTripScanPage extends Page
 
         if ($row->{$this->doneColumn()}) {
             $who = ! static::$unloading && $row->loaded_by && $row->loaded_by !== Auth::id() ? \App\Models\User::find($row->loaded_by)?->first_name : null;
-            $this->scanResult('warning', "{$code} was already ".(static::$unloading ? 'received' : 'loaded').($who ? " by {$who}" : '').'. Not counted again.', $invoice);
+            $this->scanResult('warning', $here->count() > 1 ? "Already done: all {$here->count()} boxes with number {$code}. Leave this one." : "{$code} was already ".(static::$unloading ? 'received' : 'loaded').($who ? " by {$who}" : '').'. Not counted again.', $invoice);
 
             return;
         }
@@ -145,7 +150,8 @@ abstract class WarehouseTripScanPage extends Page
             }
         });
 
-        $this->scanResult('success', "{$code} ".(static::$unloading ? 'received' : 'loaded').'.', $invoice);
+        $this->scanResult('success', "{$code} ".(static::$unloading ? 'received' : 'loaded')
+            .$this->whichSuffix($here->filter(fn ($r) => $r->{$this->doneColumn()} || $r->is($row))->count(), $here->count(), $invoice).'.', $invoice);
     }
 
     /** @return array{loaded: int, total: int} */

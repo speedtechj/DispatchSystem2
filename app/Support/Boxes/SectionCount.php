@@ -48,15 +48,22 @@ class SectionCount
     /**
      * @return array{status: string, message: string, invoice: ?Invoice}
      */
-    public static function scan(WhCount $count, string $code, ?int $warehouseId): array
+    /** @param  int|null  $pin  the box (invoice id) picked in Which one? (board 58) */
+    public static function scan(WhCount $count, string $code, ?int $warehouseId, ?int $pin = null): array
     {
         $s = $count->section;
-        // two boxes can share a number (board 57): the one meant for this section, not delivered, first
-        $box = Invoice::with('whSection:id,code')->where('invoice', $code)
+        // two boxes can share a number (board 57/58): the one meant for this section, not delivered, first
+        $all = Invoice::with('whSection:id,code')->where('invoice', $code)
             ->when($warehouseId, fn ($q) => $q->where(fn ($q) => $q->where('warehouse_id', $warehouseId)->orWhereNull('warehouse_id')))
             ->orderByRaw('case when wh_section_id = ? then 0 else 1 end', [$s->id])
             ->orderByRaw('coalesce(is_delivered, 0) asc')
-            ->latest('id')->first();
+            ->latest('id')->get();
+        $counted = $all->isEmpty() ? collect() : WhCountScan::where('wh_count_id', $count->id)->whereIn('invoice_id', $all->pluck('id'))->pluck('invoice_id');
+        $open = $all->filter(fn ($b) => ! $b->is_delivered && ! $counted->contains($b->id))->values();
+        if (! $pin && $open->count() > 1) {
+            return ['status' => 'which', 'message' => $open->count()." boxes have number {$code}. Which one?", 'invoice' => null, 'boxes' => $open];
+        }
+        $box = ($pin ? $all->firstWhere('id', $pin) : null) ?? $open->first() ?? $all->first();
         if (! $box) {
             return ['status' => 'danger', 'message' => "{$code} is not in this warehouse.", 'invoice' => null];
         }

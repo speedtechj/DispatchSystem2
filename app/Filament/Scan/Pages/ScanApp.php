@@ -362,7 +362,32 @@ class ScanApp extends Page
 
     protected function clearResult(): void
     {
-        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass', 'hubTrip', 'pickResult');
+        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass', 'hubTrip', 'pickResult', 'which');
+    }
+
+    /** Board 58: two boxes with the scanned number still to do: ['code' => …, 'options' => [id, name, place, sender]]. */
+    public ?array $which = null;
+
+    /** Which one? → the receiver was tapped: scan that exact box. */
+    public function chooseBox(int $id): void
+    {
+        $w = $this->which;
+        if (! $w || ! collect($w['options'] ?? [])->contains('id', $id)) {
+            return;
+        }
+        $this->runScan($w['code'], false, $id);
+    }
+
+    /** Which one? → Not this box. */
+    public function skipBox(): void
+    {
+        $this->clearResult();
+    }
+
+    /** The box on the result card, when it has this number (two boxes can share one). */
+    protected function boxShown(string $code): ?int
+    {
+        return $this->invoiceId && Invoice::whereKey($this->invoiceId)->value('invoice') === $code ? $this->invoiceId : null;
     }
 
     /** Called by the camera or the typed box number. */
@@ -383,7 +408,7 @@ class ScanApp extends Page
         $model = $kind === 'transfer' ? Whdeliverylog::class : Deliverylog::class;
 
         return ['kind' => $kind, 'trip_id' => $this->choice, 'trip_number' => $this->choice ? $model::whereKey($this->choice)->value('trip_number') : null,
-            'invoice_id' => \App\Support\Boxes\SameNumber::best($code)?->id, 'box' => $code];
+            'invoice_id' => $this->boxShown($code) ?? \App\Support\Boxes\SameNumber::best($code)?->id, 'box' => $code];
     }
 
     /** After "too early", "wrong hub", "other city" or "truck full": load that box anyway (with a reason, or ask the office). */
@@ -559,17 +584,19 @@ class ScanApp extends Page
         }
     }
 
-    protected function runScan(string $code, bool $force = false): void
+    protected function runScan(string $code, bool $force = false, ?int $pin = null): void
     {
         $station = $this->station();
         if (! $station || ! $this->choice || $this->screen !== 'scan') {
             return;
         }
+        // load anyway after a pick: the same box again, not a new Which one?
+        $pin ??= $force ? $this->boxShown(\App\Support\InvoiceLookup::normalize($code)) : null;
 
         if ($force && property_exists($station, 'forceLoad')) {
             $station->forceLoad = true;
         }
-        $station->scan($code);
+        $pin ? $station->scanPinned($code, $pin) : $station->scan($code);
         session()->forget('filament.notifications'); // this screen shows its own result
 
         $this->clearResult();
@@ -587,6 +614,13 @@ class ScanApp extends Page
         $this->wrongHub = property_exists($station, 'wrongHub') ? $station->wrongHub : null;
         $this->hubTrip = property_exists($station, 'hubTrip') ? $station->hubTrip : null;
         $this->pickResult = property_exists($station, 'pick') ? $station->pick : null;
+        $this->which = $station->which ?? null;
+        if ($this->which) {
+            $this->status = 'which';
+            $this->dispatch('scan-app-result', status: 'which');
+
+            return;
+        }
         if ($this->mode === 'pick') {
             $this->pickSeq++;
         }

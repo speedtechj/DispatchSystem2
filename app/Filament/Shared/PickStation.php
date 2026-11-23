@@ -49,7 +49,13 @@ class PickStation extends Page
 
             return;
         }
-        $r = Picking::scan($trip, $u, $code);
+        $r = Picking::scan($trip, $u, $code, $this->pinInvoice);
+        if ($r['status'] === 'which') {
+            $this->pick = null;
+            $this->askWhich($code, $r['boxes']);
+
+            return;
+        }
         $this->pick = ['title' => $r['title'], 'why' => $r['why'], 'tone' => $r['tone'], 'undo' => $r['undo'], 'code' => $code,
             'section' => $r['invoice']?->whSection?->code, 'spot' => $r['invoice']?->whSpot?->code];
         $this->scanResult($r['status'], $r['title'].' · '.$r['why'], $r['invoice'], notify: false);

@@ -201,6 +201,10 @@
                 </div>
             @endif
 
+            @if ($which)
+                @include('filament.partials.which-box', ['which' => $which, 'phone' => true, 'choose' => 'chooseBox', 'cancel' => 'skipBox'])
+            @endif
+
             @if ($this->mode === 'pick')
                 @php($allPicked = ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total'])
                 @php($nextGroup = collect($pickGroups)->first(fn ($g) => collect($g['boxes'])->contains(fn ($b) => ! $b['picked'] && ! $b['missing'])))
@@ -300,7 +304,7 @@
                     <span class="ds-sa__grab"></span>
                     <div class="ds-sa__hit">
                         <span class="ds-sa__mark is-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
-                        <span><strong>{{ $box->invoice }}</strong><small>{{ $def['ok'] }}</small></span>
+                        <span><strong>{{ $box->invoice }}</strong><small>{{ $def['ok'] }}@if (preg_match('/ · (\d+) of (\d+)/', (string) $message, $sameM)) <b class="ds-which__of">{{ $sameM[1] }} of {{ $sameM[2] }} with this number</b>@endif</small></span>
                         @if ($boxSize && $boxSize['space'] != 1)<em class="ds-sa__size">{{ $boxSize['name'] }} · takes {{ \App\Support\BoxSizes::fmt($boxSize['space']) }} space</em>@elseif ($box->boxtype)<em>{{ $box->boxtype }}</em>@endif
                     </div>
                     @if ($this->mode === 'count')<p class="ds-sa__msg">{{ $message }}</p>@endif

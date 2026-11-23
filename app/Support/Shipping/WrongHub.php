@@ -29,10 +29,9 @@ class WrongHub
     }
 
     /** Add a box the hub found (refused, moved, wrong address…). */
-    public static function add(int $hubId, string $code, string $reason, ?string $note = null): ?WrongHubBox
+    public static function add(int $hubId, string $code, string $reason, ?string $note = null, ?int $pin = null): ?WrongHubBox
     {
-        $row = Tripinvoice::with('invdata.whSection')->where('logistichub_id', $hubId)->where('invoice', $code)
-            ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))->latest('id')->first();
+        $row = static::candidates($hubId, $code)->when($pin, fn ($c) => $c->where('invoice_id', $pin))->first();
         if (! $row || ! array_key_exists($reason, WrongHubBox::REASONS)) {
             return null;
         }
@@ -41,6 +40,13 @@ class WrongHub
             'tripinvoice_id' => $row->id, 'reason' => $reason, 'note' => $note ? mb_substr($note, 0, 300) : null,
             'correct_hub_id' => $row->invdata?->whSection?->logistichub_id, 'created_by' => Auth::id(),
         ]);
+    }
+
+    /** Boxes at the hub with this number, not delivered (two can share a number, board 58). */
+    public static function candidates(int $hubId, string $code): \Illuminate\Support\Collection
+    {
+        return Tripinvoice::with('invdata.whSection', 'invdata.container:id,container_no,batch_no')->where('logistichub_id', $hubId)->where('invoice', $code)
+            ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))->latest('id')->get();
     }
 
     /** Hand the box over to the right partner hub (like a main truck handing it over). */

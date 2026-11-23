@@ -17,11 +17,16 @@
         </x-slot>
 
         <x-slot name="result">
+            @if ($this->which)
+                @include('filament.partials.which-box', ['which' => $this->which, 'choose' => 'chooseWhich', 'cancel' => 'cancelWhich'])
+            @endif
+            @unless ($this->which)
             <x-scan.result :invoice="$this->lastInvoice()" :status="$lastStatus" :title="$lastMessage">
                 <div class="ds-result__actions">
                     {{ $this->reportIssueAction }}
                 </div>
             </x-scan.result>
+            @endunless
 
             @if ($route)
                 <div class="ds-ws__result" style="--c: {{ $route['color'] ?? '#1d6fb8' }}">

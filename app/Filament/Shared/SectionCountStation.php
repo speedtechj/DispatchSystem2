@@ -51,7 +51,12 @@ class SectionCountStation extends Page
 
             return;
         }
-        $r = SectionCount::scan(SectionCount::open($s), $code, Auth::user()?->warehouse_id);
+        $r = SectionCount::scan(SectionCount::open($s), $code, Auth::user()?->warehouse_id, $this->pinInvoice);
+        if ($r['status'] === 'which') {
+            $this->askWhich($code, $r['boxes']);
+
+            return;
+        }
         $this->route = Sections::tile($s);
         $this->scanResult($r['status'], $r['message'], $r['invoice']);
     }

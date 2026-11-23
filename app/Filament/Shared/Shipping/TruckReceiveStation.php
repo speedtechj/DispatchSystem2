@@ -66,7 +66,10 @@ class TruckReceiveStation extends Page
         // two boxes with this number on the truck: the one not received yet first (board 57)
         $rows = Tripinvoice::with('invdata.whSection')->where('deliverylog_id', $trip->id)->where('logistichub_id', $hub)->where('invoice', $code)->latest('id')->get();
         $got = $rows->isEmpty() ? collect() : TruckReceiptScan::where('deliverylog_id', $trip->id)->whereIn('invoice_id', $rows->pluck('invoice_id'))->pluck('invoice_id');
-        $row = $rows->first(fn ($r) => ! $got->contains($r->invoice_id)) ?? $rows->first();
+        $row = $this->whichRow($code, $rows->sortBy('id')->values(), fn ($r) => $r->invdata, fn ($r) => $got->contains($r->invoice_id)); // board 58
+        if ($row === false) {
+            return;
+        }
         $same = $rows->count();
         if (! $row) {
             $other = Tripinvoice::where('invoice', $code)->latest('id')->first();
@@ -101,7 +104,7 @@ class TruckReceiveStation extends Page
         }
         // the box goes on the hub's open trip of its city: full → a new hub trip (Add anyway offered)
         $placed = $this->placeOnHubTrip($row);
-        $this->scanResult('success', "{$code} received at your hub".\App\Support\Boxes\SameNumber::suffix($got->count() + 1, $same).'.'.($placed ? ' → '.$placed['trip'] : '').($wasLoaded ? '' : ' It was not scanned onto the truck in Manila.'), $row->invdata);
+        $this->scanResult('success', "{$code} received at your hub".$this->whichSuffix($got->count() + 1, $same, $row->invdata).'.'.($placed ? ' → '.$placed['trip'] : '').($wasLoaded ? '' : ' It was not scanned onto the truck in Manila.'), $row->invdata);
     }
 
     public function progress(): array

@@ -59,12 +59,35 @@ abstract class WrongHubPage extends Page
         return WrongHubBox::with('correctHub', 'tripinvoice')->when($this->hub(), fn ($q, $h) => $q->where('logistichub_id', $h))->find($id);
     }
 
-    public function addBox(): void
+    /** Board 58: two boxes at the hub with this number → Which one? */
+    public ?array $which = null;
+
+    public function chooseWhich(int $invoiceId): void
+    {
+        if ($this->which && collect($this->which['options'])->contains('id', $invoiceId)) {
+            $this->addBox($invoiceId);
+        }
+    }
+
+    public function cancelWhich(): void
+    {
+        $this->which = null;
+    }
+
+    public function addBox(?int $pin = null): void
     {
         abort_if(static::$comingBack, 403);
         $hub = $this->hub() ?? (int) Auth::user()?->logistichub_id;
         $this->validate(['code' => 'required|string|max:40', 'reason' => 'required|in:'.implode(',', array_keys(WrongHubBox::REASONS))]);
-        $w = WrongHub::add($hub, mb_strtoupper(trim($this->code)), $this->reason, trim($this->note) ?: null);
+        $code = mb_strtoupper(trim($this->code));
+        $this->which = null;
+        $open = WrongHub::candidates($hub, $code);
+        if (! $pin && $open->count() > 1) {
+            $this->which = ['code' => $code, 'options' => $open->pluck('invdata')->filter()->map(fn ($i) => \App\Support\Boxes\SameNumber::choice($i))->values()->all()];
+
+            return;
+        }
+        $w = WrongHub::add($hub, $code, $this->reason, trim($this->note) ?: null, $pin);
         if (! $w) {
             $this->addError('code', 'That box is not at your hub (or it is already delivered).');
 

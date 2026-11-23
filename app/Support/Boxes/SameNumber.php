@@ -70,8 +70,23 @@ class SameNumber
     {
         $place = trim(collect([$i->receiver_city, $i->receiver_province])->filter()->map(fn ($p) => \Illuminate\Support\Str::title(\Illuminate\Support\Str::lower($p)))->join(', '));
 
-        return ['id' => $i->id, 'name' => $i->receiver_name ?: 'No name', 'place' => $place, 'sender' => $i->sender_name,
+        $nice = fn ($n) => $n ? \Illuminate\Support\Str::title(\Illuminate\Support\Str::lower(trim($n))) : null;
+
+        return ['id' => $i->id, 'name' => $nice($i->receiver_name) ?: 'No name', 'place' => $place, 'sender' => $nice($i->sender_name),
             'container' => trim(($i->container?->container_no ?? '').($i->container?->batch_no ? ' · Batch '.$i->container->batch_no : ''))];
+    }
+
+    /** Container page warning: "⚠ 0113123 is on 2 rows of this container: Ailene Gacita, Rosa Mendoza." */
+    public static function inContainer(int $containerId): ?string
+    {
+        $dupes = Invoice::where('container_id', $containerId)->select('invoice')->groupBy('invoice')->havingRaw('count(*) > 1')->limit(6)->pluck('invoice');
+        if ($dupes->isEmpty()) {
+            return null;
+        }
+        $names = Invoice::where('container_id', $containerId)->whereIn('invoice', $dupes)->orderBy('id')->get(['invoice', 'receiver_name'])->groupBy('invoice');
+
+        return '⚠ '.$dupes->map(fn ($n) => "{$n} is on ".$names[$n]->count().' rows ('.$names[$n]->pluck('receiver_name')->map(fn ($r) => \Illuminate\Support\Str::title(\Illuminate\Support\Str::lower($r)))->join(', ').')')->join(' · ')
+            .'. Different receivers: these are separate boxes, and every scan asks Which one?. Same receiver: delete the copied row.';
     }
 
     /** " · 1 of 2 with this number" when more than one box with this number is on the trip. */

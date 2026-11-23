@@ -20,6 +20,9 @@
                     <x-filament::button type="submit">Add</x-filament::button>
                 </div>
                 @error('code')<p class="ds-sp__err">{{ $message }}</p>@enderror
+                @if ($which)
+                    @include('filament.partials.which-box', ['which' => $which, 'choose' => 'chooseWhich', 'cancel' => 'cancelWhich'])
+                @endif
                 <p class="ds-board__muted">Wrong-hub boxes are added by themselves when you receive a container.</p>
             </form>
         @endunless

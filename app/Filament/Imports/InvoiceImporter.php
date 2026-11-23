@@ -96,6 +96,13 @@ class InvoiceImporter extends Importer
 
 
 
+        // the same box twice (same number, receiver and sender in this container): a copied row, skip it (board 58).
+        // Same number with another receiver is a real second box: it is saved, and the scans ask Which one?
+        if (Invoice::where('container_id', $this->options['container_id'])->where('invoice', trim((string) ($this->data['invoice'] ?? '')))
+            ->where('receiver_name', trim((string) ($this->data['receiver_name'] ?? '')))->where('sender_name', trim((string) ($this->data['sender_name'] ?? '')))->exists()) {
+            return null;
+        }
+
         return new Invoice([
             'container_id' =>   $this->options['container_id'],
             'warehouse_id' =>   $this->options['warehouse_id'],
