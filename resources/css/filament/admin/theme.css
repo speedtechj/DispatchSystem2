@@ -5195,3 +5195,65 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-which-desk__opt em { font-style: normal; color: #6b7b88; font-size: 0.75rem; }
 .ds-sa .ds-which { z-index: 60; }
 .ds-which__of { display: inline-block; margin-left: 0.35rem; padding: 0 0.45rem; border-radius: 999px; background: #ffd24d; color: #0a1219; font-weight: 800; font-size: 0.72rem; }
+
+/* Users and Crew (board 59/60) */
+.ds-us__person { display: flex; align-items: center; gap: 0.7rem; min-width: 14rem; }
+.ds-us__av { width: 2.4rem; height: 2.4rem; flex: none; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 0.8rem; color: #fff; object-fit: cover; }
+.ds-us__who { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ds-us__who > span { display: flex; align-items: center; gap: 0.4rem; }
+.ds-us__who b { font-size: 0.92rem; color: #0e2433; }
+.dark .ds-us__who b { color: #fff; }
+.ds-us__who small { color: #6b7b88; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 18rem; }
+.ds-us__admin { font-style: normal; font-size: 0.68rem; font-weight: 800; padding: 1px 7px; border-radius: 999px; background: #0e2433; color: #f6be00; }
+.ds-us__works { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.ds-us__chip { font-size: 0.72rem; font-weight: 800; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.ds-us__works small { color: #51616d; font-size: 0.78rem; }
+.ds-us__status { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; font-weight: 700; color: #17895e; }
+.ds-us__status i { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: currentColor; }
+.ds-us__status.is-off { color: #9aa7b1; }
+.fi-ta-row.ds-us__off > td { opacity: .6; }
+.ds-us__noapp { display: block; padding: 0.5rem 0.75rem; border-radius: 0.6rem; background: #fff6db; color: #7a5300; font-weight: 700; font-size: 0.82rem; }
+.ds-us__panels .fi-fo-toggle-buttons-btn, .ds-us__chips .fi-fo-toggle-buttons-btn { border-radius: 999px; }
+.ds-us__av.is-sm { width: 1.8rem; height: 1.8rem; font-size: 0.68rem; }
+.ds-cr { display: flex; flex-direction: column; gap: 1rem; }
+.ds-cr__top { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.ds-cr__sum { color: #6b7b88; margin-right: auto; }
+.ds-cr__tabs { display: flex; gap: 4px; padding: 4px; border-radius: 0.8rem; background: #e9eef2; }
+.dark .ds-cr__tabs { background: rgb(255 255 255 / .06); }
+.ds-cr__tabs button { height: 2.1rem; padding: 0 0.9rem; border-radius: 0.6rem; font-weight: 800; font-size: 0.85rem; color: #51616d; }
+.ds-cr__tabs button.is-on { background: #fff; color: #0e2433; box-shadow: 0 1px 3px rgb(14 36 51 / .15); }
+.ds-cr__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: 0.9rem; align-items: start; }
+.ds-cr__truck { display: flex; flex-direction: column; gap: 0.6rem; padding: 1rem; border-radius: 1.1rem; background: #fff; box-shadow: 0 0 0 1px #e6ebef, 0 14px 34px -28px rgb(14 36 51 / .4); }
+.dark .ds-cr__truck, .dark .ds-cr__list { background: rgb(255 255 255 / .04); box-shadow: 0 0 0 1px rgb(255 255 255 / .08); }
+.ds-cr__truck header { display: flex; align-items: center; gap: 0.6rem; }
+.ds-cr__truck header > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; }
+.ds-cr__truck header b { font-size: 1.05rem; }
+.ds-cr__truck header small, .ds-cr__muted { color: #6b7b88; font-size: 0.8rem; }
+.ds-cr__ico { width: 2.6rem; height: 2.6rem; border-radius: 0.75rem; background: #0e2433; display: grid; place-items: center; font-size: 1.2rem; }
+.ds-cr__state { font-style: normal; font-size: 0.7rem; font-weight: 800; padding: 2px 9px; border-radius: 999px; background: #fff1c2; color: #7a5600; }
+.ds-cr__state.is-ok { background: #e6f6ef; color: #17895e; }
+.ds-cr__m { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.6rem; border-radius: 0.75rem; background: #f6f8fa; }
+.dark .ds-cr__m { background: rgb(255 255 255 / .05); }
+.ds-cr__who { flex: 1; display: flex; flex-direction: column; text-align: left; min-width: 0; }
+.ds-cr__who b { font-size: 0.88rem; }
+.ds-cr__who small { color: #6b7b88; font-size: 0.76rem; }
+.ds-cr__x { width: 1.75rem; height: 1.75rem; border-radius: 50%; background: #fff; color: #8a99a5; box-shadow: inset 0 0 0 1px #e1e7ec; }
+.ds-cr__none { padding: 0.75rem; border-radius: 0.75rem; border: 1.5px dashed #d4dde3; color: #6b7b88; font-size: 0.82rem; text-align: center; }
+.ds-cr__add { height: 2.4rem; border-radius: 0.65rem; background: #eef2f5; font-weight: 800; color: #0e2433; }
+.ds-cr__add.is-on { background: #f6be00; color: #0a1219; }
+.ds-cr__free { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.6rem; border-radius: 0.75rem; background: #fff8e1; box-shadow: inset 0 0 0 1px #f3d37a; }
+.ds-cr__free > small { font-weight: 800; color: #7a5600; }
+.ds-cr__free button { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.5rem; border-radius: 0.6rem; background: #fff; text-align: left; }
+.ds-cr__free button b { flex: 1; font-size: 0.85rem; color: #0e2433; }
+.ds-cr__free button i, .ds-cr__pos { font-style: normal; font-size: 0.7rem; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: #eef2f5; color: #33424e; }
+.ds-cr__pos.is-app { background: #fff1c2; color: #7a5600; }
+.ds-cr__list { display: flex; flex-direction: column; border-radius: 1.1rem; background: #fff; box-shadow: 0 0 0 1px #e6ebef; overflow: hidden; }
+.ds-cr__row { display: grid; grid-template-columns: 2.6rem 1.6fr 1fr 1fr 1fr 0.9fr 0.9fr; gap: 0.75rem; align-items: center; padding: 0.6rem 1rem; border-top: 1px solid #f0f3f6; text-align: left; font-size: 0.85rem; }
+.ds-cr__row.is-head { font-size: 0.75rem; font-weight: 800; color: #6b7b88; background: #fafbfc; border-top: 0; }
+.dark .ds-cr__row.is-head { background: transparent; }
+.ds-cr__row:not(.is-head):hover { background: #fffbea; }
+.ds-cr__row.is-off { opacity: .6; }
+.ds-cr__row small { color: #6b7b88; }
+.ds-cr__hint { color: #6b7b88; }
+.ds-cr__where { display: block; padding: 0.6rem 0.75rem; border-radius: 0.75rem; background: #f1f6fb; color: #1d5fa8; font-weight: 700; font-size: 0.82rem; }
+.ds-us__photo { width: 5.5rem !important; max-width: 5.5rem; } .ds-us__photo .filepond--root { width: 5.5rem !important; height: 5.5rem !important; } .ds-us__photo .filepond--drop-label { font-size: 0.65rem; }

@@ -18,6 +18,9 @@ use UnitEnum;
 class TruckteamResource extends Resource
 {
     protected static ?string $model = Truckteam::class;
+
+    /** Replaced by the Crew page (board 60); the old pages still open from old links. */
+    protected static bool $shouldRegisterNavigation = false;
      protected static string | UnitEnum | null $navigationGroup = 'Truck Management';
 
   //  protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;

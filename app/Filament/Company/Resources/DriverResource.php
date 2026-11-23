@@ -32,6 +32,9 @@ class DriverResource extends Resource
 {
     protected static ?string $model = Driver::class;
 
+    /** Replaced by the Crew page (board 60); the old pages still open from old links. */
+    protected static bool $shouldRegisterNavigation = false;
+
     protected static ?string $navigationLabel = 'Company Crew';
 
     public static ?string $label = 'Company Crews';

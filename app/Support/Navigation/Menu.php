@@ -140,7 +140,7 @@ class Menu
 
             'Pages\\Fleet' => ['Trucks', 'Trucks', 1],
             'Pages\\RentalTrucks' => ['Trucks', null, 2],
-            'Resources\\Truckteams\\TruckteamResource' => ['Trucks', 'Truck teams', 2],
+            'Pages\\Crew' => ['Trucks', 'Crew', 2],
 
             'Pages\\MapsRoutes' => ['Settings & help', null, 1],
             'Pages\\WarehouseCoverage' => ['Settings & help', null, 1],
@@ -169,7 +169,7 @@ class Menu
             'Pages\\RentalTrucks' => ['Trucks & people', null, 2],
             'Pages\\CrewBoard' => ['Trucks & people', null, 2],
             'Pages\\HubDrivers' => ['Trucks & people', null, 2],
-            'Resources\\DriverResource' => ['Trucks & people', 'Crew', 3],
+            'Pages\\Crew' => ['Trucks & people', 'Crew', 3],
             'Pages\\TruckTracking' => ['Trucks & people', null, 4],
             'Pages\\TruckDay' => ['Trucks & people', null, 5],
             'Pages\\Fuel' => ['Trucks & people', null, 6],
