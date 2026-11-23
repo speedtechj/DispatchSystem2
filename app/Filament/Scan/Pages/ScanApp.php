@@ -383,7 +383,7 @@ class ScanApp extends Page
         $model = $kind === 'transfer' ? Whdeliverylog::class : Deliverylog::class;
 
         return ['kind' => $kind, 'trip_id' => $this->choice, 'trip_number' => $this->choice ? $model::whereKey($this->choice)->value('trip_number') : null,
-            'invoice_id' => Invoice::where('invoice', $code)->latest('id')->value('id'), 'box' => $code];
+            'invoice_id' => \App\Support\Boxes\SameNumber::best($code)?->id, 'box' => $code];
     }
 
     /** After "too early", "wrong hub", "other city" or "truck full": load that box anyway (with a reason, or ask the office). */

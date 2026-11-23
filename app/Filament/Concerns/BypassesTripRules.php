@@ -26,7 +26,7 @@ trait BypassesTripRules
         $model = $this->tripKind() === 'transfer' ? \App\Models\Whdeliverylog::class : \App\Models\Deliverylog::class;
 
         return ['kind' => $this->tripKind(), 'trip_id' => $tripId, 'trip_number' => $tripId ? $model::whereKey($tripId)->value('trip_number') : null,
-            'invoice_id' => Invoice::where('invoice', $code)->latest('id')->value('id'), 'box' => $code];
+            'invoice_id' => \App\Support\Boxes\SameNumber::best($code)?->id, 'box' => $code];
     }
 
     public function loadAnyway(): void
@@ -67,7 +67,7 @@ trait BypassesTripRules
         $this->bypass = null;
         $this->early = null;
         $this->wrongHub = null;
-        $this->scanResult('warning', "Asked the office about {$b['code']}. Keep it aside: when they approve, scan it again.", Invoice::where('invoice', $b['code'])->latest('id')->first());
+        $this->scanResult('warning', "Asked the office about {$b['code']}. Keep it aside: when they approve, scan it again.", \App\Support\Boxes\SameNumber::best($b['code']));
     }
 
     public function cancelBypass(): void

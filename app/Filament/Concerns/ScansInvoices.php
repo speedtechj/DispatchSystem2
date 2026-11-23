@@ -127,6 +127,7 @@ trait ScansInvoices
     /** Newest invoices with this number (the code is already normalised by scan()). */
     protected function invoicesMatching(string $code): Collection
     {
-        return Invoice::query()->where('invoice', $code)->orderByDesc('id')->get();
+        // boxes not delivered first (two boxes can share a number, board 57)
+        return Invoice::query()->where('invoice', $code)->orderByRaw('coalesce(is_delivered, 0) asc')->orderByDesc('id')->get();
     }
 }

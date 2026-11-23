@@ -51,8 +51,11 @@ class SectionCount
     public static function scan(WhCount $count, string $code, ?int $warehouseId): array
     {
         $s = $count->section;
+        // two boxes can share a number (board 57): the one meant for this section, not delivered, first
         $box = Invoice::with('whSection:id,code')->where('invoice', $code)
             ->when($warehouseId, fn ($q) => $q->where(fn ($q) => $q->where('warehouse_id', $warehouseId)->orWhereNull('warehouse_id')))
+            ->orderByRaw('case when wh_section_id = ? then 0 else 1 end', [$s->id])
+            ->orderByRaw('coalesce(is_delivered, 0) asc')
             ->latest('id')->first();
         if (! $box) {
             return ['status' => 'danger', 'message' => "{$code} is not in this warehouse.", 'invoice' => null];

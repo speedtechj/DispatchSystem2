@@ -88,10 +88,13 @@ abstract class WarehouseTripScanPage extends Page
             return;
         }
 
-        $invoice = $this->invoicesMatching($code)->first();
-        $row = $invoice
-            ? Whtripinvoice::with('whdeliverylog:id,trip_number')->where('invoice_id', $invoice->id)->latest('id')->first()
-            : null;
+        // two boxes with this number: the one on this trip and not done yet first (board 57)
+        $matches = $this->invoicesMatching($code);
+        $rows = $matches->isEmpty() ? collect() : Whtripinvoice::with('whdeliverylog:id,trip_number')->whereIn('invoice_id', $matches->pluck('id'))->latest('id')->get();
+        $row = $rows->first(fn ($r) => (int) $r->whdeliverylog_id === (int) $trip->id && ! $r->{$this->doneColumn()})
+            ?? $rows->first(fn ($r) => (int) $r->whdeliverylog_id === (int) $trip->id)
+            ?? $rows->first();
+        $invoice = $row ? $matches->firstWhere('id', $row->invoice_id) : $matches->first();
 
         if (! $row) {
             $this->scanResult('danger', "{$code} is not on any warehouse trip.", $invoice);

@@ -356,7 +356,7 @@ class HubDesk
 
         $row = $this->ours()->where(fn ($q) => $q->where('invoice', $code)->orWhereHas('box', fn ($i) => $i->where('invoice', $code)))
             ->with(['box.container:id,container_no', 'deliverylog:id,trip_number,eta,logistichub_id', 'hubTrip.truck:id,plate_no', 'deliverer'])
-            ->latest('id')->first();
+            ->orderByRaw('coalesce(is_delivered, 0) asc')->latest('id')->first();
 
         if (! $row) {
             return null;

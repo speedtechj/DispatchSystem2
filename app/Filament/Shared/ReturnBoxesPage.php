@@ -117,10 +117,13 @@ abstract class ReturnBoxesPage extends Page
             return;
         }
 
+        // two boxes with this number on the trip: one not delivered and not returned yet first (board 57)
         $box = Tripinvoice::with('invdata')
             ->where($this->tripColumn(), $trip->id)
             ->where('invoice', $code)
             ->latest('id')
+            ->get()
+            ->sortBy(fn ($r) => ($r->is_delivered ? 2 : 0) + ($r->invdata?->is_returned ? 1 : 0))
             ->first();
 
         if (! $box) {

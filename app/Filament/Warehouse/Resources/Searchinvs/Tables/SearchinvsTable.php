@@ -53,6 +53,9 @@ class SearchinvsTable
     public static function configure(Table $table): Table
     {
         return $table
+            // delivered boxes greyed (board 57)
+            ->recordClasses(fn ($record) => $record->is_delivered || self::tripOf((int) $record->id)?->is_delivered ? 'ds-row-delivered' : null)
+            ->modifyQueryUsing(fn ($query) => $query->with('container:id,container_no,batch_no'))
             ->columns([
                 // TextColumn::make( 'container.container_no' )
                 // ->label('Container No')
@@ -63,7 +66,7 @@ class SearchinvsTable
                     ->getStateUsing(function ($record) {
                         $company = self::consolidatorOf($record->location_code);
 
-                        return $company->company_name;
+                        return $company?->company_name;
                     }),
                 TextColumn::make('tripno')
                     ->label('Trip Number')
@@ -104,7 +107,14 @@ class SearchinvsTable
                 //         }),
                 TextColumn::make('invoice')
                     ->label('Invoice')
-                    ->searchable(isIndividual: true, isGlobal: false),
+                    ->searchable(isIndividual: true, isGlobal: false)
+                    // two boxes can share a number (board 57): say so under the number
+                    ->description(fn ($record) => ($n = \App\Support\Boxes\SameNumber::count((string) $record->invoice)) > 1 ? "⚠ {$n} share this number" : null)
+                    ->extraAttributes(fn ($record) => \App\Support\Boxes\SameNumber::count((string) $record->invoice) > 1 ? ['class' => 'ds-same-no'] : []),
+                TextColumn::make('container_batch')
+                    ->label('Container · batch')
+                    ->getStateUsing(fn ($record) => trim(($record->container?->container_no ?? '—').(($b = $record->container?->batch_no ?: $record->batchno) ? ' · '.$b : '')))
+                    ->color('gray'),
                 TextColumn::make('problem')
                     ->badge()
                     ->color('danger')

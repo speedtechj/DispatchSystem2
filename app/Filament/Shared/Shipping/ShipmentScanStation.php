@@ -76,7 +76,11 @@ abstract class ShipmentScanStation extends Page
 
             return;
         }
-        $row = Tripinvoice::with('invdata.whSection')->whereIn('deliverylog_id', $this->myTripIds($s))->where('invoice', $code)->latest('id')->first();
+        // two boxes with this number in the shipment: the one not scanned yet first (board 57)
+        $rows = Tripinvoice::with('invdata.whSection')->whereIn('deliverylog_id', $this->myTripIds($s))->where('invoice', $code)->latest('id')->get();
+        $got = $rows->isEmpty() ? collect() : SeaShipmentScan::where('sea_shipment_id', $s->id)->whereIn('invoice_id', $rows->pluck('invoice_id'))->where('step', static::$step)->pluck('invoice_id');
+        $row = $rows->first(fn ($r) => ! $got->contains($r->invoice_id)) ?? $rows->first();
+        $same = $rows->count();
         if (! $row) {
             $other = $this->invoicesMatching($code)->first();
             // One container, more hubs: the box is for another stop.
@@ -101,7 +105,7 @@ abstract class ShipmentScanStation extends Page
         $prev = SeaShipmentScan::where('sea_shipment_id', $s->id)->where('invoice_id', $row->invoice_id)->where('step', static::$step)->first();
         if ($prev) {
             $who = $prev->user_id && $prev->user_id !== Auth::id() ? User::find($prev->user_id)?->first_name : null;
-            $this->scanResult('warning', "{$code} was already scanned".($who ? " by {$who}" : '').($prev->created_at ? ' at '.Carbon::parse($prev->created_at)->format('g:i A') : '').'. Not counted again.', $row->invdata);
+            $this->scanResult('warning', $same > 1 ? "Already scanned: all {$same} boxes with number {$code}. Leave this one." : "{$code} was already scanned".($who ? " by {$who}" : '').($prev->created_at ? ' at '.Carbon::parse($prev->created_at)->format('g:i A') : '').'. Not counted again.', $row->invdata);
 
             return;
         }

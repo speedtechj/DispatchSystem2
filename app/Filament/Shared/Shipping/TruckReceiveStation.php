@@ -63,7 +63,11 @@ class TruckReceiveStation extends Page
 
             return;
         }
-        $row = Tripinvoice::with('invdata.whSection')->where('deliverylog_id', $trip->id)->where('logistichub_id', $hub)->where('invoice', $code)->latest('id')->first();
+        // two boxes with this number on the truck: the one not received yet first (board 57)
+        $rows = Tripinvoice::with('invdata.whSection')->where('deliverylog_id', $trip->id)->where('logistichub_id', $hub)->where('invoice', $code)->latest('id')->get();
+        $got = $rows->isEmpty() ? collect() : TruckReceiptScan::where('deliverylog_id', $trip->id)->whereIn('invoice_id', $rows->pluck('invoice_id'))->pluck('invoice_id');
+        $row = $rows->first(fn ($r) => ! $got->contains($r->invoice_id)) ?? $rows->first();
+        $same = $rows->count();
         if (! $row) {
             $other = Tripinvoice::where('invoice', $code)->latest('id')->first();
             $sea = $other ? Shipments::forTrip((int) $other->deliverylog_id) : null;
@@ -82,7 +86,7 @@ class TruckReceiveStation extends Page
         $prev = TruckReceiptScan::where('deliverylog_id', $trip->id)->where('invoice_id', $row->invoice_id)->first();
         if ($prev) {
             $who = $prev->user_id && $prev->user_id !== Auth::id() ? User::find($prev->user_id)?->first_name : null;
-            $this->scanResult('warning', "{$code} was already received".($who ? " by {$who}" : '').($prev->created_at ? ' at '.Carbon::parse($prev->created_at)->format('g:i A') : '').'. Not counted again.', $row->invdata);
+            $this->scanResult('warning', $same > 1 ? "Already received: all {$same} boxes with number {$code}. Leave this one." : "{$code} was already received".($who ? " by {$who}" : '').($prev->created_at ? ' at '.Carbon::parse($prev->created_at)->format('g:i A') : '').'. Not counted again.', $row->invdata);
 
             return;
         }
@@ -97,7 +101,7 @@ class TruckReceiveStation extends Page
         }
         // the box goes on the hub's open trip of its city: full → a new hub trip (Add anyway offered)
         $placed = $this->placeOnHubTrip($row);
-        $this->scanResult('success', "{$code} received at your hub.".($placed ? ' → '.$placed['trip'] : '').($wasLoaded ? '' : ' It was not scanned onto the truck in Manila.'), $row->invdata);
+        $this->scanResult('success', "{$code} received at your hub".\App\Support\Boxes\SameNumber::suffix($got->count() + 1, $same).'.'.($placed ? ' → '.$placed['trip'] : '').($wasLoaded ? '' : ' It was not scanned onto the truck in Manila.'), $row->invdata);
     }
 
     public function progress(): array

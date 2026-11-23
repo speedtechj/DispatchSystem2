@@ -44,14 +44,16 @@ class Sections extends Page
             'boxes' => SectionCount::ready() ? SectionCount::expected($s)->count() : $s->invoices()->count(),
             'counted' => SectionCount::ready() ? WhCount::where('wh_section_id', $s->id)->whereNotNull('finished_at')->latest('finished_at')->first() : null,
         ]);
-        $hit = null;
+        $hits = [];
         $code = mb_strtoupper(trim($this->find));
         if ($code !== '') {
-            $box = Invoice::with(['whSection', 'verifiedBy:id,first_name,last_name', 'container:id,container_no'])->where('invoice', $code)->latest('id')->first();
-            if ($box) {
+            // two boxes can share a number (board 57): every box not delivered, this warehouse first; none open: the last one
+            $all = Invoice::with(['whSection', 'verifiedBy:id,first_name,last_name', 'container:id,container_no,batch_no'])->where('invoice', $code)->latest('id')->get();
+            $open = $all->reject(fn ($b) => (bool) $b->is_delivered)->sortBy(fn ($b) => $wh && (int) $b->warehouse_id === (int) $wh ? 0 : 1)->values();
+            foreach (($open->isNotEmpty() ? $open : $all->take(1)) as $box) {
                 $trip = Tripinvoice::with('deliverylog:id,trip_number')->where('invoice_id', $box->id)->latest('id')->first();
                 $wtrip = Whtripinvoice::with('whdeliverylog:id,trip_number')->where('invoice_id', $box->id)->where('is_unloaded', false)->latest('id')->first();
-                $hit = ['box' => $box, 'where' => match (true) {
+                $hits[] = ['box' => $box, 'from' => $box->sender_name, 'where' => match (true) {
                     (bool) $box->is_delivered => 'Delivered',
                     (bool) $trip?->is_loaded => 'Loaded on trip '.$trip->deliverylog?->trip_number,
                     (bool) $wtrip?->is_loaded => 'On the truck to another warehouse (trip '.$wtrip->whdeliverylog?->trip_number.')',
@@ -66,7 +68,7 @@ class Sections extends Page
             'sections' => $sections,
             'labelScan' => SectionList::labelScan($wh),
             'labelsUrl' => $wh && $sections->isNotEmpty() ? route('sections.labels', ['warehouse' => $wh]) : null,
-            'hit' => $hit, 'code' => $code,
+            'hits' => $hits, 'hit' => $hits[0] ?? null, 'code' => $code,
         ];
     }
 }

@@ -355,6 +355,20 @@
                 </div>
             @endif
 
+            @if ($sheet === 'which' && $which)
+                {{-- board 57: two boxes with one number on the truck; pick the receiver on the sticker --}}
+                <div class="ds-sa__sheet ds-which" wire:key="which-{{ $whichCode }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-which__head"><span>{{ count($which) }}</span><span><strong>{{ count($which) }} boxes have number {{ $whichCode }}</strong><small>Which one? Look at the receiver on the sticker.</small></span></div>
+                    @foreach ($which as $w)
+                        <button type="button" class="ds-which__opt" wire:click="pickBox({{ $w['id'] }})" wire:key="w-{{ $w['id'] }}">
+                            <span><strong>{{ $w['name'] }}</strong>@if ($w['place'])<small>{{ $w['place'] }}</small>@endif @if ($w['sender'])<em>from {{ $w['sender'] }}</em>@endif</span><b>›</b>
+                        </button>
+                    @endforeach
+                    <button type="button" class="ds-sa__secondary" wire:click="closeSheet">Not this box · scan again</button>
+                </div>
+            @endif
+
             @if ($sheet === 'wrong')
                 <div class="ds-sa__sheet is-bad" wire:key="wrong-{{ md5((string) $wrongText) }}">
                     <span class="ds-sa__grab"></span>

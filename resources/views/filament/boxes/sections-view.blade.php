@@ -4,13 +4,19 @@
         <h3>Find a box</h3>
         <input type="text" wire:model.live.debounce.400ms="find" placeholder="Box number" aria-label="Box number">
         @if ($code !== '')
-            @if ($hit)
-                <div class="ds-ws__result" style="--c: {{ $hit['box']->whSection?->color ?? '#6b7b88' }}">
-                    <strong>{{ $hit['box']->whSection?->code ?? '?' }}</strong>
-                    <span><b>{{ $hit['box']->invoice }} · {{ \Illuminate\Support\Str::title($hit['box']->receiver_name) }}</b>
-                        <small>{{ $hit['where'] }}</small>
-                        <small>{{ $hit['box']->sectioned_at ? 'Put there '.$hit['box']->sectioned_at->format('M j, g:i A') : '' }}{{ $hit['box']->verifiedBy ? ' · unloaded by '.$hit['box']->verifiedBy->first_name : '' }}</small></span>
+            @if ($hits)
+                @if (count($hits) > 1)
+                    <p class="ds-ws__same">⚠ {{ count($hits) }} boxes have number {{ $code }}. Check the receiver on the sticker.</p>
+                @endif
+                @foreach ($hits as $h)
+                <div class="ds-ws__result" style="--c: {{ $h['box']->whSection?->color ?? '#6b7b88' }}" wire:key="hit-{{ $h['box']->id }}">
+                    <strong>{{ $h['box']->whSection?->code ?? '?' }}</strong>
+                    <span><b>{{ count($hits) > 1 ? \Illuminate\Support\Str::title($h['box']->receiver_name) : $h['box']->invoice.' · '.\Illuminate\Support\Str::title($h['box']->receiver_name) }}</b>
+                        @if (count($hits) > 1 && $h['from'])<small>from {{ \Illuminate\Support\Str::title($h['from']) }}</small>@endif
+                        <small>{{ $h['where'] }}</small>
+                        <small>{{ $h['box']->sectioned_at ? 'Put there '.$h['box']->sectioned_at->format('M j, g:i A') : '' }}{{ $h['box']->verifiedBy ? ' · unloaded by '.$h['box']->verifiedBy->first_name : '' }}</small></span>
                 </div>
+                @endforeach
             @else
                 <p class="ds-ws__muted">No box {{ $code }}.</p>
             @endif

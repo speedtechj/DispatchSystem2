@@ -71,7 +71,8 @@ class ListInvoiceissues extends ListRecords
                     $exists = Invoice::where('container_id', $data['container_id'])
                         ->where('invoice', $data['invoice'])
                         ->exists();
-                    $invoice_id = Invoice::where('invoice', $data['invoice'])
+                    // the box of that container: two boxes can share a number (board 57)
+                    $invoice_id = Invoice::where('container_id', $data['container_id'])->where('invoice', $data['invoice'])
                         ->value('id');
 
                     if ($exists) {

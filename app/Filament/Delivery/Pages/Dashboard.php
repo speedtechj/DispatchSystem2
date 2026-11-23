@@ -60,6 +60,12 @@ class Dashboard extends BaseDashboard
     #[Locked]
     public ?string $wrongText = null;
 
+    /** Two boxes with one number on the trip (board 57): the tripinvoice ids to pick from by receiver. */
+    public array $whichIds = [];
+
+    /** The scanned number while asking Which one? */
+    public ?string $whichCode = null;
+
     /** Photos already uploaded for the open sheet (paths on the public disk). */
     #[Locked]
     public array $photos = [];
@@ -122,7 +128,19 @@ class Dashboard extends BaseDashboard
     public function closeSheet(): void
     {
         $this->deleteUnusedPhotos();
-        $this->reset('boxId', 'sheet', 'wrongText', 'photos', 'upload', 'reason', 'note');
+        $this->reset('boxId', 'sheet', 'wrongText', 'photos', 'upload', 'reason', 'note', 'whichIds', 'whichCode');
+    }
+
+    /** Which one? The driver picked the receiver's name. */
+    public function pickBox(int $id): void
+    {
+        $box = in_array($id, $this->whichIds, true) ? $this->driverTrip()->boxes()->whereKey($id)->first() : null;
+        if (! $box || $box->is_delivered) {
+            return;
+        }
+        $this->reset('whichIds', 'whichCode');
+        $this->boxId = $box->id;
+        $this->sheet = 'found';
     }
 
     /** The open box, re-checked to be on this driver's trip. */
@@ -152,9 +170,20 @@ class Dashboard extends BaseDashboard
             return;
         }
 
-        $box = $this->driverTrip()->boxes()->with('invdata')
+        $all = $this->driverTrip()->boxes()->with('invdata')
             ->where(fn ($q) => $q->where('invoice', $code)->orWhereHas('invdata', fn ($r) => $r->where('invoice', $code)))
-            ->latest('id')->first();
+            ->latest('id')->get();
+        $open = $all->reject(fn ($b) => $b->is_delivered);
+        if ($open->count() > 1) {
+            // two boxes with this number on the truck: the driver picks the receiver on the sticker (board 57)
+            $this->whichIds = $open->pluck('id')->map(fn ($i) => (int) $i)->values()->all();
+            $this->whichCode = $code;
+            $this->sheet = 'which';
+            $this->dispatch('driver-app-buzz', ok: true);
+
+            return;
+        }
+        $box = $open->first() ?? $all->first();
 
         if (! $box) {
             $this->wrongText = "{$code} is not on your truck. Keep it aside and tell the office.";
@@ -180,7 +209,16 @@ class Dashboard extends BaseDashboard
     {
         $box = $this->driverTrip()->boxes()->find($id);
         if ($box) {
-            $this->scan($box->invoice);
+            // straight to this box, even when another box shares its number
+            $this->closeSheet();
+            $this->screen = 'scan';
+            if ($box->is_delivered) {
+                $this->scan($box->invoice);
+
+                return;
+            }
+            $this->boxId = $box->id;
+            $this->sheet = 'found';
         }
     }
 
@@ -500,6 +538,10 @@ class Dashboard extends BaseDashboard
         $trip = $this->driverTrip();
         $has = (bool) $trip->trip;
         $box = $this->box();
+        $which = $this->sheet === 'which' && $this->whichIds
+            ? $this->driverTrip()->boxes()->with('invdata.container:id,container_no,batch_no')->whereIn('id', $this->whichIds)->get()
+                ->map(fn ($t) => ['id' => $t->id] + ($t->invdata ? \App\Support\Boxes\SameNumber::choice($t->invdata) : ['name' => $t->invoice, 'place' => '', 'sender' => '', 'container' => '']))->all()
+            : [];
 
         $household = null;
         if ($box?->invdata) {
@@ -513,6 +555,7 @@ class Dashboard extends BaseDashboard
         $prog = $has ? $trip->progress() : null; // once per tap
 
         return [
+            'which' => $which,
             'trip' => $trip->trip,
             'stage' => $stage,
             'canTake' => $canTake = ($stage === 'ready' || ($stage === 'loading' && (\App\Support\Trips\TripLock::autoOnTake() && \App\Support\Trips\TripLock::isReady($trip->trip))))

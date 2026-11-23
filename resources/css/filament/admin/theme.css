@@ -5154,3 +5154,25 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__frame { top: 17%; transform: translate(-50%, -50%) scale(.85); }
 .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-pk__msg { top: 5.4rem; }
 .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-pk__next { display: none; }
+
+/* Same number on two boxes (board 57): pick the receiver */
+.ds-which { gap: 0.6rem; }
+.ds-which__head { display: flex; align-items: center; gap: 0.6rem; }
+.ds-which__head > span:first-child { width: 2.3rem; height: 2.3rem; flex: none; border-radius: 50%; display: grid; place-items: center; background: #ffd24d; color: #0a1219; font-weight: 900; }
+.ds-which__head > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.ds-which__head strong { color: #ffd24d; font-size: 1.05rem; }
+.ds-which__head small { color: #c8d3dc; font-size: 0.82rem; }
+.ds-which__opt { display: flex; align-items: center; gap: 0.75rem; width: 100%; padding: 0.85rem 0.95rem; border-radius: 1rem; text-align: left; color: #fff; background: rgb(255 255 255 / .06); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .1); }
+.ds-which__opt:active { transform: scale(.98); }
+.ds-which__opt > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ds-which__opt strong { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.01em; }
+.ds-which__opt small { color: #c8d3dc; font-size: 0.82rem; }
+.ds-which__opt em { font-style: normal; color: #8fa2b0; font-size: 0.75rem; }
+.ds-which__opt > b { color: #9fb0bc; font-size: 1.4rem; }
+.ds-ws__same { margin: 0.4rem 0 0.2rem; padding: 0.45rem 0.7rem; border-radius: 0.6rem; background: #fff6db; color: #7a5300; font-weight: 700; font-size: 0.85rem; }
+.dark .ds-ws__same { background: rgb(255 210 77 / .14); color: #ffd24d; }
+.ds-ws__result + .ds-ws__result { margin-top: 0.45rem; }
+/* Search Invoices: delivered rows greyed, shared numbers flagged (board 57) */
+.fi-ta-row.ds-row-delivered > td { opacity: .5; }
+.fi-ta-row.ds-row-delivered:hover > td { opacity: .8; }
+.ds-same-no .fi-ta-text-description, .ds-same-no p:last-child { color: #b45309 !important; font-weight: 700; }

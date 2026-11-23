@@ -26,7 +26,7 @@ class InvoiceLookup
 
         return Tripinvoice::query()
             ->where('invoice', $code)
-           // ->where('is_delivered',false)
+            ->orderByRaw('coalesce(is_delivered, 0) asc') // a box not delivered first: two boxes can share a number (board 57)
             ->latest('id') // newest trip first, if the same invoice was on several trips
             ->first();
     }

@@ -229,16 +229,22 @@ class Picking
     public static function scan(Deliverylog $trip, User $u, string $code): array
     {
         $code = trim($code);
-        $row = static::rows($trip)->with('invdata')->where('invoice', $code)->first();
+        // two boxes with this number on the trip: the one not picked yet first (board 57)
+        $row = static::rows($trip)->with('invdata')->where('invoice', $code)->orderByRaw('case when picked_at is null then 0 else 1 end')->first();
+        $same = $row ? static::rows($trip)->where('invoice', $code)->count() : 0;
         if (! $row) {
-            $any = Tripinvoice::with('invdata')->where('invoice', $code)->latest('id')->first();
+            $any = Tripinvoice::with('invdata')->where('invoice', $code)->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))->latest('id')->first();
             $other = $any ? Deliverylog::whereKey($any->deliveryloghub_id ?: $any->deliverylog_id)->value('trip_number') : null;
-            $inv = $any?->invdata ?? Invoice::with('whSection')->where('invoice', $code)->first();
+            $inv = $any?->invdata ?? \App\Support\Boxes\SameNumber::best($code);
             $sec = $inv?->whSection;
             static::log($trip, $u, $code, 'wrong', $other ? 'is for '.$other : 'not on this trip');
 
             return ['status' => 'danger', 'tone' => 'bad', 'title' => '✕ Not for '.$trip->trip_number.' · put it back', 'invoice' => $inv, 'undo' => null,
                 'why' => ($other ? 'It is for '.$other.'. ' : 'It is not on this trip. ').($sec ? 'Put it back in section '.$sec->code.'.' : 'Put it back where it was.').' Nothing changed.'];
+        }
+        if ($row->picked_at && $same > 1) {
+            return ['status' => 'warning', 'tone' => 'warn', 'invoice' => $row->invdata, 'undo' => null,
+                'title' => "Already picked: all {$same} with this number", 'why' => "This trip has {$same} boxes with number {$code} and all are picked. Leave this one."];
         }
         if ($row->picked_at) {
             $who = (int) $row->picked_by === $u->id ? null : User::whereKey($row->picked_by)->value('first_name');
@@ -262,6 +268,13 @@ class Picking
             return ['status' => 'success', 'tone' => 'warn', 'invoice' => $inv, 'undo' => $row->id,
                 'title' => 'Picked · combo '.($size - $left->count()).' of '.$size,
                 'why' => ($inv->receiver_name ?: 'Same receiver').': '.$left->count().' more · '.$left->map(fn ($r) => $r->invoice.' in '.($r->invdata?->whSpot?->code ?? ($r->invdata?->whSection ? 'section '.$r->invdata->whSection->code : 'no section')))->join(', ')];
+        }
+
+        if ($same > 1) {
+            $done = static::rows($trip)->where('invoice', $code)->whereNotNull('picked_at')->count();
+
+            return ['status' => 'success', 'tone' => $done < $same ? 'warn' : 'ok', 'invoice' => $inv, 'undo' => $row->id,
+                'title' => "Picked · {$done} of {$same} with this number", 'why' => $done < $same ? "Another box has number {$code} on this trip: pick it too." : "Both boxes with number {$code} are picked."];
         }
 
         return ['status' => 'success', 'tone' => 'ok', 'invoice' => $inv, 'undo' => $row->id,

@@ -125,14 +125,17 @@ abstract class LoadTripPage extends Page
             return;
         }
 
+        // two boxes with this number on the trip: the one not loaded yet first (board 57)
         $tripinvoice = Tripinvoice::with('invdata')
             ->where($this->tripColumn(), $trip->id)
             ->where('invoice', $code)
+            ->orderByRaw('coalesce('.$this->loadedColumn().', 0) asc')
             ->latest('id')
             ->first();
+        $sameOnTrip = $tripinvoice ? Tripinvoice::where($this->tripColumn(), $trip->id)->where('invoice', $code)->count() : 0;
 
         $this->bypass = null;
-        $box = $tripinvoice?->invdata ?? Invoice::where('invoice', $code)->where('is_delivered', false)->latest('id')->first();
+        $box = $tripinvoice?->invdata ?? \App\Support\Boxes\SameNumber::best($code, Auth::user()?->warehouse_id);
         // Truck full: the box does not fit in the truck's space (only for trucks with a space set).
         if ($box && ! static::$atHub && ! $tripinvoice?->{$this->loadedColumn()} && ($full = \App\Support\Trips\TripSpace::overFull($trip, $box))
             && ! $this->skips('truck_full', $trip->id, $box->id)) {
@@ -152,7 +155,7 @@ abstract class LoadTripPage extends Page
             if ($joined) {
                 $tripinvoice = $joined;
             } elseif ($why === 'other-city') {
-                $inv = Invoice::where('invoice', $code)->latest('id')->first();
+                $inv = \App\Support\Boxes\SameNumber::best($code);
                 $place = \Illuminate\Support\Str::title(trim($inv?->receiver_city.', '.$inv?->receiver_province, ', '));
                 $this->early = null;
                 $this->wrongHub = ['kind' => 'city', 'code' => $code, 'for' => $place, 'section' => $inv?->whSection?->code ?? '—', 'color' => $inv?->whSection?->color,
@@ -163,7 +166,7 @@ abstract class LoadTripPage extends Page
                 return;
             } elseif (is_string($why) && str_starts_with($why, 'hub:')) {
                 // the box goes to a partner hub, or is ours while this trip goes to a hub
-                $inv = Invoice::where('invoice', $code)->latest('id')->first();
+                $inv = \App\Support\Boxes\SameNumber::best($code);
                 $hubId = (int) substr($why, 4);
                 $place = \Illuminate\Support\Str::title(trim($inv?->receiver_city.', '.$inv?->receiver_province, ', '));
                 $goes = $hubId ? \App\Support\Hubs\HubAreas::name($hubId) : 'our own trucks (direct to the customer)';
@@ -194,6 +197,7 @@ abstract class LoadTripPage extends Page
         if (! $tripinvoice) {
             $elsewhere = Tripinvoice::with(['deliverylog:id,trip_number', 'invdata'])
                 ->where('invoice', $code)
+                ->where(fn ($q) => $q->where('is_delivered', false)->orWhereNull('is_delivered'))
                 ->latest('id')
                 ->first();
 
@@ -217,7 +221,7 @@ abstract class LoadTripPage extends Page
         if ($tripinvoice->{$this->loadedColumn()}) {
             $who = $tripinvoice->loaded_by && $tripinvoice->loaded_by !== Auth::id() ? User::find($tripinvoice->loaded_by)?->first_name : null;
             $when = $tripinvoice->loaded_at ? \Illuminate\Support\Carbon::parse($tripinvoice->loaded_at)->format('g:i A') : null;
-            $this->scanResult('warning', "{$code} was already loaded".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $tripinvoice->invdata);
+            $this->scanResult('warning', $sameOnTrip > 1 ? "Already loaded: all {$sameOnTrip} boxes with number {$code} are on the truck. Leave this one." : "{$code} was already loaded".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $tripinvoice->invdata);
 
             return;
         }
@@ -251,7 +255,8 @@ abstract class LoadTripPage extends Page
             $this->setInfo = BoxSets::onTrip($tripinvoice->invdata, $trip, $this->tripColumn(), $this->loadedColumn());
         }
 
-        $this->scanResult('success', "{$code} loaded.", $tripinvoice->invdata);
+        $done = $sameOnTrip > 1 ? Tripinvoice::where($this->tripColumn(), $trip->id)->where('invoice', $code)->where($this->loadedColumn(), true)->count() : 0;
+        $this->scanResult('success', "{$code} loaded".\App\Support\Boxes\SameNumber::suffix($done, $sameOnTrip).($sameOnTrip > $done && $sameOnTrip > 1 ? ': scan the other one too' : '').'.', $tripinvoice->invdata);
     }
 
     /** The box's section is for another partner hub than the one this trip goes to. */
