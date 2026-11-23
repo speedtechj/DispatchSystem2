@@ -5023,11 +5023,6 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 @media (max-width: 900px) { .ds-pg__head { display: none; } .ds-pg__row { grid-template-columns: 1fr; } }
 
 /* Pick boxes: a shorter camera, the pick list under it */
-.ds-sa__scan.is-pick { display: flex; flex-direction: column; padding-bottom: 2rem; }
-.ds-sa__scan.is-pick .ds-sa__cam { position: relative; inset: auto; height: 50dvh; min-height: 22rem; flex: none; }
-.ds-sa__scan.is-pick .ds-sa__frame { top: 42%; height: min(30vw, 7rem); }
-.ds-sa__scan.is-pick > :not(.ds-sa__cam):not(.ds-sa__bar):not(.ds-sa__sheet) { margin: 0.75rem 1rem 0; }
-.ds-sa__scan.is-pick .ds-sa__camtext, .ds-sa__scan.is-pick .ds-sa__camtext.is-error, .ds-sa__scan.is-pick .ds-sa__camtext.is-hint { top: 5.6rem; }
 
 /* Scan app and Driver app camera (board 51): wide frame for the stickers, camera off, dark, hard to read, photos */
 .ds-sa__cam .ds-sa__frame { width: min(86vw, 21rem); height: min(30vw, 7.5rem); }
@@ -5116,3 +5111,34 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sh__opening { position: fixed; inset: 0; z-index: 60; flex-direction: column; gap: 0.7rem; padding: calc(env(safe-area-inset-top) + 5.5rem) 1rem 1rem; background: #0b1620; }
 .ds-sh__opening i { display: block; height: 5.2rem; border-radius: 1.25rem; background: rgb(255 255 255 / .05); animation: ds-skel 1.2s ease-in-out infinite; }
 .ds-sh__opening small { color: var(--sa-muted); text-align: center; }
+
+/* Pick boxes (board 55): full-screen camera, next box on it, short messages, the list in a pull-up sheet */
+.ds-sa__scan.is-pick .ds-sa__controls { bottom: calc(env(safe-area-inset-bottom) + 7.4rem); transition: bottom .25s; }
+.ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__controls { bottom: calc(62dvh + 0.5rem); }
+.ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__frame { top: 22%; }
+.ds-pk__next { position: absolute; left: 1rem; top: calc(env(safe-area-inset-top) + 5.2rem); z-index: 3; max-width: calc(100% - 2rem); height: 1.9rem; padding: 0 0.8rem; border-radius: 999px; display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 800; color: #9ef0e6; background: rgb(46 196 182 / .22); backdrop-filter: blur(6px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-pk__toast { position: absolute; left: 1rem; right: 1rem; top: 46%; z-index: 6; display: flex; align-items: center; gap: 0.6rem; padding: 0.75rem 0.9rem; border-radius: 1rem; color: #0a1219; box-shadow: 0 16px 30px -16px rgb(0 0 0 / .6); }
+.ds-pk__toast.is-ok { background: #34c38f; }
+.ds-pk__toast.is-warn { background: #f3c98a; }
+.ds-pk__toast.is-bad { background: #ff8a7e; }
+.ds-pk__toast > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ds-pk__toast b { font-size: 1rem; font-weight: 900; }
+.ds-pk__toast small { font-size: 0.8rem; font-weight: 700; }
+.ds-pk__toast button { flex: none; height: 2.2rem; padding: 0 0.8rem; border-radius: 0.7rem; background: rgb(10 18 25 / .85); color: #fff; font-weight: 800; font-size: 0.8rem; }
+.ds-pk__sheet2 { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; flex-direction: column; max-height: 62dvh; padding-bottom: env(safe-area-inset-bottom); border-radius: 1.5rem 1.5rem 0 0; background: #0f1d27; box-shadow: 0 -16px 40px rgb(0 0 0 / .45); }
+.ds-pk__sheet2.is-open { height: 62dvh; }
+.ds-pk__peek { display: flex; flex-direction: column; gap: 0.5rem; width: 100%; padding: 0.5rem 1rem 0.8rem; text-align: left; color: #fff; }
+.ds-pk__peek .ds-sa__grab { align-self: center; }
+.ds-pk__peekrow { display: flex; align-items: center; gap: 0.6rem; }
+.ds-pk__peekrow > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ds-pk__peekrow b { font-size: 0.95rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-pk__peekrow small { color: #9fb0bc; font-size: 0.8rem; }
+.ds-pk__peekrow em { flex: none; font-style: normal; height: 2rem; padding: 0 0.8rem; border-radius: 999px; background: rgb(255 255 255 / .1); display: inline-flex; align-items: center; font-weight: 800; font-size: 0.82rem; }
+.ds-pk__peek .ds-pk__bar i { background: #2ec4b6; }
+.ds-pk__goload { margin: 0 1rem 0.8rem; }
+.ds-pk__sheet2 .ds-pk__list { flex: 1; overflow-y: auto; padding: 0.2rem 1rem 1rem; }
+@media (min-width: 700px) { .ds-pk__sheet2 { left: 50%; right: auto; width: 34rem; transform: translateX(-50%); } }
+.ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__type, .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-cx__cam { display: none; }
+.ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__frame { top: 17%; transform: translate(-50%, -50%) scale(.85); }
+.ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-pk__toast { top: 5.4rem; }
+.ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-pk__next { display: none; }

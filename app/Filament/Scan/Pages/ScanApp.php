@@ -745,7 +745,7 @@ class ScanApp extends Page
             'receiveResult' => $receiveResult,
             'topUp' => $topUp,
             'extrasReady' => $this->extrasReady || $this->screen !== 'scan',
-            'paused' => $this->screen === 'scan' && (($this->status !== null && ($this->status !== 'success' || $this->photosOn())) || $this->bypass !== null),
+            'paused' => $this->screen === 'scan' && $this->mode !== 'pick' && (($this->status !== null && ($this->status !== 'success' || $this->photosOn())) || $this->bypass !== null),
             'cityTopUp' => $this->extrasReady && $this->mode === 'load' && $this->choice && empty($this->topUpSkipped[(int) $this->choice]) && ($st = $this->station()) && method_exists($st, 'cityTopUp')
                 ? (function () use ($st) {
                     $st->data['deliverylog_id'] = $this->choice;

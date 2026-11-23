@@ -84,7 +84,7 @@ it('lets a picker take a trip with no picker in the Scan app, and scan there', f
 
     $lw = Livewire::test(ScanApp::class)->call('open', 'pick')->assertSet('screen', 'pick')
         ->assertSee('Take this trip')->assertSee('PK1')->assertDontSee('PK2');
-    $lw->call('takeTrip', $this->trip->id)->assertSet('screen', 'scan')->assertSee('Section C');
+    $lw->call('takeTrip', $this->trip->id)->assertSet('screen', 'scan')->assertSee('Section C')->assertSee('Next: Section C')->assertSee('List ˄')->assertSee('4 left in all');
     expect(Picking::isPicker($this->trip, $this->ben))->toBeTrue()
         ->and(Picking::take($this->trip, $this->carla))->toBeFalse(); // already taken
 

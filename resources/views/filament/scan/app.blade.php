@@ -203,40 +203,63 @@
 
             @if ($this->mode === 'pick')
                 @php($allPicked = ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total'])
+                @php($nextGroup = collect($pickGroups)->first(fn ($g) => collect($g['boxes'])->contains(fn ($b) => ! $b['picked'] && ! $b['missing'])))
+                @php($nextBox = $nextGroup ? collect($nextGroup['boxes'])->first(fn ($b) => ! $b['picked'] && ! $b['missing']) : null)
+                @php($hereLeft = $nextGroup ? collect($nextGroup['boxes'])->filter(fn ($b) => ! $b['picked'] && ! $b['missing'])->count() : 0)
+                @php($allLeft = max(0, ($progress['total'] ?? 0) - ($progress['loaded'] ?? 0)))
+                {{-- board 55: the next box on the camera, a short message after each scan, the list in a pull-up sheet --}}
+                @if ($nextBox)
+                    <span class="ds-pk__next" wire:key="pk-next-{{ $nextBox['id'] }}">Next: {{ \Illuminate\Support\Str::before($nextGroup['name'], ' · ') }} · {{ $nextBox['code'] }}</span>
+                @endif
                 @if ($pickResult)
-                    <div @class(['ds-sa__sheet', 'ds-pk__sheet', 'is-ok' => $pickResult['tone'] === 'ok', 'is-warn' => $pickResult['tone'] === 'warn', 'is-bad' => $pickResult['tone'] === 'bad']) wire:key="pk-{{ $sessionScans }}-{{ md5($pickResult['title'].$pickResult['code']) }}">
-                        <span class="ds-sa__grab"></span>
-                        <span class="ds-pk__hit"><b>{{ $pickResult['code'] ? 'Box '.$pickResult['code'] : '' }}</b><small>{{ ! empty($pickResult['spot']) ? 'Spot '.$pickResult['spot'] : (! empty($pickResult['section']) ? 'Section '.$pickResult['section'] : '') }}</small></span>
-                        <strong>{{ $pickResult['title'] }}</strong>
-                        <p class="ds-sa__msg">{{ $pickResult['why'] }}</p>
+                    <div @class(['ds-pk__toast', 'is-ok' => $pickResult['tone'] === 'ok', 'is-warn' => $pickResult['tone'] === 'warn', 'is-bad' => $pickResult['tone'] === 'bad'])
+                         wire:key="pk-{{ $sessionScans }}-{{ md5($pickResult['title'].$pickResult['code']) }}"
+                         x-data="{ on: true }" x-init="setTimeout(() => on = false, {{ $pickResult['tone'] === 'bad' ? 6000 : 3500 }})" x-show="on" x-transition.opacity>
+                        <span><b>{{ $pickResult['title'] }}</b><small>{{ $pickResult['code'] ? $pickResult['code'].' · ' : '' }}{{ $pickResult['why'] }}</small></span>
                         @if ($pickResult['undo'])
-                            <button type="button" class="ds-pk__undo" wire:click="undoPick({{ $pickResult['undo'] }})">↶ Undo: I picked this by mistake</button>
+                            <button type="button" wire:click="undoPick({{ $pickResult['undo'] }})">↶ Undo</button>
                         @endif
-                        <button type="button" class="ds-sa__primary" wire:click="dismiss">Scan next box</button>
                     </div>
                 @endif
-                @if ($allPicked)
-                    <div class="ds-pk__ready"><b>✓ All {{ $progress['total'] }} boxes picked</b><span>Ready to load. Bring them to the truck.</span>
-                        <button type="button" class="ds-sa__primary" wire:click="goLoad">Go to Load truck</button></div>
-                @endif
-                <div class="ds-pk__list" wire:poll.6s.visible>
-                    @foreach ($pickGroups as $g)
-                        <div class="ds-pk__group" wire:key="pg-{{ md5($g['name']) }}">
-                            <span class="ds-pk__gh"><b><i style="background: {{ $g['color'] }}"></i>{{ $g['name'] }}</b><small @class(['is-done' => $g['done'] >= $g['total']])>{{ $g['done'] }} of {{ $g['total'] }}</small></span>
-                            <span class="ds-pk__boxes">
-                                @foreach ($g['boxes'] as $b)
-                                    @if ($b['picked'])
-                                        <span @class(['ds-pk__box', 'is-picked', 'is-mine' => $b['byId'] === auth()->id()]) title="Picked by {{ $b['by'] }}">✓ {{ $b['code'] }}<small>{{ $b['byId'] === auth()->id() ? 'you' : $b['by'] }}</small></span>
-                                    @elseif ($b['missing'])
-                                        <span class="ds-pk__box is-missing" title="Not found by {{ $b['missBy'] }}">? {{ $b['code'] }}<small>not found</small></span>
-                                    @else
-                                        <button type="button" @class(['ds-pk__box', 'is-combo' => $b['combo']]) wire:click="notFound({{ $b['id'] }})" wire:confirm="Can't find {{ $b['code'] }} in its place? Mark it not found.">{{ $b['code'] }}@if ($b['combo'])<small>combo</small>@endif</button>
-                                    @endif
-                                @endforeach
+                <div class="ds-pk__sheet2" x-data="{ open: false }" x-bind:class="{ 'is-open': open }" wire:key="pk-sheet" wire:poll.6s.visible>
+                    <button type="button" class="ds-pk__peek" x-on:click="open = ! open">
+                        <span class="ds-sa__grab"></span>
+                        <span class="ds-pk__peekrow">
+                            <span>
+                                @if ($allPicked)
+                                    <b>✓ All {{ $progress['total'] }} boxes picked</b><small>Bring them to the truck</small>
+                                @elseif ($nextGroup)
+                                    <b>Next: {{ $nextGroup['name'] }}</b><small>{{ $hereLeft }} {{ \Illuminate\Support\Str::plural('box', $hereLeft) }} here · {{ $allLeft }} left in all</small>
+                                @else
+                                    <b>{{ $allLeft }} left</b><small>The rest are marked not found</small>
+                                @endif
                             </span>
-                        </div>
-                    @endforeach
-                    <small class="ds-pk__foot">Scan each box you take. Tap a box you cannot find to mark it not found. Every phone on this trip sees the same list.</small>
+                            <em x-text="open ? 'Hide ˅' : 'List ˄'">List ˄</em>
+                        </span>
+                        <span class="ds-pk__bar"><i style="width: {{ ($progress['total'] ?? 0) ? round(($progress['loaded'] ?? 0) / $progress['total'] * 100) : 0 }}%"></i></span>
+                    </button>
+                    @if ($allPicked)
+                        <button type="button" class="ds-sa__primary ds-pk__goload" wire:click="goLoad">Go to Load truck</button>
+                    @endif
+                    <div class="ds-pk__list" x-show="open" x-cloak>
+                        @foreach ($pickGroups as $g)
+                            <div class="ds-pk__group" wire:key="pg-{{ md5($g['name']) }}">
+                                <span class="ds-pk__gh"><b><i style="background: {{ $g['color'] }}"></i>{{ $g['name'] }}</b><small @class(['is-done' => $g['done'] >= $g['total']])>{{ $g['done'] }} of {{ $g['total'] }}</small></span>
+                                <span class="ds-pk__boxes">
+                                    @foreach ($g['boxes'] as $b)
+                                        @if ($b['picked'])
+                                            <span @class(['ds-pk__box', 'is-picked', 'is-mine' => $b['byId'] === auth()->id()]) title="Picked by {{ $b['by'] }}">✓ {{ $b['code'] }}<small>{{ $b['byId'] === auth()->id() ? 'you' : $b['by'] }}</small></span>
+                                        @elseif ($b['missing'])
+                                            <span class="ds-pk__box is-missing" title="Not found by {{ $b['missBy'] }}">? {{ $b['code'] }}<small>not found</small></span>
+                                        @else
+                                            <button type="button" @class(['ds-pk__box', 'is-combo' => $b['combo']]) wire:click="notFound({{ $b['id'] }})" wire:confirm="Can't find {{ $b['code'] }} in its place? Mark it not found.">{{ $b['code'] }}@if ($b['combo'])<small>combo</small>@endif</button>
+                                        @endif
+                                    @endforeach
+                                </span>
+                            </div>
+                        @endforeach
+                        <small class="ds-pk__foot">Scan each box you take. Tap a box you cannot find to mark it not found. Every phone on this trip sees the same list.</small>
+                    </div>
                 </div>
             @elseif ($bypass)
                 <div class="ds-sa__sheet is-warn" wire:key="bypass-{{ $bypass['code'] }}">
