@@ -106,6 +106,9 @@ class ScanApp extends Page
     /** Load next, space, "Room for more": loaded right after the scan screen shows (board 51). */
     public bool $extrasReady = false;
 
+    /** Pick boxes: a number per scan, so the same message twice still shows again. */
+    public int $pickSeq = 0;
+
     /** Pick boxes: the last result (title, why, tone, undo). */
     public ?array $pickResult = null;
 
@@ -584,6 +587,9 @@ class ScanApp extends Page
         $this->wrongHub = property_exists($station, 'wrongHub') ? $station->wrongHub : null;
         $this->hubTrip = property_exists($station, 'hubTrip') ? $station->hubTrip : null;
         $this->pickResult = property_exists($station, 'pick') ? $station->pick : null;
+        if ($this->mode === 'pick') {
+            $this->pickSeq++;
+        }
 
         if ($this->status === 'success') {
             if ($this->invoiceId && $this->photosOn()) {

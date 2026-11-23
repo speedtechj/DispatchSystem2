@@ -212,12 +212,33 @@
                     <span class="ds-pk__next" wire:key="pk-next-{{ $nextBox['id'] }}">Next: {{ \Illuminate\Support\Str::before($nextGroup['name'], ' · ') }} · {{ $nextBox['code'] }}</span>
                 @endif
                 @if ($pickResult)
-                    <div @class(['ds-pk__toast', 'is-ok' => $pickResult['tone'] === 'ok', 'is-warn' => $pickResult['tone'] === 'warn', 'is-bad' => $pickResult['tone'] === 'bad'])
-                         wire:key="pk-{{ $sessionScans }}-{{ md5($pickResult['title'].$pickResult['code']) }}"
-                         x-data="{ on: true }" x-init="setTimeout(() => on = false, {{ $pickResult['tone'] === 'bad' ? 6000 : 3500 }})" x-show="on" x-transition.opacity>
-                        <span><b>{{ $pickResult['title'] }}</b><small>{{ $pickResult['code'] ? $pickResult['code'].' · ' : '' }}{{ $pickResult['why'] }}</small></span>
-                        @if ($pickResult['undo'])
-                            <button type="button" wire:click="undoPick({{ $pickResult['undo'] }})">↶ Undo</button>
+                    {{-- board 56: dark glass; Picked goes small after 4 s (📌 Keep holds it); yellow and red stay until OK or the next scan --}}
+                    @php($tone = $pickResult['tone'])
+                    <div class="ds-pk__msg" wire:key="pk-msg-{{ $pickSeq }}"
+                         x-data="{ on: true, small: false, pinned: false, left: 4000, sticky: @js($tone !== 'ok') }"
+                         x-init="window.dsResultSound && window.dsResultSound(@js($tone)); if (! sticky) { const t = setInterval(() => { if (pinned) return; left -= 250; if (left <= 0) { clearInterval(t); small = true; } }, 250); }">
+                        <div @class(['ds-pk__toast', 'is-ok' => $tone === 'ok', 'is-warn' => $tone === 'warn', 'is-bad' => $tone === 'bad']) x-show="on && ! small" x-transition.opacity>
+                            <span class="ds-pk__sign">{{ $tone === 'ok' ? '✓' : ($tone === 'bad' ? '✕' : '!') }}</span>
+                            <span class="ds-pk__words"><b>{{ preg_replace('/^✕\s*/u', '', $pickResult['title']) }}</b><small>{{ $pickResult['code'] ? $pickResult['code'].' · ' : '' }}{{ $pickResult['why'] }}</small></span>
+                            @if ($pickResult['undo'])
+                                <button type="button" class="ds-pk__undo2" wire:click="undoPick({{ $pickResult['undo'] }})">↶ Undo</button>
+                            @endif
+                            @if ($tone !== 'ok')
+                                <button type="button" class="ds-pk__ok" x-on:click="on = false">OK</button>
+                            @endif
+                        </div>
+                        <div class="ds-pk__after" x-show="on && ! small">
+                            <template x-if="! sticky && ! pinned"><span class="ds-pk__timer"><i x-bind:style="'width:' + (left / 40) + '%'"></i></span></template>
+                            <small x-text="sticky ? 'Stays until the next scan or OK' : (pinned ? 'Kept on screen' : 'Goes small in 4 s')"></small>
+                            <template x-if="! sticky"><button type="button" x-on:click="pinned = ! pinned" x-text="pinned ? 'Let it go' : '📌 Keep'"></button></template>
+                        </div>
+                        @if ($tone === 'ok')
+                            <span class="ds-pk__last" x-show="on && small" x-cloak>
+                                <b>Last: {{ $pickResult['code'] }} ✓</b>
+                                @if ($pickResult['undo'])
+                                    <button type="button" wire:click="undoPick({{ $pickResult['undo'] }})">↶ Undo</button>
+                                @endif
+                            </span>
                         @endif
                     </div>
                 @endif

@@ -68,6 +68,32 @@
         } catch (e) {}
     }
 
+    /*
+     * After the answer of a scan (board 56): ok = nothing more (the scan beeped already),
+     * warn = 2 beeps, bad = 3 low beeps and a long buzz, so the crew knows without looking.
+     */
+    window.dsResultSound = function (kind) {
+        try {
+            if (kind === 'ok') return;
+            audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+            const n = kind === 'bad' ? 3 : 2;
+            const freq = kind === 'bad' ? 420 : 880;
+            for (let i = 0; i < n; i++) {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.value = freq;
+                gain.gain.value = 0.09;
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                const t = audioCtx.currentTime + i * 0.18;
+                osc.start(t);
+                osc.stop(t + 0.11);
+            }
+            if (navigator.vibrate) navigator.vibrate(kind === 'bad' ? [120, 80, 120, 80, 500] : [90, 70, 90]);
+        } catch (e) {}
+    };
+
     function describeError(e) {
         const name = (e && e.name) || '';
         const msg = String((e && (e.message || e)) || '');

@@ -142,5 +142,7 @@ it('shows the start screen at once, then the to-do counts and Continue (board 54
 it('keeps the text of the Pick boxes messages readable on every colour', function () {
     // a general ".ds-sa .is-bad" rule once made the text the same pink as the message box
     expect(file_get_contents(resource_path('css/filament/admin/theme.css')))
-        ->toContain('.ds-sa .ds-pk__toast.is-ok, .ds-sa .ds-pk__toast.is-warn, .ds-sa .ds-pk__toast.is-bad { color: #0a1219; }');
+        ->toContain('.ds-sa .ds-pk__toast.is-bad { --c: #ff8a80; color: #fff; }')       // dark glass, white words (board 56)
+        ->toContain('background: rgb(10 18 25 / .8)');
+    expect(file_get_contents(resource_path('js/barcode-scanner.js')))->toContain('window.dsResultSound');
 });

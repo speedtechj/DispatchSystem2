@@ -5117,16 +5117,26 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__controls { bottom: calc(62dvh + 0.5rem); }
 .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__frame { top: 22%; }
 .ds-pk__next { position: absolute; left: 1rem; top: calc(env(safe-area-inset-top) + 5.2rem); z-index: 3; max-width: calc(100% - 2rem); height: 1.9rem; padding: 0 0.8rem; border-radius: 999px; display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 800; color: #9ef0e6; background: rgb(46 196 182 / .22); backdrop-filter: blur(6px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ds-pk__toast { position: absolute; left: 1rem; right: 1rem; top: 46%; z-index: 6; display: flex; align-items: center; gap: 0.6rem; padding: 0.75rem 0.9rem; border-radius: 1rem; color: #0a1219; box-shadow: 0 16px 30px -16px rgb(0 0 0 / .6); }
-/* dark text on every colour: a general .ds-sa .is-bad rule made the text the same pink as the box */
-.ds-sa .ds-pk__toast.is-ok, .ds-sa .ds-pk__toast.is-warn, .ds-sa .ds-pk__toast.is-bad { color: #0a1219; }
-.ds-pk__toast.is-ok { background: #34c38f; }
-.ds-pk__toast.is-warn { background: #f3c98a; }
-.ds-pk__toast.is-bad { background: #ff8a7e; }
-.ds-pk__toast > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.ds-pk__toast b { font-size: 1rem; font-weight: 900; }
-.ds-pk__toast small { font-size: 0.8rem; font-weight: 700; }
-.ds-pk__toast button { flex: none; height: 2.2rem; padding: 0 0.8rem; border-radius: 0.7rem; background: rgb(10 18 25 / .85); color: #fff; font-weight: 800; font-size: 0.8rem; }
+/* board 56: dark glass messages; only the title, the sign and the edge have the colour */
+.ds-pk__msg { position: absolute; left: 1rem; right: 1rem; top: 46%; z-index: 6; display: flex; flex-direction: column; gap: 0.4rem; pointer-events: none; }
+.ds-pk__msg > * { pointer-events: auto; }
+.ds-sa .ds-pk__toast { --c: #5be3a8; display: flex; align-items: center; gap: 0.6rem; padding: 0.75rem 0.75rem 0.75rem 0.85rem; border-radius: 1.1rem; color: #fff; background: rgb(10 18 25 / .8); -webkit-backdrop-filter: blur(14px) saturate(140%); backdrop-filter: blur(14px) saturate(140%); box-shadow: inset 3px 0 0 var(--c), inset 0 0 0 1px rgb(255 255 255 / .08), 0 16px 30px -18px rgb(0 0 0 / .55); }
+.ds-sa .ds-pk__toast.is-warn { --c: #ffd24d; color: #fff; }
+.ds-sa .ds-pk__toast.is-bad { --c: #ff8a80; color: #fff; }
+.ds-sa .ds-pk__toast.is-ok { color: #fff; }
+.ds-pk__sign { width: 2.2rem; height: 2.2rem; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--c); color: #0a1219; font-weight: 900; font-size: 1.05rem; }
+.ds-pk__words { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ds-pk__words b { font-size: 1.06rem; font-weight: 900; color: var(--c); }
+.ds-pk__words small { font-size: 0.8rem; font-weight: 600; color: rgb(255 255 255 / .92); }
+.ds-pk__undo2 { flex: none; height: 2.2rem; padding: 0 0.75rem; border-radius: 0.65rem; background: rgb(255 255 255 / .92); color: #0a1219; font-weight: 800; font-size: 0.8rem; }
+.ds-pk__ok { flex: none; height: 2.2rem; padding: 0 0.9rem; border-radius: 0.65rem; background: var(--c); color: #0a1219; font-weight: 900; font-size: 0.85rem; }
+.ds-pk__after { align-self: center; display: flex; align-items: center; gap: 0.5rem; }
+.ds-pk__after small { color: #fff; font-size: 0.7rem; font-weight: 800; text-shadow: 0 1px 2px rgb(0 0 0 / .6); }
+.ds-pk__after button { height: 1.6rem; padding: 0 0.6rem; border-radius: 999px; background: rgb(10 18 25 / .75); color: #fff; font-size: 0.7rem; font-weight: 800; }
+.ds-pk__timer { width: 3.5rem; height: 4px; border-radius: 9px; background: rgb(255 255 255 / .25); overflow: hidden; }
+.ds-pk__timer i { display: block; height: 100%; background: #5be3a8; transition: width .25s linear; }
+.ds-pk__last { position: fixed; left: 1rem; top: calc(env(safe-area-inset-top) + 7.6rem); display: inline-flex; align-items: center; gap: 0.5rem; height: 2rem; padding: 0 0.3rem 0 0.8rem; border-radius: 999px; background: rgb(10 18 25 / .8); box-shadow: inset 0 0 0 1px rgb(91 227 168 / .5); color: #5be3a8; font-size: 0.78rem; }
+.ds-pk__last button { height: 1.5rem; padding: 0 0.6rem; border-radius: 999px; background: rgb(255 255 255 / .9); color: #0a1219; font-weight: 800; font-size: 0.72rem; }
 .ds-pk__sheet2 { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; flex-direction: column; max-height: 62dvh; padding-bottom: env(safe-area-inset-bottom); border-radius: 1.5rem 1.5rem 0 0; background: #0f1d27; box-shadow: 0 -16px 40px rgb(0 0 0 / .45); }
 .ds-pk__sheet2.is-open { height: 62dvh; }
 .ds-pk__peek { display: flex; flex-direction: column; gap: 0.5rem; width: 100%; padding: 0.5rem 1rem 0.8rem; text-align: left; color: #fff; }
@@ -5142,5 +5152,5 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 @media (min-width: 700px) { .ds-pk__sheet2 { left: 50%; right: auto; width: 34rem; transform: translateX(-50%); } }
 .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__type, .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-cx__cam { display: none; }
 .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-sa__frame { top: 17%; transform: translate(-50%, -50%) scale(.85); }
-.ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-pk__toast { top: 5.4rem; }
+.ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-pk__msg { top: 5.4rem; }
 .ds-sa__scan.is-pick:has(.ds-pk__sheet2.is-open) .ds-pk__next { display: none; }
