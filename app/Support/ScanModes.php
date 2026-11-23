@@ -60,6 +60,34 @@ class ScanModes
     }
 
     /**
+     * Start screen (board 54): the group and colour of each scan's tile.
+     *
+     * @return array{group: string, color: string}
+     */
+    public static function look(string $key): array
+    {
+        $group = match ($key) {
+            'wh_load', 'wh_unload' => 'Between warehouses',
+            'port', 'ret_receive' => 'Port and hubs',
+            'count' => 'In the warehouse',
+            default => 'Daily work',
+        };
+        $color = match ($key) {
+            'unload', 'ship_receive' => '#f6be00',
+            'pick' => '#2ec4b6',
+            'load', 'hub_load' => '#5aa8ff',
+            'return' => '#f0a93b',
+            'wh_load', 'wh_unload' => '#a78bfa',
+            'port', 'truck_receive' => '#38bdf8',
+            'ret_receive' => '#fb7185',
+            'count' => '#34c38f',
+            default => '#9fb0bc',
+        };
+
+        return ['group' => $group, 'color' => $color];
+    }
+
+    /**
      * Camera settings of the Scan app and the Driver app (board 51): the box stickers and receipts are Code 39,
      * section and spot labels are QR. A number counts when it is read twice the same; no scan for 2 minutes turns
      * the camera off; after 3 s of unclear reads the crew can type the number.

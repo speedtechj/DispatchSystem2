@@ -14,35 +14,47 @@
                 <span class="ds-sa__avatar">{{ $initials }}</span>
             </header>
 
-            <div class="ds-sa__today">
-                <span class="ds-sa__ring">
-                    <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill" style="stroke-dashoffset: {{ $ring(min($today['scans'], 500), 500) }}"/></svg>
-                    <span><strong>{{ $today['scans'] }}</strong><small>today</small></span>
-                </span>
-                <dl>
-                    <dt>Boxes scanned</dt><dd>{{ number_format($today['scans']) }}</dd>
-                    <dt>Photos</dt><dd>{{ number_format($today['photos']) }}</dd>
-                    <dt>Problems</dt><dd class="is-bad">{{ $today['problems'] }}</dd>
-                </dl>
+            @if (! $homeReady)
+                <span class="hidden" wire:init="loadHome"></span>
+            @endif
+            @if ($resume)
+                <button type="button" class="ds-sh__resume" wire:click="continueLast">
+                    <span class="ds-sh__ring" style="--p: {{ $resume['pct'] }}"><b>{{ $resume['pct'] }}%</b></span>
+                    <span class="ds-sh__resumetext"><small>Continue · {{ $resume['label'] }}</small><strong>{{ $resume['name'] }}</strong><small>{{ $resume['done'] }} of {{ $resume['total'] }} done · {{ $resume['total'] - $resume['done'] }} left</small></span>
+                    <span class="ds-sh__go">Continue ›</span>
+                </button>
+            @endif
+            <div class="ds-sh__stats">
+                <span><b>{{ number_format($today['scans']) }}</b><small>scanned today</small></span>
+                <span><b>{{ number_format($today['photos']) }}</b><small>photos</small></span>
+                <span @class(['is-bad' => $today['problems'] > 0])><b>{{ $today['problems'] }}</b><small>{{ \Illuminate\Support\Str::plural('problem', $today['problems']) }}</small></span>
             </div>
-
             @if ($modes)
-                <p class="ds-sa__label">Start scanning</p>
-                <div class="ds-sa__list">
-                    @foreach ($modes as $key => $m)
-                        <button type="button" class="ds-sa__row" wire:click="open('{{ $key }}')">
-                            <span class="ds-sa__chip">@include('filament.scan.icon', ['name' => $m['icon']])</span>
-                            <span class="ds-sa__rowtext"><strong>{{ $m['label'] }}</strong><small>{{ $m['sub'] }}</small></span>
-                            @php($w = $waiting[$key] ?? 0)
-                            <span @class(['ds-sa__waiting', 'is-none' => ! $w])>{{ $w ? $w.' waiting' : 'All done' }}</span>
-                            <span class="ds-sa__chev" aria-hidden="true">›</span>
-                        </button>
-                    @endforeach
-                </div>
+                @php
+                    $tiles = collect($modes)->map(fn ($m, $key) => $m + ['key' => $key, 'n' => (int) ($waiting[$key] ?? 0)] + \App\Support\ScanModes::look($key));
+                    $groups = $tiles->groupBy('group');
+                    $groupOrder = ['Daily work', 'Between warehouses', 'Port and hubs', 'In the warehouse'];
+                    $groups = $groups->sortBy(fn ($g, $name) => array_search($name, $groupOrder, true));
+                @endphp
+                @foreach ($groups as $name => $group)
+                    <p class="ds-sa__label">{{ $name }}</p>
+                    <div class="ds-sh__grid">
+                        @foreach ($group->sortBy(fn ($t) => $homeReady && $t['n'] > 0 ? 0 : 1) as $t)
+                            <button type="button" @class(['ds-sh__tile', 'is-done' => $homeReady && ! $t['n']]) style="--c: {{ $t['color'] }}" wire:click="open('{{ $t['key'] }}')" wire:key="tile-{{ $t['key'] }}">
+                                <span class="ds-sh__chip">@include('filament.scan.icon', ['name' => $t['icon']])</span>
+                                <strong>{{ $t['label'] }}</strong>
+                                <small>{{ $t['sub'] }}</small>
+                                <span @class(['ds-sh__badge', 'is-wait' => ! $homeReady, 'is-on' => $homeReady && $t['n']])>{{ ! $homeReady ? '···' : ($t['n'] ? $t['n'].' to do' : '✓') }}</span>
+                            </button>
+                        @endforeach
+                    </div>
+                @endforeach
             @else
                 <div class="ds-sa__note">Your account can't scan here. Ask the office to set your account to Warehouse or Company.</div>
             @endif
-
+            <div class="ds-sh__opening" wire:loading.flex wire:target="open,continueLast">
+                <i></i><i></i><i></i><i></i><small>Opening…</small>
+            </div>
             <footer class="ds-sa__foot">
                 <span class="ds-sa__online"><i></i>Online · every scan is saved</span>
                 <span class="ds-sa__footlinks">

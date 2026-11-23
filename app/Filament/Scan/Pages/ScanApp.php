@@ -100,6 +100,9 @@ class ScanApp extends Page
     /** The chosen trip or container as shown in the bar (kept, so it is not looked up on every tap). */
     public ?array $targetInfo = null;
 
+    /** Start screen: the tiles show at once, the counts and Continue a moment later (board 54). */
+    public bool $homeReady = false;
+
     /** Load next, space, "Room for more": loaded right after the scan screen shows (board 51). */
     public bool $extrasReady = false;
 
@@ -230,11 +233,54 @@ class ScanApp extends Page
             return;
         }
         $this->targetInfo = ['id' => $id, 'name' => $target['name'] ?? '', 'sub' => $target['sub'] ?? null];
+        // for Continue on the start screen
+        cache()->put('scan-app.last.'.Auth::id(), ['mode' => $this->mode, 'choice' => $id, 'name' => $target['name'] ?? ''], now()->addHours(16));
         $this->extrasReady = false;
         $this->choice = $id;
         $this->returned = 0;
         $this->screen = 'scan';
         $this->clearResult();
+    }
+
+    /** Called by the start screen once it shows. */
+    public function loadHome(): void
+    {
+        $this->homeReady = true;
+    }
+
+    /** Continue: back to the job left unfinished. */
+    public function continueLast(): void
+    {
+        $last = cache()->get('scan-app.last.'.Auth::id());
+        if (! $last || ! isset($this->modes()[$last['mode']])) {
+            return;
+        }
+        $this->open($last['mode']);
+        if ($this->screen === 'pick') {
+            $this->pick((int) $last['choice']);
+        }
+    }
+
+    /** The unfinished job of this person for the Continue card, or null. */
+    protected function resume(): ?array
+    {
+        $last = cache()->get('scan-app.last.'.Auth::id());
+        $mode = $last ? ($this->modes()[$last['mode']] ?? null) : null;
+        if (! $mode) {
+            return null;
+        }
+        try {
+            $p = $this->station((int) $last['choice'], $last['mode'])->progress();
+        } catch (\Throwable) {
+            return null;
+        }
+        $total = (int) ($p['total'] ?? 0);
+        $done = (int) ($p['loaded'] ?? 0);
+        if ($total <= 0 || $done >= $total) {
+            return null;
+        }
+
+        return ['label' => $mode['label'], 'name' => $last['name'], 'done' => $done, 'total' => $total, 'pct' => (int) round($done / $total * 100)];
     }
 
     /** Called by the scan screen once it shows. */
@@ -288,6 +334,7 @@ class ScanApp extends Page
     {
         cache()->forget('scan-app.waiting.'.Auth::id());
         $this->reset('mode', 'choice', 'returned');
+        $this->homeReady = false;
         $this->screen = 'home';
         $this->clearResult();
     }
@@ -685,7 +732,9 @@ class ScanApp extends Page
             ],
             'choices' => $choices,
             'finishedCount' => $finishedCount,
-            'waiting' => $this->screen === 'home' ? $this->waitingCounts() : [],
+            'waiting' => $this->screen === 'home' && $this->homeReady ? $this->waitingCounts() : [],
+            'resume' => $this->screen === 'home' && $this->homeReady ? $this->resume() : null,
+            'homeReady' => $this->homeReady,
             'progress' => $progress,
             'target' => $target,
             'loadNext' => $loadNext,

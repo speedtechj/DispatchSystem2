@@ -153,7 +153,7 @@ it('hides finished and closed containers, with a link to show them', function ()
     $box->replicate()->fill(['invoice' => 'SHUTBOX1', 'container_id' => $closed->id, 'is_verified' => false])->save();
 
     Livewire::test(ScanApp::class)
-        ->assertSee('waiting')
+        ->assertSee('···')->call('loadHome')->assertSee('to do')->assertSee('Daily work')
         ->call('open', 'unload')
         ->assertSee('OPEN0000001')->assertDontSee('FULL0000001')->assertDontSee('SHUT0000001')
         ->assertSee('Show finished')

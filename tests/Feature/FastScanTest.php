@@ -125,3 +125,16 @@ it('always opens a back camera and never keeps the front camera by itself (board
     Livewire::test(ScanApp::class)->call('open', 'unload')->call('pick', $container->id)
         ->assertSee('Switch camera')->assertSee('Choose the camera')->assertSee('Use a back camera?');
 });
+
+it('shows the start screen at once, then the to-do counts and Continue (board 54)', function () {
+    $container = Container::where('warehouse_id', $this->user->warehouse_id)->firstOrFail();
+    $box = Invoice::where('container_id', $container->id)->where('is_verified', false)->firstOrFail();
+
+    $lw = Livewire::test(ScanApp::class)->assertSee('Daily work')->assertSee('Between warehouses')->assertSee('···')
+        ->assertDontSee('Continue · ');
+    $lw->call('open', 'unload')->call('pick', $container->id)->call('scan', $box->invoice)->call('home');
+    $lw->assertSet('homeReady', false)->call('loadHome')
+        ->assertSee('Continue · Unload container')->assertSee($container->container_no)->assertSee('to do');
+
+    $lw->call('continueLast')->assertSet('screen', 'scan')->assertSet('mode', 'unload')->assertSet('choice', $container->id);
+});
