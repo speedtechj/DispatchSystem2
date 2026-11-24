@@ -14,7 +14,7 @@ class SeaShipmentStop extends Model
 
     protected function casts(): array
     {
-        return ['received_at' => 'datetime', 'stop' => 'integer'];
+        return ['received_at' => 'datetime', 'arrived_at' => 'datetime', 'stop' => 'integer', 'trucking_cost' => 'float'];
     }
 
     public function shipment(): BelongsTo

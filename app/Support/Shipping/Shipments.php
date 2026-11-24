@@ -27,7 +27,22 @@ use Illuminate\Support\Facades\Schema;
  */
 class Shipments
 {
-    public const MODES = ['container' => 'Container (truck to port → container)', 'roro' => 'RoRo (our truck rides the ferry)'];
+    public const MODES = ['container' => 'Container (truck to port → container)', 'roro' => 'RoRo (our truck rides the ferry)', 'lcl' => 'LCL (a forwarder carries a few boxes)'];
+
+    /** LCL (board 62): our truck hands the boxes to a forwarder; the partner hub picks them up there. */
+    public const LCL = [
+        'preparing' => ['Preparing', 'Preparing to ship to {hub}'],
+        'sealed' => ['Loaded', 'Loaded for {hub}'],
+        'to_port' => ['Truck to the forwarder', 'On the way to the forwarder'],
+        'at_port' => ['Handed to the forwarder', 'With the forwarder{fwd}'],
+        'sailed' => ['Shipped by the forwarder', 'On the way to {hub} by sea{eta}'],
+        'arrived' => ['Ready to pick up', 'Ready to pick up at {pickup}'],
+        'picked_up' => ['Picked up', 'On the way to {hub}'],
+        'received' => ['Received', 'At {hub}'],
+    ];
+
+    /** How the forwarder charges. */
+    public const CHARGES = ['cbm' => 'Per CBM', 'kg' => 'Per kilo', 'box' => 'Per box'];
 
     public const PORT_CHECKS = ['full' => 'Full scan at the port', 'count' => 'Count only + photo of the receipt', 'off' => 'Off (with a reason)'];
 
@@ -51,6 +66,9 @@ class Shipments
     /** The steps of this shipment, in order. */
     public static function steps(SeaShipment $s): array
     {
+        if ($s->mode === 'lcl') {
+            return collect(static::LCL)->map(fn ($v) => $v[0])->all();
+        }
         $i = $s->mode === 'roro' ? 1 : 0;
 
         return collect(static::STATUSES)->map(fn ($v) => $v[$i])->filter()->all();
@@ -83,13 +101,17 @@ class Shipments
         if ($stop?->received_at) {
             return 'At '.$hubName;
         }
-        $t = static::STATUSES[$s->status][2] ?? '';
+        $t = $s->mode === 'lcl' ? (static::LCL[$s->status][1] ?? '') : (static::STATUSES[$s->status][2] ?? '');
+        if ($s->mode === 'roro' && $stop?->arrived_at && ! $stop->received_at) {
+            return 'Our truck is at '.$hubName;
+        }
         $before = $stop ? static::stops($s)->filter(fn ($x) => $x->stop < $stop->stop && ! $x->received_at) : collect();
         if ($stop && $stop->stop > 1 && $before->isEmpty() && in_array($s->status, ['arrived', 'picked_up', 'sailed'], true)) {
             return 'On the way to '.$hubName;
         }
 
-        return strtr($t, ['{hub}' => $hubName, '{port}' => $s->port_to ?: 'the port',
+        return strtr($t, ['{hub}' => $hubName, '{port}' => $s->port_to ?: 'the port', '{pickup}' => $s->pick_up_at ?: ($s->forwarder ?: 'the forwarder'),
+            '{fwd}' => $s->forwarder ? ' ('.$s->forwarder.')' : '',
             '{eta}' => $s->eta && $s->status === 'sailed' ? ' · arriving about '.$s->eta->format('M j') : '']);
     }
 
@@ -137,7 +159,7 @@ class Shipments
             $s = SeaShipment::create([
             'code' => static::newCode($hub), 'deliverylog_id' => $trip->id, 'logistichub_id' => $hub->id,
             'mode' => array_key_exists($mode, static::MODES) ? $mode : 'container',
-            'port_check' => $mode === 'roro' ? 'off' : ($portCheck && isset(static::PORT_CHECKS[$portCheck]) ? $portCheck : 'count'),
+            'port_check' => $mode === 'roro' ? 'off' : ($mode === 'lcl' ? 'count' : ($portCheck && isset(static::PORT_CHECKS[$portCheck]) ? $portCheck : 'count')),
             'port_reason' => $mode === 'roro' ? 'RoRo: the truck drives onto the ferry' : null,
             'status' => 'preparing', 'status_log' => [['status' => 'preparing', 'at' => now()->toIso8601String(), 'by' => Auth::id()]],
             'port_to' => Islands::port($hub), 'created_by' => Auth::id(),
@@ -145,6 +167,10 @@ class Shipments
             if (static::stopsReady()) {
                 foreach ($trips as $i => $t) {
                     SeaShipmentStop::create(['sea_shipment_id' => $s->id, 'deliverylog_id' => $t->id, 'logistichub_id' => (int) $t->assigned_to, 'stop' => $i + 1]);
+                    // board 62: the other trips go with the main truck
+                    if ($i > 0) {
+                        SeaTrucks::goWithMain($s, (int) $t->id);
+                    }
                 }
             }
 
@@ -281,6 +307,7 @@ class Shipments
         }
         $n = (int) static::stops($s)->max('stop');
         SeaShipmentStop::create(['sea_shipment_id' => $s->id, 'deliverylog_id' => $trip->id, 'logistichub_id' => (int) $trip->assigned_to, 'stop' => $n + 1]);
+        SeaTrucks::goWithMain($s, (int) $trip->id); // board 62: it goes with the main truck
 
         return true;
     }
@@ -290,6 +317,10 @@ class Shipments
     {
         if ($s->status !== 'preparing' || $tripId === (int) $s->deliverylog_id || ! static::stopsReady()) {
             return false;
+        }
+        $gone = SeaShipmentStop::where('sea_shipment_id', $s->id)->where('deliverylog_id', $tripId)->first();
+        if ($gone?->own_truck_id) {
+            Deliverylog::whereKey($tripId)->update(['truck_id' => $gone->own_truck_id]); // its own truck back
         }
         $deleted = SeaShipmentStop::where('sea_shipment_id', $s->id)->where('deliverylog_id', $tripId)->delete();
         foreach (SeaShipmentStop::where('sea_shipment_id', $s->id)->orderBy('stop')->get()->values() as $i => $x) {
@@ -379,7 +410,7 @@ class Shipments
             if ($open->isNotEmpty()) {
                 $out[] = $open->count().' '.str('customer')->plural($open->count()).' missing boxes without a reason: '.$open->take(3)->pluck('name')->join(', ').'.';
             }
-            if (! $s->seal_no) {
+            if (! $s->seal_no && $s->mode !== 'lcl') {
                 $out[] = 'Type the seal number.';
             }
         }
@@ -390,7 +421,11 @@ class Shipments
                 default => $s->port_reason ? [] : ['Say why the port check is off.'],
             });
         }
-        if ($to === 'sailed' && (! $s->vessel || ! $s->eta)) {
+        if ($to === 'sailed' && $s->mode === 'lcl') {
+            if (! $s->forwarder || ! $s->waybill_no) {
+                $out[] = 'Type the forwarder and the waybill number.';
+            }
+        } elseif ($to === 'sailed' && (! $s->vessel || ! $s->eta)) {
             $out[] = 'Type the vessel and the arrival date (ETA).';
         }
 

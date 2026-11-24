@@ -5257,3 +5257,22 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-cr__hint { color: #6b7b88; }
 .ds-cr__where { display: block; padding: 0.6rem 0.75rem; border-radius: 0.75rem; background: #f1f6fb; color: #1d5fa8; font-weight: 700; font-size: 0.82rem; }
 .ds-us__photo { width: 5.5rem !important; max-width: 5.5rem; } .ds-us__photo .filepond--root { width: 5.5rem !important; height: 5.5rem !important; } .ds-us__photo .filepond--drop-label { font-size: 0.65rem; }
+
+/* Sea shipment trucks (board 62) */
+.ds-sp__goes { display: inline-block; margin-top: 3px; font-style: normal; font-size: 0.72rem; font-weight: 800; padding: 1px 8px; border-radius: 999px; background: #e7f0fb; color: #1d5fa8; }
+.ds-sp__goes.is-own { background: #fff1c2; color: #7a5600; }
+.ds-sp__trucks { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 0.75rem; }
+.ds-sp__truck { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.8rem; border-radius: 0.8rem; background: #f6f8fa; }
+.dark .ds-sp__truck { background: rgb(255 255 255 / .05); }
+.ds-sp__truckhead { display: flex; flex-direction: column; }
+.ds-sp__truckhead b { font-size: 1rem; }
+.ds-sp__truckhead small, .ds-sp__truckline span { color: #6b7b88; font-size: 0.8rem; }
+.ds-sp__truckline { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.82rem; }
+.ds-sp__bar { height: 0.45rem; border-radius: 9px; background: #e3e8ec; overflow: hidden; }
+.ds-sp__bar i { display: block; height: 100%; background: #17895e; }
+.ds-sp__truckcost { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: #51616d; }
+.ds-sp__truckcost input { width: 7rem; height: 2rem; border-radius: 0.5rem; border: 1px solid #d4dde3; padding: 0 0.5rem; background: #fff; }
+.dark .ds-sp__truckcost input { background: transparent; }
+.ds-roro { cursor: default; }
+.ds-roro__btn { width: 100%; margin: 0.25rem 0 0.75rem; }
+.ds-sp__goes { align-self: flex-start; }

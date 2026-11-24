@@ -76,7 +76,18 @@ abstract class LoadTripPage extends Page
             ->where('logistichub_id', Auth::user()->logistichub_id)
             ->whereNotNull('truck_id')
             ->where('is_active', true)
+            // board 62: a trip that goes with another truck is loaded on that truck's trip
+            ->when(! static::$atHub, fn ($q) => $q->whereNotIn('id', \App\Support\Shipping\SeaTrucks::riderTripIds()))
             ->latest('id');
+    }
+
+    /** @var array<int, list<int>> */
+    protected array $carriedCache = [];
+
+    /** @return list<int> the trips this truck carries (board 62), or just this trip */
+    protected function carried(int $tripId): array
+    {
+        return static::$atHub ? [$tripId] : ($this->carriedCache[$tripId] ??= \App\Support\Shipping\SeaTrucks::carriedBy($tripId));
     }
 
     public function form(Schema $schema): Schema
@@ -126,7 +137,7 @@ abstract class LoadTripPage extends Page
         }
 
         // board 58: two boxes with this number on the trip still to load → Which one? (the receiver on the sticker)
-        $sameRows = Tripinvoice::with('invdata')->where($this->tripColumn(), $trip->id)->where('invoice', $code)->orderBy('id')->get();
+        $sameRows = Tripinvoice::with('invdata')->whereIn($this->tripColumn(), $this->carried($trip->id))->where('invoice', $code)->orderBy('id')->get();
         $tripinvoice = $this->whichRow($code, $sameRows, fn ($r) => $r->invdata, fn ($r) => (bool) $r->{$this->loadedColumn()});
         if ($tripinvoice === false) {
             return;
@@ -200,11 +211,18 @@ abstract class LoadTripPage extends Page
                 ->latest('id')
                 ->first();
 
+            // board 62: on the same sea shipment but another truck
+            $otherTruck = $elsewhere && ! static::$atHub && \App\Support\Shipping\SeaTrucks::ready()
+                && ($c = \App\Support\Shipping\SeaTrucks::carrierTrip((int) $elsewhere->deliverylog_id)) !== (int) $trip->id
+                && \App\Support\Shipping\Shipments::forTrip($c)?->id === \App\Support\Shipping\Shipments::forTrip($trip->id)?->id
+                ? \App\Models\Deliverylog::with('truck:id,plate_no')->find($c) : null;
             $this->scanResult(
                 'danger',
-                $elsewhere
+                $otherTruck
+                    ? "Wrong truck: {$code} goes on {$otherTruck->truck?->plate_no} (trip {$otherTruck->trip_number}). Not loaded here."
+                    : ($elsewhere
                     ? "{$code} belongs to trip {$elsewhere->deliverylog?->trip_number}, not {$trip->trip_number}."
-                    : "{$code} is not on trip {$trip->trip_number}.",
+                    : "{$code} is not on trip {$trip->trip_number}."),
                 $elsewhere?->invdata ?? $this->invoicesMatching($code)->first(),
             );
 
@@ -248,13 +266,13 @@ abstract class LoadTripPage extends Page
         $this->spot = TripSorter::zoneMap($trip)[$tripinvoice->id] ?? null;
         // One container, more hubs: the hub that unloads last goes deep inside.
         if (! $this->spot && ! static::$atHub && \App\Support\Shipping\Shipments::ready()) {
-            $this->spot = \App\Support\Shipping\Shipments::loadZone($trip->id);
+            $this->spot = \App\Support\Shipping\Shipments::loadZone((int) $tripinvoice->deliverylog_id);
         }
         if ($tripinvoice->invdata) {
             $this->setInfo = BoxSets::onTrip($tripinvoice->invdata, $trip, $this->tripColumn(), $this->loadedColumn());
         }
 
-        $done = $sameOnTrip > 1 ? Tripinvoice::where($this->tripColumn(), $trip->id)->where('invoice', $code)->where($this->loadedColumn(), true)->count() : 0;
+        $done = $sameOnTrip > 1 ? Tripinvoice::whereIn($this->tripColumn(), $this->carried($trip->id))->where('invoice', $code)->where($this->loadedColumn(), true)->count() : 0;
         $this->scanResult('success', "{$code} loaded".$this->whichSuffix($done, $sameOnTrip, $tripinvoice->invdata).'.', $tripinvoice->invdata);
     }
 
@@ -368,7 +386,7 @@ abstract class LoadTripPage extends Page
         if (! $id) {
             return [];
         }
-        $counts = Tripinvoice::where($this->tripColumn(), $id)->where($this->loadedColumn(), true)->whereNotNull('loaded_by')
+        $counts = Tripinvoice::whereIn($this->tripColumn(), $this->carried((int) $id))->where($this->loadedColumn(), true)->whereNotNull('loaded_by')
             ->selectRaw('loaded_by, count(*) n')->groupBy('loaded_by')->pluck('n', 'loaded_by');
         $names = User::whereIn('id', $counts->keys())->pluck('first_name', 'id');
 
@@ -393,7 +411,7 @@ abstract class LoadTripPage extends Page
             return ['loaded' => 0, 'total' => 0];
         }
 
-        $query = Tripinvoice::where($this->tripColumn(), $tripId);
+        $query = Tripinvoice::whereIn($this->tripColumn(), $this->carried((int) $tripId));
 
         return [
             'loaded' => (clone $query)->where($this->loadedColumn(), true)->count(),
@@ -415,10 +433,21 @@ abstract class LoadTripPage extends Page
         }
         $col = $this->tripColumn();
         $loaded = $this->loadedColumn();
+        // board 62: a truck's count includes the trips that go with it
+        $owner = [];
+        foreach ($ids as $id) {
+            foreach ($this->carried((int) $id) as $c) {
+                $owner[$c] = (int) $id;
+            }
+        }
+        $out = [];
+        foreach (Tripinvoice::whereIn($col, array_keys($owner))->selectRaw("{$col} as t, count(*) as total, sum(case when {$loaded} = 1 then 1 else 0 end) as loaded")
+            ->groupBy($col)->toBase()->get() as $r) {
+            $k = $owner[(int) $r->t] ?? (int) $r->t;
+            $out[$k] = ['loaded' => ($out[$k]['loaded'] ?? 0) + (int) $r->loaded, 'total' => ($out[$k]['total'] ?? 0) + (int) $r->total];
+        }
 
-        return Tripinvoice::whereIn($col, $ids)->selectRaw("{$col} as t, count(*) as total, sum(case when {$loaded} = 1 then 1 else 0 end) as loaded")
-            ->groupBy($col)->toBase()->get()
-            ->mapWithKeys(fn ($r) => [(int) $r->t => ['loaded' => (int) $r->loaded, 'total' => (int) $r->total]])->all();
+        return $out;
     }
 
     public function household(): array
@@ -453,6 +482,18 @@ abstract class LoadTripPage extends Page
     {
         return $this->tripOptionsQuery()->latest('id')->limit(60)->get()
             ->map(fn (Deliverylog $t) => ['id' => $t->id, 'name' => 'Trip '.$t->trip_number, 'active' => (bool) ($t->is_active ?? true),
-                'sub' => $t->destination?->hub_name ? 'To '.$t->destination->hub_name : ($t->departure_date ? 'Leaves '.$t->departure_date : null)]);
+                'sub' => $this->seaSub($t) ?? ($t->destination?->hub_name ? 'To '.$t->destination->hub_name : ($t->departure_date ? 'Leaves '.$t->departure_date : null))]);
+    }
+
+    /** "SS-0012 · 2 hubs: Bohol hub, Cebu hub" for a truck that carries more trips (board 62). */
+    protected function seaSub(Deliverylog $t): ?string
+    {
+        if (static::$atHub || count($ids = $this->carried((int) $t->id)) < 2) {
+            return null;
+        }
+        $s = \App\Support\Shipping\Shipments::forTrip((int) $t->id);
+        $hubs = \App\Support\Shipping\Shipments::stops($s)->whereIn('deliverylog_id', $ids)->sortBy('stop')->map(fn ($st) => $st->hub?->hub_name)->filter()->join(', ');
+
+        return $s?->code.' · '.count($ids).' hubs: '.$hubs;
     }
 }

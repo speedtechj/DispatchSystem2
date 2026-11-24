@@ -22,6 +22,9 @@ use Illuminate\Support\Str;
  */
 class DriverTrip
 {
+    /** @var list<int>|null */
+    protected ?array $carried = null;
+
     public function __construct(
         public readonly User $driver,
         public readonly ?Deliverylog $trip,
@@ -42,9 +45,11 @@ class DriverTrip
     public function boxes(): Builder
     {
         $tripId = $this->trip?->getKey() ?? 0;
+        // board 62: the truck also carries the trips that go with it (one sea shipment, more hubs)
+        $ids = $this->carried ??= \App\Support\Shipping\SeaTrucks::carriedBy((int) $tripId);
 
         return Tripinvoice::query()->where(fn (Builder $query) => $query
-            ->where('deliverylog_id', $tripId)
+            ->whereIn('deliverylog_id', $ids)
             ->orWhere('deliveryloghub_id', $tripId));
     }
 

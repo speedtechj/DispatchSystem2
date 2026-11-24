@@ -71,9 +71,12 @@ abstract class SeaShipmentPage extends Page
 
     protected function fillForm(SeaShipment $s): void
     {
-        foreach (['mode', 'van_no', 'van_size', 'seal_no', 'shipping_line', 'vessel', 'voyage', 'bl_no', 'port_from', 'port_to', 'port_check', 'port_count', 'port_reason', 'cost_freight', 'cost_trucking', 'cost_port', 'cost_other', 'note'] as $k) {
+        $lcl = \App\Support\Shipping\SeaTrucks::ready() ? ['forwarder', 'waybill_no', 'charge_basis', 'charge_rate', 'hand_over_at', 'pick_up_at'] : [];
+        foreach (array_merge(['mode', 'van_no', 'van_size', 'seal_no', 'shipping_line', 'vessel', 'voyage', 'bl_no', 'port_from', 'port_to', 'port_check', 'port_count', 'port_reason', 'cost_freight', 'cost_trucking', 'cost_port', 'cost_other', 'note'], $lcl) as $k) {
             $this->f[$k] = (string) ($s->{$k} ?? '');
         }
+        $this->truckCost = \App\Support\Shipping\SeaTrucks::ready()
+            ? \App\Support\Shipping\SeaTrucks::trucks($s)->mapWithKeys(fn ($t) => [$t['tripId'] => $t['cost'] !== null ? (string) $t['cost'] : ''])->all() : [];
         $this->f['etd'] = $s->etd?->toDateString() ?? '';
         $this->f['eta'] = $s->eta?->toDateString() ?? '';
     }
@@ -90,8 +93,10 @@ abstract class SeaShipmentPage extends Page
         abort_if(static::$hubSide, 403);
         $s = $this->shipment();
         abort_unless($s, 404);
-        foreach (['cost_freight', 'cost_trucking', 'cost_port', 'cost_other'] as $k) {
-            $this->f[$k] = str_replace([',', '₱', ' '], '', (string) $this->f[$k]);
+        foreach (['cost_freight', 'cost_trucking', 'cost_port', 'cost_other', 'charge_rate'] as $k) {
+            if (array_key_exists($k, $this->f)) {
+                $this->f[$k] = str_replace([',', '₱', ' '], '', (string) $this->f[$k]);
+            }
         }
         $this->validate([
             'f.mode' => 'required|in:'.implode(',', array_keys(Shipments::MODES)),
@@ -102,6 +107,8 @@ abstract class SeaShipmentPage extends Page
             'f.port_count' => 'nullable|integer|min:0|max:100000', 'f.port_reason' => 'nullable|string|max:200',
             'f.cost_freight' => 'nullable|numeric|min:0', 'f.cost_trucking' => 'nullable|numeric|min:0', 'f.cost_port' => 'nullable|numeric|min:0', 'f.cost_other' => 'nullable|numeric|min:0',
             'f.note' => 'nullable|string|max:500',
+            'f.forwarder' => 'nullable|string|max:80', 'f.waybill_no' => 'nullable|string|max:40', 'f.charge_basis' => 'nullable|in:'.implode(',', array_keys(Shipments::CHARGES)),
+            'f.charge_rate' => 'nullable|numeric|min:0', 'f.hand_over_at' => 'nullable|string|max:160', 'f.pick_up_at' => 'nullable|string|max:160',
             'sealPhoto' => 'nullable|image|max:12288', 'receipt' => 'nullable|image|max:12288',
         ]);
         $data = collect($this->f)->map(fn ($v) => $v === '' ? null : $v)->all();
@@ -218,6 +225,44 @@ abstract class SeaShipmentPage extends Page
 
     public bool $adding = false;
 
+    /** Board 62: this trip goes with the main truck. */
+    public function goWithMain(int $tripId): void
+    {
+        abort_if(static::$hubSide, 403);
+        $s = $this->shipment();
+        if ($s && \App\Support\Shipping\SeaTrucks::goWithMain($s, $tripId)) {
+            Notification::make()->title('It goes with the main truck now')->body('Load it on the main truck\'s trip in the Scan app.')->success()->send();
+        }
+    }
+
+    /** Board 62: this trip keeps its own truck (a second truck). */
+    public function ownTruck(int $tripId): void
+    {
+        abort_if(static::$hubSide, 403);
+        $s = $this->shipment();
+        if ($s && \App\Support\Shipping\SeaTrucks::ownTruck($s, $tripId)) {
+            Notification::make()->title('Second truck: this trip uses its own truck')->success()->send();
+        } else {
+            Notification::make()->title('This trip has no truck of its own')->body('Give the trip a truck first (Delivery trips), then press this again.')->warning()->send();
+        }
+    }
+
+    /** @var array<int, string> trucking per truck trip */
+    public array $truckCost = [];
+
+    public function saveTruckCost(int $tripId): void
+    {
+        abort_if(static::$hubSide, 403);
+        $s = $this->shipment();
+        $v = str_replace([',', '₱', ' '], '', (string) ($this->truckCost[$tripId] ?? ''));
+        if (! $s || ($v !== '' && ! is_numeric($v))) {
+            return;
+        }
+        \App\Support\Shipping\SeaTrucks::setCost($s, $tripId, $v === '' ? null : (float) $v);
+        $this->fillForm($s->fresh());
+        Notification::make()->title('Trucking saved')->success()->send();
+    }
+
     public function openAdd(bool $open = true): void
     {
         $this->adding = $open && ! static::$hubSide;
@@ -243,6 +288,11 @@ abstract class SeaShipmentPage extends Page
             'stops' => $stops = Shipments::stops($s),
             'wrong' => WrongHubBox::with('invoice', 'correctHub')->where('sea_shipment_id', $s->id)->get(),
             'modes' => Shipments::MODES,
+            'charges' => Shipments::CHARGES,
+            'trucks' => $trucks = \App\Support\Shipping\SeaTrucks::ready() ? \App\Support\Shipping\SeaTrucks::trucks($s) : collect(),
+            'canTruck' => ! static::$hubSide && \App\Support\Shipping\SeaTrucks::ready() && \App\Support\Shipping\SeaTrucks::canChange($s),
+            'carrierPlate' => fn ($st) => \App\Support\Shipping\SeaTrucks::ready() ? $trucks->first(fn ($t) => $t['stops']->contains('deliverylog_id', $st->deliverylog_id))['plate'] ?? null : null,
+            'rides' => fn ($st) => \App\Support\Shipping\SeaTrucks::ready() && $st->exists && \App\Support\Shipping\SeaTrucks::rides($s, $st),
             'checks' => Shipments::PORT_CHECKS,
             'hubSide' => static::$hubSide,
             'canPress' => $to && $to !== 'received' && (! static::$hubSide || in_array($to, ['arrived', 'picked_up'], true)),

@@ -340,6 +340,7 @@ class TripFlow
         if (static::ready()) {
             $trip = Deliverylog::with('truck')->where('is_active', true)
                 ->when(static::queueReady(), fn ($q) => static::notWaiting($q))
+                ->whereNotIn('id', \App\Support\Shipping\SeaTrucks::riderTripIds()) // board 62: a trip that goes with another truck is not driven
                 ->whereIn('id', TripCrew::where('user_id', $user->id)->select('deliverylog_id'))->latest('id')->first();
             if ($trip) {
                 return $trip;
@@ -350,6 +351,7 @@ class TripFlow
             return null;
         }
         $trip = Deliverylog::with('truck')->where('truck_id', $truckId)->where('is_active', true)
+            ->whereNotIn('id', \App\Support\Shipping\SeaTrucks::riderTripIds())
             ->when(static::queueReady(), fn ($q) => static::notWaiting($q))->latest('id')->first();
         // Someone replaced this person on that trip: it is not theirs.
         if ($trip && static::ready() && TripCrew::where('deliverylog_id', $trip->id)->exists()

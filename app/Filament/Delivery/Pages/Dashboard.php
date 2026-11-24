@@ -131,6 +131,16 @@ class Dashboard extends BaseDashboard
         $this->reset('boxId', 'sheet', 'wrongText', 'photos', 'upload', 'reason', 'note', 'whichIds', 'whichCode');
     }
 
+    /** Board 62: the RoRo driver pressed the next step (Leaving for the port, On the ship, Off the ship, Arrived at a hub). */
+    public function roroStep(string $key): void
+    {
+        $trip = $this->driverTrip()->trip;
+        $s = \App\Support\Shipping\SeaTrucks::roroFor($trip);
+        if ($s && \App\Support\Shipping\SeaTrucks::roroStep($s, (int) $trip->id, $key)) {
+            \Filament\Notifications\Notification::make()->title('Saved: '.(\App\Support\Shipping\SeaTrucks::roroNext($s->fresh(), (int) $trip->id)[1] ?? 'all hubs reached').' is next')->success()->send();
+        }
+    }
+
     /** Which one? The driver picked the receiver's name. */
     public function pickBox(int $id): void
     {
@@ -556,6 +566,9 @@ class Dashboard extends BaseDashboard
 
         return [
             'which' => $which,
+            'roro' => ($rs = \App\Support\Shipping\SeaTrucks::roroFor($trip->trip)) ? ['code' => $rs->code,
+                'now' => \App\Support\Shipping\Shipments::label($rs).' · '.\App\Support\Shipping\Shipments::stops($rs)->sortBy('stop')->map(fn ($x) => $x->hub?->hub_name.($x->arrived_at ? ' ✓' : ''))->join(' → '),
+                'next' => \App\Support\Shipping\SeaTrucks::roroNext($rs, (int) $trip->trip->id)] : null,
             'trip' => $trip->trip,
             'stage' => $stage,
             'canTake' => $canTake = ($stage === 'ready' || ($stage === 'loading' && (\App\Support\Trips\TripLock::autoOnTake() && \App\Support\Trips\TripLock::isReady($trip->trip))))

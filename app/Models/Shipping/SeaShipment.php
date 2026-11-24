@@ -19,7 +19,7 @@ class SeaShipment extends Model
     protected function casts(): array
     {
         return ['status_log' => 'array', 'etd' => 'date', 'eta' => 'date', 'port_at' => 'datetime',
-            'cost_freight' => 'float', 'cost_trucking' => 'float', 'cost_port' => 'float', 'cost_other' => 'float'];
+            'cost_freight' => 'float', 'cost_trucking' => 'float', 'cost_port' => 'float', 'cost_other' => 'float', 'charge_rate' => 'float'];
     }
 
     public function trip(): BelongsTo
@@ -56,7 +56,11 @@ class SeaShipment extends Model
 
     public function cost(): float
     {
-        return (float) $this->cost_freight + (float) $this->cost_trucking + (float) $this->cost_port + (float) $this->cost_other;
+        // + the trucking of a second truck (board 62)
+        $extra = \App\Support\Shipping\Shipments::stopsReady() && \Illuminate\Support\Facades\Schema::hasColumn('sea_shipment_stops', 'trucking_cost')
+            ? (float) $this->stops()->sum('trucking_cost') : 0.0;
+
+        return (float) $this->cost_freight + (float) $this->cost_trucking + (float) $this->cost_port + (float) $this->cost_other + $extra;
     }
 
     public function fileUrl(?string $path): ?string

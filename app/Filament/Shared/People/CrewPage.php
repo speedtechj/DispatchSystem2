@@ -50,6 +50,9 @@ class CrewPage extends Page
     /** The truck whose "Add crew" list is open. */
     public ?int $picking = null;
 
+    /** Lists read once per request; emptied after a change. */
+    protected array $cache = [];
+
     public static function canAccess(): bool
     {
         return is_int(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()));
@@ -76,20 +79,20 @@ class CrewPage extends Page
     /** @return Collection<int, Truck> */
     protected function trucks(): Collection
     {
-        return once(fn () => \App\Support\Rentals::usable(Truck::where('is_active', 1)->where('logistichub_id', $this->hub() ?? 0))->orderBy('plate_no')->get());
+        return $this->cache['trucks'] ??= \App\Support\Rentals::usable(Truck::where('is_active', 1)->where('logistichub_id', $this->hub() ?? 0))->orderBy('plate_no')->get();
     }
 
     /** @return Collection<int, User> every crew member of this hub (turned off too) */
     protected function people(): Collection
     {
-        return once(fn () => User::with('workposition.panelcategory')->where('is_crew', true)->where('logistichub_id', $this->hub() ?? 0)
-            ->orderByDesc('is_active')->orderBy('first_name')->get());
+        return $this->cache['people'] ??= User::with('workposition.panelcategory')->where('is_crew', true)->where('logistichub_id', $this->hub() ?? 0)
+            ->orderByDesc('is_active')->orderBy('first_name')->get();
     }
 
     /** crew user id => truck id */
     protected function onTruck(): array
     {
-        return once(fn () => Truckcrew::whereIn('truck_id', $this->trucks()->pluck('id'))->orderBy('id')->pluck('truck_id', 'crew')->map(fn ($t) => (int) $t)->all());
+        return $this->cache['on'] ??= Truckcrew::whereIn('truck_id', $this->trucks()->pluck('id'))->orderBy('id')->pluck('truck_id', 'crew')->map(fn ($t) => (int) $t)->all();
     }
 
     public function addToTruck(int $truckId, int $userId): void
@@ -105,6 +108,7 @@ class CrewPage extends Page
             Truckcrew::firstOrCreate(['truck_id' => $truck->id, 'crew' => $user->id], ['user_id' => Auth::id()]);
             $user->forceFill(['is_assigned' => true])->saveQuietly();
         });
+        $this->cache = [];
         Notification::make()->title(People::name($user).' is on '.$truck->plate_no)->success()->send();
     }
 
@@ -115,6 +119,7 @@ class CrewPage extends Page
         }
         Truckcrew::where('truck_id', $truckId)->where('crew', $userId)->get()->each->delete();
         User::whereKey($userId)->update(['is_assigned' => Truckcrew::where('crew', $userId)->exists()]);
+        $this->cache = [];
     }
 
     // ------------------------------------------------------------------ New / Edit crew member
@@ -198,6 +203,7 @@ class CrewPage extends Page
             }
         }
         $user->save();
+        $this->cache = [];
 
         $truck = (int) ($data['truck_id'] ?? 0);
         $now = $this->onTruck()[$user->id] ?? null;
