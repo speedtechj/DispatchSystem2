@@ -566,6 +566,15 @@ class Dashboard extends BaseDashboard
 
         return [
             'which' => $which,
+            'seaCard' => ($ps = \App\Support\Shipping\Shipments::forDriverPort($trip->trip)) ? (function () use ($ps, $trip) {
+                $ids = \App\Support\Shipping\SeaTrucks::carriedBy((int) $trip->trip->id);
+                $n = \App\Models\Tripinvoice::whereIn('deliverylog_id', $ids)->selectRaw('deliverylog_id, count(*) c')->groupBy('deliverylog_id')->pluck('c', 'deliverylog_id');
+
+                return ['code' => $ps->code, 'lcl' => $ps->mode === 'lcl', 'counted' => $ps->port_count,
+                    'to' => $ps->mode === 'lcl' ? ($ps->hand_over_at ?: ($ps->forwarder ?: 'the forwarder')) : ($ps->port_from ?: 'the port'),
+                    'hubs' => \App\Support\Shipping\Shipments::stops($ps)->whereIn('deliverylog_id', $ids)->sortBy('stop')->map(fn ($x) => ['name' => $x->hub?->hub_name, 'n' => (int) ($n[$x->deliverylog_id] ?? 0)])->values()->all(),
+                    'total' => (int) $n->sum()];
+            })() : null,
             'roro' => ($rs = \App\Support\Shipping\SeaTrucks::roroFor($trip->trip)) ? ['code' => $rs->code,
                 'now' => \App\Support\Shipping\Shipments::label($rs).' · '.\App\Support\Shipping\Shipments::stops($rs)->sortBy('stop')->map(fn ($x) => $x->hub?->hub_name.($x->arrived_at ? ' ✓' : ''))->join(' → '),
                 'next' => \App\Support\Shipping\SeaTrucks::roroNext($rs, (int) $trip->trip->id)] : null,

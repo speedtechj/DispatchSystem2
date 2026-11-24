@@ -182,6 +182,13 @@
                 </div>
             @endif
 
+            @if (! empty($hubCounts))
+                {{-- board 62: one truck for more hubs --}}
+                <div class="ds-hc" aria-label="Boxes per hub">
+                    @foreach ($hubCounts as $hc)<span @class(['is-done' => $hc['total'] && $hc['done'] >= $hc['total']])>{{ $hc['hub'] }} <b>{{ $hc['done'] }}/{{ $hc['total'] }}</b></span>@endforeach
+                </div>
+            @endif
+
             @if ($this->mode === 'unload' && $trucks)
                 @foreach ($trucks as $tk)
                     <div class="ds-sx__here"><b>🚚 Truck to {{ $tk['to'] }} is here</b><span>{{ $tk['onTruck'] }} on truck</span></div>
@@ -351,7 +358,7 @@
                         </div>
                     @endif
                     @if ($spot)
-                        <div class="ds-ld__spot is-{{ $spot['zone'] }}"><strong>{{ \App\Models\Maps\TripStop::ZONES[$spot['zone']] ?? '' }}</strong><span>{{ ! empty($spot['hub']) ? $spot['hub'].' (stop '.$spot['stop'].')' : 'Stop '.$spot['stop'] }} · {{ ['front' => 'deep inside, next to the cab', 'middle' => 'in the middle', 'back' => 'near the door'][$spot['zone']] ?? '' }}</span></div>
+                        <div @class(['ds-ld__spot', 'is-'.$spot['zone'], 'is-sea' => ! empty($spot['hub'])])><strong>{{ ! empty($spot['hub']) ? 'Put at the '.mb_strtoupper(\App\Models\Maps\TripStop::ZONES[$spot['zone']] ?? $spot['zone']) : (\App\Models\Maps\TripStop::ZONES[$spot['zone']] ?? '') }}</strong><span>{{ ! empty($spot['hub']) ? $spot['hub'].' (stop '.$spot['stop'].')' : 'Stop '.$spot['stop'] }} · {{ ['front' => 'deep inside, next to the cab', 'middle' => 'in the middle', 'back' => 'near the door'][$spot['zone']] ?? '' }}</span></div>
                     @endif
                     <div class="ds-sa__who">
                         <span>{{ mb_strtoupper(mb_substr($box->receiver_name ?? '?', 0, 2)) }}</span>

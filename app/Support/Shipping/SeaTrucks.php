@@ -54,6 +54,15 @@ class SeaTrucks
             ->pluck('st.deliverylog_id')->map(fn ($i) => (int) $i)->all());
     }
 
+    /** @var array<int, list<int>> riders per app instance (request), for tables */
+    protected static array $riderCache = [];
+
+    /** Rider trips for a list (one question per request; a table renders many rows). */
+    public static function riderIdsCached(): array
+    {
+        return static::$riderCache[spl_object_id(app())] ??= static::riderTripIds();
+    }
+
     /**
      * The trips whose boxes this trip's truck carries: itself and the trips that go with it.
      *

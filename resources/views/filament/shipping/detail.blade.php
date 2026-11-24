@@ -3,6 +3,23 @@
 @endphp
 <x-filament-panels::page>
 <div class="ds-sp">
+    @php
+        $unit = $s->mode === 'lcl' ? 'LCL lot' : ($s->mode === 'roro' ? 'RoRo truck' : 'container');
+        $to = $s->mode === 'lcl' ? 'the forwarder' : ($s->mode === 'roro' ? 'the ship' : 'the port');
+        $allBoxes = (int) $stopBoxes->sum();
+        $canMode = ! $hubSide && in_array($s->status, ['preparing', 'sealed'], true);
+    @endphp
+    {{-- board 62: what it is, and how it goes --}}
+    <div class="ds-sv__head">
+        <span><small>Sea shipment · {{ $s->port_from ?: 'Manila' }} → {{ $s->port_to ?: $s->hub?->hub_name }}</small>
+            <b>{{ $stops->count() }} {{ \Illuminate\Support\Str::plural('trip', $stops->count()) }} · {{ $allBoxes }} boxes · {{ $trucks->count() ?: 1 }} {{ \Illuminate\Support\Str::plural('truck', $trucks->count() ?: 1) }} · {{ \App\Support\Shipping\Shipments::label($s) }}</b></span>
+        <span class="ds-sv__modes" role="group" aria-label="How it is shipped">
+            @foreach (['container' => 'Container', 'roro' => 'RoRo', 'lcl' => 'LCL'] as $mk => $ml)
+                <button type="button" @class(['is-on' => $s->mode === $mk]) @if ($canMode) wire:click="setMode('{{ $mk }}')" @else disabled @endif>{{ $ml }}</button>
+            @endforeach
+        </span>
+    </div>
+
     <section class="ds-board__panel ds-sp__steps">
         @foreach ($steps as $k => $label)
             @php
@@ -24,30 +41,64 @@
             @endif
         </span>
     </div>
-    @if ($stops->count() > 1 || ($s->status === 'preparing' && ! $hubSide))
+
+    {{-- the key details of this kind --}}
+    @if ($s->mode === 'lcl' && ! $hubSide)
+        <section class="ds-board__panel ds-sp__box ds-sv__lcl">
+            <h3>LCL · with a forwarder (no van, no seal)</h3>
+            <span class="ds-sv__lbl">Forwarder</span>
+            <span class="ds-sv__chips">
+                @foreach ($forwarders as $fw)
+                    <button type="button" @class(['is-on' => (string) $fw->id === (string) ($f['forwarder_id'] ?? '')]) wire:click="pickForwarder({{ $fw->id }})" wire:key="fw-{{ $fw->id }}">{{ $fw->name }}</button>
+                @endforeach
+                <a class="ds-sv__chipadd" href="{{ \App\Filament\Pages\Forwarders::getUrl() }}" target="_blank">＋ New forwarder</a>
+            </span>
+            @php($fwSel = $forwarders->firstWhere('id', (int) ($f['forwarder_id'] ?? 0)))
+            <div class="ds-sp__fields">
+                <label><span>Hand over at (our truck goes here)</span><select wire:model="f.hand_over_branch_id" @disabled(! $fwSel)><option value="">{{ $fwSel ? 'Choose a branch' : 'Pick the forwarder first' }}</option>@foreach ($fwSel?->branches ?? [] as $b)<option value="{{ $b->id }}">{{ $b->name }}</option>@endforeach</select></label>
+                <label><span>Pick up at (the hub goes here)</span><select wire:model="f.pick_up_branch_id" @disabled(! $fwSel)><option value="">{{ $fwSel ? 'Choose a branch' : 'Pick the forwarder first' }}</option>@foreach ($fwSel?->branches ?? [] as $b)<option value="{{ $b->id }}">{{ $b->name }}</option>@endforeach</select></label>
+                <label><span>Waybill / booking no.</span><input type="text" wire:model="f.waybill_no"></label>
+                <label><span>Charged by</span><select wire:model="f.charge_basis"><option value="">—</option>@foreach ($charges as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select></label>
+                <label><span>Rate ₱</span><input type="text" inputmode="decimal" wire:model="f.charge_rate"></label>
+            </div>
+            <span class="ds-sv__row">
+                @if ($fwSel)<button type="button" class="ds-fu__link" wire:click="mountAction('newBranch')">＋ New branch for {{ $fwSel->name }}</button>@endif
+                <x-filament::button size="sm" wire:click="save">Save</x-filament::button>
+            </span>
+            @if ($s->pick_up_at)
+                <p class="ds-sv__sees">The partner hub sees: pick up at {{ $s->pick_up_at }}.</p>
+            @endif
+        </section>
+    @else
+        @php($facts = match ($s->mode) {
+            'lcl' => ['Forwarder' => $s->forwarder, 'Waybill / booking no.' => $s->waybill_no, 'Charged by' => $s->charge_rate ? '₱'.number_format($s->charge_rate, 2).' '.strtolower($charges[$s->charge_basis] ?? '') : null, 'Pick up at' => $s->pick_up_at],
+            'roro' => ['Shipping line' => $s->shipping_line, 'Vessel · voyage' => trim($s->vessel.($s->voyage ? ' · '.$s->voyage : '')), 'Booking / ticket no.' => $s->bl_no, 'ETD → ETA' => trim(($s->etd?->format('M j') ?? '').' → '.($s->eta?->format('M j') ?? ''), ' →')],
+            default => ['Van no. · size' => trim($s->van_no.($s->van_size ? ' · '.$s->van_size : '')), 'Seal no.' => $s->seal_no, 'Vessel · BL' => trim($s->vessel.($s->bl_no ? ' · '.$s->bl_no : '')), 'ETD → ETA' => trim(($s->etd?->format('M j') ?? '').' → '.($s->eta?->format('M j') ?? ''), ' →')],
+        })
         <section class="ds-board__panel ds-sp__box">
-            <h3>{{ $stops->count() > 1 ? 'One container, '.$stops->count().' hubs' : 'Hubs in this container' }}</h3>
+            <h3>{{ ['container' => 'Container', 'roro' => 'RoRo · the truck rides the ship', 'lcl' => 'LCL · with a forwarder'][$s->mode] ?? 'Container' }} @if (! $hubSide)<a class="ds-fu__link" href="#details">Edit</a>@endif</h3>
+            <div class="ds-sv__facts">@foreach ($facts as $l => $v)<span><small>{{ $l }}</small><b>{{ $v ?: '—' }}</b></span>@endforeach</div>
+        </section>
+    @endif
+
+    <div class="ds-sv__grid">
+        {{-- trips (one per partner hub) --}}
+        <section class="ds-board__panel ds-sp__box">
+            <h3>Trips in this {{ $unit }} <small>one per partner hub</small></h3>
             @foreach ($stops as $st)
-                <span class="ds-sp__stop" wire:key="st-{{ $st->deliverylog_id }}">
-                    <b class="ds-sp__stopn">{{ $st->stop }}</b>
-                    <span><span><b>{{ $st->hub?->hub_name }}</b> · trip {{ $st->trip?->trip_number }}</span>
-                        <small>{{ $st->received_at ? 'Received '.$st->received_at->format('M j g:i A').($st->missing ? ' · '.$st->missing.' missing' : '') : ($st->arrived_at ? 'Our truck arrived '.$st->arrived_at->format('M j g:i A') : ($stops->count() > 1 ? ($st->stop === 1 ? 'Unloads first · load near the door' : ($st->stop === $stops->count() ? 'Unloads last · load deep inside' : 'Load in the middle')) : 'Waiting')) }}</small>
-                        @if ($stops->count() > 1 && $carrierPlate($st))
-                            <em @class(['ds-sp__goes', 'is-own' => ! $rides($st)])>{{ $rides($st) ? 'Goes with '.$carrierPlate($st) : 'Truck '.$carrierPlate($st) }}</em>
-                        @endif
-                    </span>
-                    @if ($canTruck && $st->exists && $st->deliverylog_id != $s->deliverylog_id)
-                        @if ($rides($st))
-                            <button type="button" class="ds-fu__link" wire:click="ownTruck({{ $st->deliverylog_id }})">Use its own truck</button>
-                        @else
-                            <button type="button" class="ds-fu__link" wire:click="goWithMain({{ $st->deliverylog_id }})">Go with the main truck</button>
-                        @endif
+                <div class="ds-sv__trip" wire:key="st-{{ $st->deliverylog_id }}">
+                    <b>{{ $st->hub?->hub_name }}</b><b class="num">{{ (int) ($stopBoxes[$st->deliverylog_id] ?? 0) }} boxes</b>
+                    <small>Trip {{ $st->trip?->trip_number }} · stop {{ $st->stop }}{{ $st->received_at ? ' · received '.$st->received_at->format('M j g:i A').($st->missing ? ' · '.$st->missing.' missing' : '') : ($st->arrived_at ? ' · truck arrived '.$st->arrived_at->format('M j g:i A') : '') }}</small>
+                    <small @class(['ds-sv__goes', 'is-own' => ! $rides($st)])>{{ $carrierPlate($st) ? ($rides($st) ? 'Goes with '.$carrierPlate($st) : 'Truck '.$carrierPlate($st)) : 'No truck yet' }}</small>
+                    @if (! $hubSide && ($canTruck || $s->status === 'preparing') && $st->deliverylog_id != $s->deliverylog_id)
+                        <span class="ds-sv__tripacts">
+                            @if ($canTruck && ! $rides($st))<button type="button" class="ds-fu__link" wire:click="goWithMain({{ $st->deliverylog_id }})">Go with the main truck</button>@endif
+                            @if ($s->status === 'preparing')<button type="button" class="ds-fu__link" wire:click="removeStop({{ $st->deliverylog_id }})" wire:confirm="Take trip {{ $st->trip?->trip_number }} out of this {{ $unit }}? The trip and its boxes stay as they are.">Take out</button>@endif
+                        </span>
                     @endif
-                    @if ($s->status === 'preparing' && ! $hubSide && $st->stop > 1)
-                        <button type="button" class="ds-fu__link" wire:click="removeStop({{ $st->deliverylog_id }})" wire:confirm="Take trip {{ $st->trip?->trip_number }} out of this container? The trip and its boxes stay as they are.">Take out</button>
-                    @endif
-                </span>
+                </div>
             @endforeach
+            <small class="ds-board__muted">The hub trips do not pick a truck: they go with the truck of this {{ $unit }}.</small>
             @if ($s->status === 'preparing' && ! $hubSide)
                 <x-filament::button color="gray" size="sm" wire:click="openAdd({{ $adding ? 'false' : 'true' }})" icon="heroicon-o-plus">Add another hub's trip</x-filament::button>
                 @if ($adding)
@@ -59,25 +110,56 @@
                 @endif
             @endif
         </section>
-    @endif
-    @if ($trucks->isNotEmpty())
+
+        {{-- trucks to the port / ship / forwarder --}}
         <section class="ds-board__panel ds-sp__box">
-            <h3>{{ $trucks->count() > 1 ? $trucks->count().' trucks to '.($s->mode === 'lcl' ? 'the forwarder' : ($s->mode === 'roro' ? 'the ship' : 'the port')) : 'Truck to '.($s->mode === 'lcl' ? 'the forwarder' : ($s->mode === 'roro' ? 'the ship' : 'the port')) }}</h3>
-            <div class="ds-sp__trucks">
+            <h3>{{ $trucks->count() > 1 ? $trucks->count().' trucks to '.$to : 'Truck to '.$to }}
+                @if ($canTruck && $stops->count() > 1 && $trucks->count() < $stops->count())
+                    <button type="button" class="ds-sv__add2" wire:click="$toggle('second')">{{ $second ? 'Close' : '+ Add a second truck' }}</button>
+                @endif
+            </h3>
+            @if ($second)
+                <div class="ds-sv__second">
+                    <small>Which trip goes on the second truck?</small>
+                    @foreach ($stops->filter(fn ($st) => $rides($st)) as $st)
+                        <span class="ds-sv__secrow" wire:key="sec-{{ $st->deliverylog_id }}">
+                            <b>{{ $st->hub?->hub_name }} · {{ (int) ($stopBoxes[$st->deliverylog_id] ?? 0) }} boxes</b>
+                            <select wire:model="secondTruck.{{ $st->deliverylog_id }}"><option value="">{{ $st->own_truck_id ? 'Its own truck ('.\App\Models\Truck::whereKey($st->own_truck_id)->value('plate_no').')' : 'Choose a truck' }}</option>@foreach ($hubTrucks as $tid => $plate)<option value="{{ $tid }}">{{ $plate }}</option>@endforeach</select>
+                            <x-filament::button size="xs" wire:click="useSecondTruck({{ $st->deliverylog_id }})">Use</x-filament::button>
+                        </span>
+                    @endforeach
+                </div>
+            @endif
+            @foreach ($trucks as $tk)
+                <div class="ds-sp__truck" wire:key="tk-{{ $tk['tripId'] }}">
+                    <span class="ds-sp__truckhead"><b>{{ $tk['plate'] ?? 'No truck yet' }}</b><small>{{ $tk['crew'] ? implode(' · ', $tk['crew']) : 'No crew yet' }}</small>
+                        <i @class(['ds-sv__tstate', 'is-ok' => $tk['total'] && $tk['loaded'] >= $tk['total']])>{{ $tk['total'] && $tk['loaded'] >= $tk['total'] ? 'Loaded' : 'Loading' }}</i></span>
+                    <span class="ds-sp__truckline"><span>Loaded {{ $tk['loaded'] }} / {{ $tk['total'] }}</span><span>{{ $tk['stops']->count() > 1 ? 'All '.$tk['stops']->count().' trips' : $tk['stops']->first()?->hub?->hub_name }} · {{ $tk['total'] }} boxes</span></span>
+                    <span class="ds-sv__tbar"><i style="width: {{ $tk['total'] ? round($tk['loaded'] * 100 / $tk['total']) : 0 }}%"></i></span>
+                    @if (! $hubSide)
+                        <label class="ds-sp__truckcost"><span>Trucking ₱</span><input type="text" inputmode="decimal" wire:model="truckCost.{{ $tk['tripId'] }}" placeholder="0"><button type="button" class="ds-fu__link" wire:click="saveTruckCost({{ $tk['tripId'] }})">Save</button></label>
+                    @else
+                        <span class="ds-sp__truckline"><span>Trucking</span><b>{{ $tk['cost'] ? '₱'.number_format($tk['cost'], 2) : '—' }}</b></span>
+                    @endif
+                </div>
+            @endforeach
+        </section>
+    </div>
+
+    @if ($trucks->sum(fn ($t) => (float) $t['cost']) > 0)
+        <section class="ds-board__panel ds-sp__box">
+            <h3>Trucking split by boxes <small>goes into each hub's Cost per box</small></h3>
+            <div class="ds-sv__split">
                 @foreach ($trucks as $tk)
-                    <div class="ds-sp__truck" wire:key="tk-{{ $tk['tripId'] }}">
-                        <span class="ds-sp__truckhead"><b>{{ $tk['plate'] ?? 'No truck yet' }}</b><small>Trip {{ $tk['trip']?->trip_number }}{{ $tk['main'] ? ' · main truck' : ' · second truck' }}{{ $tk['crew'] ? ' · '.implode(', ', $tk['crew']) : '' }}</small></span>
-                        <span class="ds-sp__truckline"><span>Carries {{ $tk['stops']->map(fn ($x) => $x->hub?->hub_name)->filter()->join(', ') }}</span><b class="num">{{ $tk['loaded'] }} / {{ $tk['total'] }} loaded</b></span>
-                        <span class="ds-sp__bar"><i style="width: {{ $tk['total'] ? round($tk['loaded'] * 100 / $tk['total']) : 0 }}%"></i></span>
-                        @if (! $hubSide)
-                            <label class="ds-sp__truckcost"><span>Trucking ₱</span><input type="text" inputmode="decimal" wire:model="truckCost.{{ $tk['tripId'] }}" placeholder="0"><button type="button" class="ds-fu__link" wire:click="saveTruckCost({{ $tk['tripId'] }})">Save</button></label>
-                        @endif
-                    </div>
+                    @foreach ($tk['stops'] as $st)
+                        @php($n = (int) ($stopBoxes[$st->deliverylog_id] ?? 0))
+                        <span><span>{{ $st->hub?->hub_name }} · {{ $tk['stops']->count() > 1 ? $n.'/'.$tk['total'].' boxes' : 'its own truck' }}</span><b>₱{{ number_format($tk['total'] ? (float) $tk['cost'] * $n / $tk['total'] : (float) $tk['cost'], 0) }}</b></span>
+                    @endforeach
                 @endforeach
             </div>
-            <p class="ds-board__muted">{{ $stops->count() > 1 ? 'Trips that go with a truck have no truck of their own: load them all on that truck\'s trip (Scan app → Load truck). ' : '' }}The trucking is shared by the hubs by their number of boxes (Cost per box).</p>
         </section>
     @endif
+
     @if ($s->status === 'preparing' && ! $hubSide)
         <section class="ds-board__panel ds-sp__box">
             <h3>Picked the wrong trip, or made it by mistake?</h3>
@@ -156,18 +238,10 @@
     </div>
 
     @if (! $hubSide)
-        <form wire:submit="save" class="ds-board__panel ds-sp__form">
+        <form wire:submit="save" class="ds-board__panel ds-sp__form" id="details">
             <h3>Details</h3>
             <div class="ds-sp__fields">
-                <label><span>How it's shipped</span><select wire:model.live="f.mode">@foreach ($modes as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select></label>
-                @if ($f['mode'] === 'lcl')
-                    <label><span>Forwarder</span><input type="text" wire:model="f.forwarder" placeholder="2GO Logistics"></label>
-                    <label><span>Waybill / booking no.</span><input type="text" wire:model="f.waybill_no"></label>
-                    <label><span>Charged by</span><select wire:model="f.charge_basis"><option value="">—</option>@foreach ($charges as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select></label>
-                    <label><span>Rate ₱</span><input type="text" inputmode="decimal" wire:model="f.charge_rate"></label>
-                    <label class="is-wide"><span>Hand over at (our truck goes here)</span><input type="text" wire:model="f.hand_over_at" placeholder="2GO warehouse, Pier 4, North Harbor"></label>
-                    <label class="is-wide"><span>Pick up at (the partner hub goes here)</span><input type="text" wire:model="f.pick_up_at" placeholder="2GO Cebu, Pier 3"></label>
-                @else
+                @if ($f['mode'] !== 'lcl')
                 <label><span>{{ $f['mode'] === 'roro' ? 'Truck door seal no.' : 'Seal no.' }}</span><input type="text" wire:model="f.seal_no"></label>
                 @endif
                 @if ($f['mode'] === 'container')
@@ -180,8 +254,11 @@
                 <label><span>Voyage</span><input type="text" wire:model="f.voyage"></label>
                 <label><span>{{ $f['mode'] === 'roro' ? 'Ticket no.' : 'BL no.' }}</span><input type="text" wire:model="f.bl_no"></label>
                 @endif
-                <label><span>From port</span><input type="text" wire:model="f.port_from" placeholder="Manila North Harbor"></label>
-                <label><span>To port</span><input type="text" wire:model="f.port_to" placeholder="Cebu Port"></label>
+                @if ($f['mode'] !== 'lcl')
+                <label><span>From port</span><input type="text" list="ds-ports" wire:model="f.port_from" placeholder="Manila North Harbor"></label>
+                <label><span>To port</span><input type="text" list="ds-ports" wire:model="f.port_to" placeholder="Cebu Port"></label>
+                <datalist id="ds-ports">@foreach ($ports as $pn)<option value="{{ $pn }}"></option>@endforeach</datalist>
+                @endif
                 <label><span>Leaves (ETD)</span><input type="date" wire:model="f.etd"></label>
                 <label><span>Arrives (ETA)</span><input type="date" wire:model="f.eta"></label>
                 @if ($f['mode'] !== 'lcl')

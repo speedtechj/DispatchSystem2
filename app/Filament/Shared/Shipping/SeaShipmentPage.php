@@ -72,6 +72,9 @@ abstract class SeaShipmentPage extends Page
     protected function fillForm(SeaShipment $s): void
     {
         $lcl = \App\Support\Shipping\SeaTrucks::ready() ? ['forwarder', 'waybill_no', 'charge_basis', 'charge_rate', 'hand_over_at', 'pick_up_at'] : [];
+        if (\Illuminate\Support\Facades\Schema::hasColumn('sea_shipments', 'forwarder_id')) {
+            $lcl = array_merge($lcl, ['forwarder_id', 'hand_over_branch_id', 'pick_up_branch_id']);
+        }
         foreach (array_merge(['mode', 'van_no', 'van_size', 'seal_no', 'shipping_line', 'vessel', 'voyage', 'bl_no', 'port_from', 'port_to', 'port_check', 'port_count', 'port_reason', 'cost_freight', 'cost_trucking', 'cost_port', 'cost_other', 'note'], $lcl) as $k) {
             $this->f[$k] = (string) ($s->{$k} ?? '');
         }
@@ -109,9 +112,21 @@ abstract class SeaShipmentPage extends Page
             'f.note' => 'nullable|string|max:500',
             'f.forwarder' => 'nullable|string|max:80', 'f.waybill_no' => 'nullable|string|max:40', 'f.charge_basis' => 'nullable|in:'.implode(',', array_keys(Shipments::CHARGES)),
             'f.charge_rate' => 'nullable|numeric|min:0', 'f.hand_over_at' => 'nullable|string|max:160', 'f.pick_up_at' => 'nullable|string|max:160',
+            'f.forwarder_id' => 'nullable|integer', 'f.hand_over_branch_id' => 'nullable|integer', 'f.pick_up_branch_id' => 'nullable|integer',
             'sealPhoto' => 'nullable|image|max:12288', 'receipt' => 'nullable|image|max:12288',
         ]);
         $data = collect($this->f)->map(fn ($v) => $v === '' ? null : $v)->all();
+        // board 64: the forwarder and its branches come from Settings → Forwarders; the text follows them
+        if (! empty($data['forwarder_id']) && ($fw = \App\Models\Shipping\Forwarder::find($data['forwarder_id']))) {
+            $data['forwarder'] = $fw->name;
+            foreach (['hand_over_branch_id' => 'hand_over_at', 'pick_up_branch_id' => 'pick_up_at'] as $id => $text) {
+                $b = ! empty($data[$id]) ? \App\Models\Shipping\ForwarderBranch::where('forwarder_id', $fw->id)->find($data[$id]) : null;
+                $data[$id] = $b?->id;
+                if ($b) {
+                    $data[$text] = $b->line();
+                }
+            }
+        }
         if ($data['port_count'] !== null && (int) $data['port_count'] !== (int) $s->port_count) {
             $data['port_by'] = Auth::id();
             $data['port_at'] = now();
@@ -225,6 +240,84 @@ abstract class SeaShipmentPage extends Page
 
     public bool $adding = false;
 
+    /** Board 62: Container, RoRo or LCL, from the buttons at the top (until the truck leaves). */
+    public function setMode(string $mode): void
+    {
+        abort_if(static::$hubSide, 403);
+        $s = $this->shipment();
+        if (! $s || ! array_key_exists($mode, Shipments::MODES) || ! in_array($s->status, ['preparing', 'sealed'], true)) {
+            return;
+        }
+        $s->update(match ($mode) {
+            'roro' => ['mode' => 'roro', 'port_check' => 'off', 'port_reason' => $s->port_reason ?: 'RoRo: the truck drives onto the ferry'],
+            'lcl' => ['mode' => 'lcl', 'port_check' => 'count'],
+            default => ['mode' => 'container', 'port_check' => $s->port_check === 'off' && $s->mode === 'roro' ? 'count' : $s->port_check],
+        });
+        $this->fillForm($s->fresh());
+    }
+
+    /** Board 64: pick the forwarder; its usual rate fills in. */
+    public function pickForwarder(int $id): void
+    {
+        abort_if(static::$hubSide, 403);
+        $fw = \App\Models\Shipping\Forwarder::find($id);
+        if (! $fw) {
+            return;
+        }
+        $this->f['forwarder_id'] = (string) $fw->id;
+        $this->f['forwarder'] = $fw->name;
+        $this->f['charge_basis'] = $this->f['charge_basis'] ?: (string) $fw->charge_basis;
+        $this->f['charge_rate'] = $this->f['charge_rate'] ?: (string) ($fw->charge_rate ?? '');
+        $mine = $fw->branches()->pluck('id')->map(fn ($i) => (string) $i)->all();
+        foreach (['hand_over_branch_id', 'pick_up_branch_id'] as $k) {
+            if (! in_array((string) ($this->f[$k] ?? ''), $mine, true)) {
+                $this->f[$k] = '';
+            }
+        }
+    }
+
+    /** Board 64: ＋ New branch for the chosen forwarder, right from the shipment. */
+    public function newBranchAction(): \Filament\Actions\Action
+    {
+        return \Filament\Actions\Action::make('newBranch')->modalWidth('lg')
+            ->modalHeading(fn () => 'New branch · '.(\App\Models\Shipping\Forwarder::find((int) ($this->f['forwarder_id'] ?? 0))?->name ?? ''))
+            ->schema([
+                \Filament\Forms\Components\Select::make('for')->label('Use it as')->options(['pick_up_branch_id' => 'Pick up at (the hub goes here)', 'hand_over_branch_id' => 'Hand over at (our truck goes here)'])->default('pick_up_branch_id')->required(),
+                \Filament\Forms\Components\TextInput::make('name')->label('Branch')->required()->maxLength(80)->placeholder('Cebu · Pier 3'),
+                \Filament\Forms\Components\TextInput::make('address')->maxLength(200),
+                \Filament\Forms\Components\TextInput::make('hours')->maxLength(60)->placeholder('8 AM–5 PM'),
+                \Filament\Forms\Components\TextInput::make('phone')->label('Contact no.')->maxLength(40),
+            ])
+            ->action(function (array $data) {
+                $fid = (int) ($this->f['forwarder_id'] ?? 0);
+                if (static::$hubSide || ! $fid) {
+                    return;
+                }
+                $b = \App\Models\Shipping\ForwarderBranch::create(['forwarder_id' => $fid] + collect($data)->only(['name', 'address', 'hours', 'phone'])->all());
+                $this->f[$data['for']] = (string) $b->id;
+                Notification::make()->title($b->name.' added to the forwarder')->body('Press Save to keep it on this shipment.')->success()->send();
+            });
+    }
+
+    /** "+ Add a second truck" list is open. */
+    public bool $second = false;
+
+    /** truck picked for a trip in that list */
+    public array $secondTruck = [];
+
+    public function useSecondTruck(int $tripId): void
+    {
+        abort_if(static::$hubSide, 403);
+        $s = $this->shipment();
+        $truck = (int) ($this->secondTruck[$tripId] ?? 0) ?: null;
+        if ($s && \App\Support\Shipping\SeaTrucks::ownTruck($s, $tripId, $truck)) {
+            $this->second = false;
+            Notification::make()->title('Second truck added')->success()->send();
+        } else {
+            Notification::make()->title('Pick the truck for that trip first')->warning()->send();
+        }
+    }
+
     /** Board 62: this trip goes with the main truck. */
     public function goWithMain(int $tripId): void
     {
@@ -289,6 +382,10 @@ abstract class SeaShipmentPage extends Page
             'wrong' => WrongHubBox::with('invoice', 'correctHub')->where('sea_shipment_id', $s->id)->get(),
             'modes' => Shipments::MODES,
             'charges' => Shipments::CHARGES,
+            'forwarders' => \Illuminate\Support\Facades\Schema::hasTable('forwarders') ? \App\Models\Shipping\Forwarder::with('branches')->where(fn ($q) => $q->where('is_active', true)->orWhere('id', (int) ($this->f['forwarder_id'] ?? 0)))->orderBy('name')->get() : collect(),
+            'ports' => \Illuminate\Support\Facades\Schema::hasTable('ports') ? \App\Models\Shipping\Port::where('is_active', true)->orderBy('name')->pluck('name') : collect(),
+            'stopBoxes' => \App\Models\Tripinvoice::whereIn('deliverylog_id', Shipments::tripIds($s))->selectRaw('deliverylog_id, count(*) n')->groupBy('deliverylog_id')->pluck('n', 'deliverylog_id'),
+            'hubTrucks' => $this->second ? \App\Models\Truck::where('is_active', 1)->where('logistichub_id', $s->trip?->logistichub_id)->orderBy('plate_no')->pluck('plate_no', 'id') : collect(),
             'trucks' => $trucks = \App\Support\Shipping\SeaTrucks::ready() ? \App\Support\Shipping\SeaTrucks::trucks($s) : collect(),
             'canTruck' => ! static::$hubSide && \App\Support\Shipping\SeaTrucks::ready() && \App\Support\Shipping\SeaTrucks::canChange($s),
             'carrierPlate' => fn ($st) => \App\Support\Shipping\SeaTrucks::ready() ? $trucks->first(fn ($t) => $t['stops']->contains('deliverylog_id', $st->deliverylog_id))['plate'] ?? null : null,

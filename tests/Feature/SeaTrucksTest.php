@@ -101,7 +101,7 @@ it('puts every trip of a shipment on the main truck: one load screen, other trip
         ->and($page->instance()->progress())->toMatchArray(['loaded' => 1, 'total' => 5]);
 
     // the office page says it goes with the main truck
-    Livewire::test(AdminShipmentPage::class, ['shipmentId' => $s->id])->assertSee('Goes with')->assertSee('Truck to the port')->assertSee('Use its own truck');
+    Livewire::test(AdminShipmentPage::class, ['shipmentId' => $s->id])->assertSee('Goes with')->assertSee('Truck to the port')->assertSee('+ Add a second truck')->assertSee('Trips in this container');
 });
 
 it('lets a trip keep its own truck (a second truck): wrong truck when loaded on the other', function () {
@@ -158,4 +158,52 @@ it('ships LCL with a forwarder: its own steps, no seal, forwarder and waybill be
     expect($s->charge_rate)->toBe(1450.0)->and(Shipments::blockers($s, 'sailed'))->toBe([]);
     $s->update(['status' => 'arrived']);
     expect(Shipments::trackText($s->fresh()))->toBe('Ready to pick up at 2GO Cebu, Pier 3');
+});
+
+it('keeps forwarders with branches in Settings, and an LCL shipment picks them', function () {
+    $this->cebu->forceFill(['by_sea' => true, 'port' => 'Port of Cebu'])->save();
+    Livewire::test(\App\Filament\Pages\Forwarders::class)->assertSuccessful()
+        ->callAction('new', ['name' => '2GO Logistics', 'charge_basis' => 'cbm', 'charge_rate' => 1450, 'is_active' => true,
+            'branches' => [['name' => 'Manila · Pier 4', 'address' => 'Pier 4, North Harbor', 'hours' => '8 AM–5 PM'], ['name' => 'Cebu · Pier 3', 'address' => 'Pier 3, Cebu City', 'hours' => '8 AM–5 PM']]])
+        ->assertHasNoActionErrors()->assertSee('2GO Logistics')->assertSee('Cebu · Pier 3');
+    $fw = \App\Models\Shipping\Forwarder::sole();
+    [$manila, $cebuPier] = [$fw->branches->firstWhere('name', 'Manila · Pier 4'), $fw->branches->firstWhere('name', 'Cebu · Pier 3')];
+
+    $s = Shipments::create($this->trip, 'lcl');
+    Livewire::test(AdminShipmentPage::class, ['shipmentId' => $s->id])->assertSee('2GO Logistics')
+        ->call('pickForwarder', $fw->id)->assertSet('f.charge_basis', 'cbm')
+        ->set('f.hand_over_branch_id', (string) $manila->id)->set('f.pick_up_branch_id', (string) $cebuPier->id)->set('f.waybill_no', '2GO-55120')
+        ->call('save')->assertHasNoErrors();
+    $s->refresh();
+    expect($s->forwarder)->toBe('2GO Logistics')->and($s->pick_up_at)->toBe('Cebu · Pier 3 · Pier 3, Cebu City · 8 AM–5 PM')
+        ->and($s->hand_over_branch_id)->toBe($manila->id);
+
+    // a branch used by a shipment is kept when removed from the forwarder
+    \App\Filament\Pages\Forwarders::store(['name' => '2GO Logistics', 'branches' => [['id' => $manila->id, 'name' => 'Manila · Pier 4']]], $fw);
+    expect(\App\Models\Shipping\ForwarderBranch::find($cebuPier->id))->not->toBeNull();
+
+    Livewire::test(\App\Filament\Pages\Ports::class)->callAction('new', ['name' => 'Manila North Harbor', 'kind' => 'both', 'is_active' => true])->assertSee('Manila North Harbor');
+});
+
+it('changes Container, RoRo, LCL from the buttons and adds a second truck from the list', function () {
+    [$s, $tripB, $t2] = twoHubShipment($this);
+    $page = Livewire::test(AdminShipmentPage::class, ['shipmentId' => $s->id])->call('setMode', 'roro');
+    expect($s->fresh()->mode)->toBe('roro')->and($s->fresh()->port_check)->toBe('off');
+    $page->call('setMode', 'lcl');
+    expect($s->fresh()->port_check)->toBe('count');
+    $page->set('second', true)->assertSee('Which trip goes on the second truck?')
+        ->set('secondTruck.'.$tripB->id, (string) $t2->id)->call('useSecondTruck', $tripB->id)->assertSet('second', false);
+    expect(SeaTrucks::trucks($s->fresh()))->toHaveCount(2);
+});
+
+it('shows the partner hub its incoming shipments by kind, with what to do', function () {
+    $this->cebu->forceFill(['by_sea' => true, 'port' => 'Port of Cebu'])->save();
+    $lcl = Shipments::create($this->trip, 'lcl');
+    $lcl->update(['status' => 'arrived', 'forwarder' => '2GO Logistics', 'waybill_no' => '2GO-55120', 'pick_up_at' => '2GO Cebu, Pier 3']);
+    Filament::setCurrentPanel(Filament::getPanel('company'));
+    $this->actingAs($this->hubUser);
+    Livewire::test(IncomingShipments::class)->assertSee($lcl->code)->assertSee('LCL')->assertSee('Bring the waybill no. 2GO-55120')
+        ->assertSee('I picked them up')->call('hubPress', $lcl->id, 'picked_up');
+    expect($lcl->fresh()->status)->toBe('picked_up');
+    Livewire::test(IncomingShipments::class)->set('kind', 'roro')->assertDontSee($lcl->code);
 });

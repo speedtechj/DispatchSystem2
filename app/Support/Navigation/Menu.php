@@ -83,6 +83,8 @@ class Menu
             'Pages\\HubAreas' => ['Settings · places & routes', null, 2],
             'Resources\\Logistichubs\\LogistichubResource' => ['Settings · places & routes', 'Logistic hubs', 3],
             'Pages\\HubIslands' => ['Settings · places & routes', null, 4],
+            'Pages\\Forwarders' => ['Settings · places & routes', 'Forwarders', 4],
+            'Pages\\Ports' => ['Settings · places & routes', 'Ports', 4],
             'Resources\\RouteareaResource' => ['Settings · places & routes', 'Route areas', 5],
             'Pages\\MapsRoutes' => ['Settings · places & routes', null, 6],
 

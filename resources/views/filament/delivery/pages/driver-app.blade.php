@@ -35,8 +35,15 @@
                 <span class="ds-sa__avatar is-green">{{ $initials }}</span>
             </header>
 
-            @if (\App\Support\Shipping\Shipments::ready() && ($portShip = \App\Support\Shipping\Shipments::forDriverPort($trip ?? null)))
-                <a href="{{ \App\Filament\Delivery\Pages\AtPort::getUrl() }}" class="ds-fd__home"><span aria-hidden="true">{{ $portShip->mode === 'lcl' ? '📦' : '🚢' }}</span><span><b>{{ $portShip->mode === 'lcl' ? 'At the forwarder' : 'At the port' }} · {{ $portShip->code }}</b><small>{{ $portShip->port_count !== null ? 'Counted: '.$portShip->port_count.' boxes · tap to change' : ($portShip->mode === 'lcl' ? 'Count the boxes, photo of the forwarder receipt'.($portShip->hand_over_at ? ' · '.$portShip->hand_over_at : '') : 'Type the forwarder count and take a photo of the receipt') }}</small></span><span class="ds-sa__chev">›</span></a>
+            @if ($seaCard)
+                {{-- board 62: one trip for the truck, with every hub it carries --}}
+                <div class="ds-sea">
+                    <small>{{ $seaCard['code'] }} · {{ count($seaCard['hubs']) }} {{ \Illuminate\Support\Str::plural('trip', count($seaCard['hubs'])) }} · {{ $seaCard['total'] }} boxes</small>
+                    <b>To {{ $seaCard['to'] }}</b>
+                    <span class="ds-sea__hubs">@foreach ($seaCard['hubs'] as $h)<i>{{ $h['name'] }} {{ $h['n'] }}</i>@endforeach</span>
+                    <a href="{{ \App\Filament\Delivery\Pages\AtPort::getUrl() }}" class="ds-sa__primary ds-sea__btn">{{ $seaCard['counted'] !== null ? 'Counted '.$seaCard['counted'].' · change' : ($seaCard['lcl'] ? 'Arrived at the forwarder' : 'Arrived at port') }}</a>
+                    <small>{{ $seaCard['lcl'] ? 'Then: count the boxes, photo of the forwarder receipt and waybill.' : 'Then: count the boxes, photo of the port receipt.' }}</small>
+                </div>
             @endif
             @if ($roro)
                 {{-- board 62: our truck rides the ship and drops at each hub --}}

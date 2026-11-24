@@ -158,8 +158,47 @@ abstract class SeaShipmentsPage extends Page
         ];
     }
 
+    /** Board 63: tab on Incoming shipments. */
+    public string $kind = 'coming';
+
+    public function getView(): string
+    {
+        return static::$incoming ? 'filament.shipping.incoming' : $this->view;
+    }
+
+    /** The hub presses Ready to pick up / Picked up from its card. */
+    public function hubPress(int $id, string $to): void
+    {
+        abort_unless(static::$incoming && in_array($to, ['arrived', 'picked_up'], true), 403);
+        $mine = (int) Auth::user()?->logistichub_id;
+        $s = Shipments::visible($this->hub())->find($id);
+        if (! $s || ! Shipments::stopFor($s, $mine)) {
+            return;
+        }
+        if (Shipments::move($s, $to)) {
+            Notification::make()->title('Saved: '.Shipments::label($s->fresh()))->success()->send();
+        } else {
+            Notification::make()->title('Not yet')->body(implode(' ', Shipments::blockers($s, $to)) ?: 'That step is not next.')->warning()->send();
+        }
+    }
+
     protected function getViewData(): array
     {
+        if (static::$incoming) {
+            $mine = (int) Auth::user()?->logistichub_id;
+            $all = Shipments::visible($this->hub())->where(fn ($q) => $q->where('logistichub_id', $mine)
+                ->when(Shipments::stopsReady(), fn ($q) => $q->orWhereIn('id', \App\Models\Shipping\SeaShipmentStop::where('logistichub_id', $mine)->select('sea_shipment_id'))))
+                ->latest('id')->limit(80)->get()->map(fn ($s) => \App\Support\Shipping\HubIncoming::card($s, $mine) + ['url' => $this->detailUrl($s->id), 'eta' => $s->eta]);
+            $coming = $all->reject(fn ($c) => $c['received'])->sortBy(fn ($c) => [-$c['at'], $c['eta']?->timestamp ?? PHP_INT_MAX])->values();
+
+            return [
+                'cards' => match ($this->kind) { 'received' => $all->filter(fn ($c) => $c['received'])->values(), 'coming' => $coming, default => $coming->where('kind', $this->kind)->values() },
+                'counts' => ['coming' => $coming->count(), 'container' => $coming->where('kind', 'container')->count(), 'roro' => $coming->where('kind', 'roro')->count(),
+                    'lcl' => $coming->where('kind', 'lcl')->count(), 'received' => $all->where('received', true)->count()],
+                'hubName' => \App\Models\Logistichub::whereKey($mine)->value('hub_name'),
+                'onWay' => $coming->sum('boxes'),
+            ];
+        }
         $mine = (int) Auth::user()?->logistichub_id;
         $q = Shipments::visible($this->hub())->when(static::$incoming, fn ($q) => $q->where(fn ($q) => $q->where('logistichub_id', $mine)
             ->when(Shipments::stopsReady(), fn ($q) => $q->orWhereIn('id', \App\Models\Shipping\SeaShipmentStop::where('logistichub_id', $mine)->select('sea_shipment_id')))));

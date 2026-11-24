@@ -742,6 +742,7 @@ class ScanApp extends Page
             $extras = $this->extrasReady || $this->screen === 'done';
             $loadNext = $extras && $this->screen === 'scan' && method_exists($station, 'loadNext') ? $station->loadNext() : null;
             $team = $extras && method_exists($station, 'team') ? $station->team() : [];
+            $hubCounts = $this->mode === 'load' && method_exists($station, 'hubCounts') ? $station->hubCounts() : null;
             $pickGroups = $this->mode === 'pick' && $this->screen === 'scan' ? $station->groups() : [];
             $trucks = $extras && $this->mode === 'unload' && method_exists($station, 'truckStatus') ? $station->truckStatus() : [];
             $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
@@ -779,6 +780,7 @@ class ScanApp extends Page
             'target' => $target,
             'loadNext' => $loadNext,
             'team' => $team,
+            'hubCounts' => $hubCounts ?? null,
             'trucks' => $trucks,
             'openSets' => $openSets,
             'countResult' => $countResult,

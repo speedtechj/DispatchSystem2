@@ -75,6 +75,13 @@ class DeliverylogsTable
                     })
                     ->sortable()
                     ->getStateUsing(function ($record) {
+                        // board 62: a trip that goes with a sea shipment's truck
+                        if (in_array((int) $record->id, \App\Support\Shipping\SeaTrucks::riderIdsCached(), true)) {
+                            $s = \App\Support\Shipping\Shipments::forTrip((int) $record->id);
+
+                            return 'Goes with '.$s?->code.($record->truck ? ' · '.$record->truck->plate_no : '');
+                        }
+
                         return $record->truck ? $record->truck->plate_no : 'Truck not assigned';
                     }),
                 TextColumn::make('vicheletype')

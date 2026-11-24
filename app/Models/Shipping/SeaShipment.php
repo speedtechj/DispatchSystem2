@@ -49,6 +49,21 @@ class SeaShipment extends Model
     }
 
     /** The hubs of this container in unloading order (one stop for a normal shipment). */
+    public function forwarderRow(): BelongsTo
+    {
+        return $this->belongsTo(Forwarder::class, 'forwarder_id');
+    }
+
+    public function handOverBranch(): BelongsTo
+    {
+        return $this->belongsTo(ForwarderBranch::class, 'hand_over_branch_id');
+    }
+
+    public function pickUpBranch(): BelongsTo
+    {
+        return $this->belongsTo(ForwarderBranch::class, 'pick_up_branch_id');
+    }
+
     public function stops(): HasMany
     {
         return $this->hasMany(SeaShipmentStop::class)->orderBy('stop');

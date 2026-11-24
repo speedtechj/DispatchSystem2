@@ -238,7 +238,7 @@ it('lets the driver type the count at the port and take the receipt photo', func
     $this->actingAs($driver);
     Filament::setCurrentPanel(Filament::getPanel('delivery'));
 
-    Livewire::test(\App\Filament\Delivery\Pages\Dashboard::class)->assertSee('At the port · '.$s->code);
+    Livewire::test(\App\Filament\Delivery\Pages\Dashboard::class)->assertSee($s->code)->assertSee('Arrived at port');
     Livewire::test(\App\Filament\Delivery\Pages\AtPort::class)
         ->assertSee('Left the warehouse: 4 boxes')->call('start')->assertSet('count', '4')
         ->call('bump', -1)->assertSee('1 box short')

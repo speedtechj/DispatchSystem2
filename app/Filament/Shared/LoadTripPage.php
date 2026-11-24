@@ -394,6 +394,21 @@ abstract class LoadTripPage extends Page
     }
 
 
+    /** Board 62: one truck for more hubs: "Cebu Hub 30/42 · Bohol Hub 18/18" (null for a normal trip). */
+    public function hubCounts(): ?array
+    {
+        $tripId = (int) ($this->data['deliverylog_id'] ?? 0);
+        if (! $tripId || count($ids = $this->carried($tripId)) < 2) {
+            return null;
+        }
+        $s = \App\Support\Shipping\Shipments::forTrip($tripId);
+        $rows = Tripinvoice::whereIn($this->tripColumn(), $ids)->selectRaw($this->tripColumn().' as t, count(*) n, sum(case when '.$this->loadedColumn().' = 1 then 1 else 0 end) l')
+            ->groupBy($this->tripColumn())->toBase()->get()->keyBy('t');
+
+        return \App\Support\Shipping\Shipments::stops($s)->whereIn('deliverylog_id', $ids)->sortBy('stop')
+            ->map(fn ($st) => ['hub' => $st->hub?->hub_name, 'done' => (int) ($rows[$st->deliverylog_id]->l ?? 0), 'total' => (int) ($rows[$st->deliverylog_id]->n ?? 0)])->values()->all();
+    }
+
     /** What to load next on the selected trip (null when the trip has no sorted stops). */
     public function loadNext(): ?array
     {
