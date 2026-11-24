@@ -42,6 +42,10 @@
         </span>
     </div>
 
+    @if ($canMode && $s->mode === 'container' && $allBoxes > 0 && $allBoxes < \App\Support\Shipping\Shipments::LCL_HINT)
+        <div class="ds-sv__hint"><span>Few boxes ({{ $allBoxes }}): LCL with a forwarder may cost less than a whole container.</span><button type="button" class="ds-fu__link" wire:click="setMode('lcl')">Send as LCL</button></div>
+    @endif
+
     {{-- the key details of this kind --}}
     @if ($s->mode === 'lcl' && ! $hubSide)
         <section class="ds-board__panel ds-sp__box ds-sv__lcl">
@@ -228,10 +232,14 @@
                 <dt>Other</dt><dd>{{ $s->cost_other !== null ? $peso($s->cost_other) : '—' }}</dd>
             </dl>
             <p class="ds-sp__perbox"><span>Per box</span><b class="num">{{ $counts['perBox'] ? $peso($counts['perBox']) : '—' }}</b></p>
-            @if ($s->seal_photo || $s->port_receipt)
+            @if (($s->pickup_count ?? null) !== null)
+                <p class="ds-board__muted">Picked up at the forwarder: {{ $s->pickup_count }} boxes{{ $s->pickup_at ? ' · '.$s->pickup_at->format('M j g:i A') : '' }}</p>
+            @endif
+            @if ($s->seal_photo || $s->port_receipt || ($s->pickup_photo ?? null))
                 <span class="ds-sp__pics">
                     @if ($s->seal_photo)<a href="{{ $s->fileUrl($s->seal_photo) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->seal_photo) }}" alt="Seal"><small>Seal</small></a>@endif
-                    @if ($s->port_receipt)<a href="{{ $s->fileUrl($s->port_receipt) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->port_receipt) }}" alt="Port receipt"><small>Port receipt</small></a>@endif
+                    @if ($s->port_receipt)<a href="{{ $s->fileUrl($s->port_receipt) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->port_receipt) }}" alt="Port receipt"><small>{{ $s->mode === 'lcl' ? 'Forwarder receipt' : 'Port receipt' }}</small></a>@endif
+                    @if ($s->pickup_photo ?? null)<a href="{{ $s->fileUrl($s->pickup_photo) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->pickup_photo) }}" alt="Release at pick-up"><small>Release at pick-up</small></a>@endif
                 </span>
             @endif
         </section>

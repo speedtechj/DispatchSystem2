@@ -19,7 +19,7 @@ class SeaShipment extends Model
     protected function casts(): array
     {
         return ['status_log' => 'array', 'etd' => 'date', 'eta' => 'date', 'port_at' => 'datetime',
-            'cost_freight' => 'float', 'cost_trucking' => 'float', 'cost_port' => 'float', 'cost_other' => 'float', 'charge_rate' => 'float'];
+            'cost_freight' => 'float', 'cost_trucking' => 'float', 'cost_port' => 'float', 'cost_other' => 'float', 'charge_rate' => 'float', 'pickup_at' => 'datetime'];
     }
 
     public function trip(): BelongsTo

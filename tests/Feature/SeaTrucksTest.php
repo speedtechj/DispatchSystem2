@@ -207,3 +207,46 @@ it('shows the partner hub its incoming shipments by kind, with what to do', func
     expect($lcl->fresh()->status)->toBe('picked_up');
     Livewire::test(IncomingShipments::class)->set('kind', 'roro')->assertDontSee($lcl->code);
 });
+
+it('lets the partner hub pick up LCL at the forwarder: count, photo, picked up', function () {
+    $this->cebu->forceFill(['by_sea' => true, 'port' => 'Port of Cebu'])->save();
+    $s = Shipments::create($this->trip, 'lcl');
+    $s->update(['status' => 'arrived', 'forwarder' => '2GO Logistics', 'waybill_no' => '2GO-55120', 'pick_up_at' => '2GO Cebu, Pier 3']);
+    Filament::setCurrentPanel(Filament::getPanel('company'));
+    $this->actingAs($this->hubUser);
+    expect(\App\Support\Shipping\HubIncoming::card($s->fresh(), $this->cebu->id)['actions'][0]['url'])->toContain('lcl-pickup');
+
+    Livewire::withQueryParams(['shipment' => $s->id])->test(\App\Filament\Company\Pages\LclPickup::class)
+        ->assertSee('2GO Cebu, Pier 3')->call('start')->assertSet('count', '4')
+        ->call('bump', -1)->assertSee('1 box short')->call('toPhoto')->assertSet('step', 'photo')
+        ->call('save')->assertSet('step', 'done')->assertSee('Picked up');
+    $s->refresh();
+    expect($s->status)->toBe('picked_up')->and($s->pickup_count)->toBe(3)->and($s->pickup_by)->toBe($this->hubUser->id);
+});
+
+it('tells the RoRo hub to leave other hubs\' boxes on the truck, and lets it follow the truck', function () {
+    [$s, $tripB, , $bohol] = twoHubShipment($this);
+    $s->update(['mode' => 'roro', 'status' => 'arrived']);
+    foreach (Tripinvoice::whereIn('deliverylog_id', [$this->trip->id, $tripB->id])->get() as $r) {
+        app(TripAssignment::class)->markLoaded($r);
+    }
+    expect(SeaTrucks::roroTruckFor($this->cebu->id, (int) $this->trip->truck_id))->toBeTrue()
+        ->and(SeaTrucks::roroTruckFor($this->davao->id, (int) $this->trip->truck_id))->toBeFalse();
+
+    // GPS: about 10 km straight line from the hub pin = ~13 km by road
+    \App\Support\Maps\MapSettings::putStartPin('hub', $this->cebu->id, '10.3157, 123.8854');
+    \App\Models\Tracking\TruckPosition::create(['truck_id' => $this->trip->truck_id, 'deliverylog_id' => $this->trip->id, 'lat' => 10.4057, 'lng' => 123.8854, 'speed' => 40, 'source' => 'app', 'recorded_at' => now()]);
+    expect(\App\Support\Shipping\HubIncoming::live($s->fresh(), $this->trip->fresh('truck'), $this->cebu->id))->toStartWith('On the road · 13 km away');
+
+    Filament::setCurrentPanel(Filament::getPanel('scan'));
+    $this->actingAs($this->hubUser);
+    Livewire::test(ScanApp::class)->call('open', 'ship_receive')->call('pick', $s->id)
+        ->call('scan', 'SEA-6')->assertSet('status', 'warning')->assertSet('route.name', 'For Bohol Hub: leave it on the truck');
+});
+
+it('suggests LCL for a container with few boxes', function () {
+    $this->cebu->forceFill(['by_sea' => true, 'port' => 'Port of Cebu'])->save();
+    $s = Shipments::create($this->trip);
+    Livewire::test(AdminShipmentPage::class, ['shipmentId' => $s->id])->assertSee('Few boxes (4)')->call('setMode', 'lcl')->assertDontSee('Few boxes');
+    expect($s->fresh()->mode)->toBe('lcl');
+});

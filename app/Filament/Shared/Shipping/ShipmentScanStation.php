@@ -92,8 +92,10 @@ abstract class ShipmentScanStation extends Page
             if ($stop && $stop->received_at) {
                 $this->scanResult('warning', "{$code} was already received at ".($stop->hub?->hub_name ?? 'the hub before').'. Not counted again.', $other);
             } elseif ($stop) {
-                $this->route = ['kind' => 'wrong', 'code' => '→', 'name' => 'For '.($stop->hub?->hub_name ?? 'the next hub').': leave it in the container', 'color' => '#7a4fb0', 'why' => 'Stop '.$stop->stop.'. Not counted, not missing.'];
-                $this->scanResult('warning', "{$code} is for ".($stop->hub?->hub_name ?? 'the next hub').': leave it in the container.', $other);
+                // RoRo: our truck goes on to the next hub; LCL and container: the boxes stay in the van/lot
+                $where = $s->mode === 'roro' ? 'on the truck' : ($s->mode === 'lcl' ? 'with the rest' : 'in the container');
+                $this->route = ['kind' => 'wrong', 'code' => '→', 'name' => 'For '.($stop->hub?->hub_name ?? 'the next hub').': leave it '.$where, 'color' => '#7a4fb0', 'why' => 'Stop '.$stop->stop.'. Not counted, not missing.'];
+                $this->scanResult('warning', "{$code} is for ".($stop->hub?->hub_name ?? 'the next hub').': leave it '.$where.'.', $other);
             } else {
                 $this->scanResult('danger', "{$code} is not in shipment {$s->code}.", $other);
             }
@@ -202,7 +204,7 @@ abstract class ShipmentScanStation extends Page
     {
         return $this->shipments()->latest('id')->limit(40)->get()->map(fn (SeaShipment $s) => [
             'id' => $s->id, 'name' => $s->code.' → '.($s->hub?->hub_name ?? ''), 'active' => true,
-            'sub' => collect([$s->van_no ? 'Van '.$s->van_no : null, Shipments::label($s), $s->eta ? 'ETA '.$s->eta->format('M j') : null])->filter()->join(' · '),
+            'sub' => collect([['roro' => 'RoRo · our truck', 'lcl' => 'LCL · '.($s->forwarder ?: 'forwarder')][$s->mode] ?? null, $s->van_no ? 'Van '.$s->van_no : null, Shipments::label($s), $s->eta ? 'ETA '.$s->eta->format('M j') : null])->filter()->join(' · '),
         ]);
     }
 

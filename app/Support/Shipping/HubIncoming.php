@@ -36,12 +36,15 @@ class HubIncoming
                 'sub' => 'Our truck rides the ship and drives to your hub'.($stop ? ' · you are stop '.$stop->stop : ''),
                 'facts' => ['Truck · driver' => trim(($truckTrip?->truck?->plate_no ?? '—').($driver ? ' · '.$driver->first_name.' '.mb_substr((string) $driver->last_name, 0, 1).'.' : '')),
                     'Ship' => trim(($s->shipping_line ?: '').($s->vessel ? ' · '.$s->vessel : '')) ?: '—', 'Arrives' => $eta ?? '—',
-                    'Now' => $stop?->arrived_at ? 'At your hub since '.$stop->arrived_at->format('g:i A') : Shipments::label($s)],
+                    'Now' => $stop?->arrived_at ? 'At your hub since '.$stop->arrived_at->format('g:i A') : (static::live($s, $truckTrip, $hubId) ?? Shipments::label($s))],
                 'steps' => ['Loaded', 'On the ship', 'Off the ship', 'At your hub', 'Received'],
                 'at' => $received ? 5 : ($stop?->arrived_at ? 3 : match ($s->status) { 'arrived' => 2, 'sailed' => 1, default => 0 }),
                 'todo' => $received ? 'Received.' : ($stop?->arrived_at ? 'The truck is at your door: scan your '.$mine.' boxes in (Scan app → Receive container). The rest stay on the truck.'
                     : 'Have people ready when the truck comes. Receive only your '.$mine.' boxes from it.'),
-                'actions' => $received ? [] : [['label' => 'Receive from truck', 'url' => static::scanUrl(), 'primary' => (bool) $stop?->arrived_at]],
+                'actions' => $received ? [] : array_values(array_filter([
+                    ['label' => 'Receive from truck', 'url' => static::scanUrl(), 'primary' => (bool) $stop?->arrived_at],
+                    $truckTrip?->truck_id && ! $stop?->arrived_at && in_array($s->status, ['to_port', 'arrived'], true) ? ['label' => 'See on map', 'url' => static::mapUrl((int) $truckTrip->truck_id), 'primary' => false] : null,
+                ])),
             ],
             'lcl' => [
                 'kind' => 'lcl', 'tag' => 'LCL',
@@ -58,7 +61,7 @@ class HubIncoming
                 },
                 'actions' => $received ? [] : match ($s->status) {
                     'sailed' => [['label' => 'Ready to pick up', 'press' => 'arrived', 'primary' => false]],
-                    'arrived' => [['label' => 'I picked them up', 'press' => 'picked_up', 'primary' => true]],
+                    'arrived' => [['label' => 'I picked them up', 'url' => static::pickupUrl($s->id), 'primary' => true]],
                     'picked_up' => [['label' => 'Scan them in', 'url' => static::scanUrl(), 'primary' => true]],
                     default => [],
                 },
@@ -81,6 +84,47 @@ class HubIncoming
                 },
             ],
         };
+    }
+
+    /** RoRo off the ship: "On the road · 26 km away · about 3:40 PM" from the truck's GPS (null when not known). */
+    public static function live(SeaShipment $s, ?\App\Models\Deliverylog $truckTrip, int $hubId): ?string
+    {
+        if ($s->status !== 'arrived' || ! $truckTrip?->truck) {
+            return null;
+        }
+        $now = \App\Support\Tracking\Tracker::now($truckTrip->truck, $truckTrip);
+        if ($now['lat'] === null) {
+            return null;
+        }
+        if ($now['kind'] === 'bad') {
+            return $now['label'];
+        }
+        $pin = \App\Support\Maps\MapSettings::startPin('hub', $hubId);
+        if (! $pin) {
+            return 'On the road · '.$now['label'];
+        }
+        $km = \App\Support\Tracking\Tracker::km([$now['lat'], $now['lng']], [$pin[0], $pin[1]]) * 1.3; // roads are longer than a straight line
+        $min = (int) round($km / 35 * 60);                                                              // about 35 km/h on island roads
+
+        return $km < 0.5 ? 'At your gate' : 'On the road · '.round($km).' km away · about '.now()->addMinutes($min)->format('g:i A');
+    }
+
+    protected static function pickupUrl(int $id): string
+    {
+        try {
+            return \App\Filament\Company\Pages\LclPickup::getUrl(['shipment' => $id], panel: 'company');
+        } catch (\Throwable) {
+            return '#';
+        }
+    }
+
+    protected static function mapUrl(int $truckId): string
+    {
+        try {
+            return \App\Filament\Company\Pages\TruckDetail::getUrl(['truck' => $truckId], panel: 'company');
+        } catch (\Throwable) {
+            return '#';
+        }
     }
 
     protected static function scanUrl(): string

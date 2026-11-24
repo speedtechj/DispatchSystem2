@@ -41,6 +41,9 @@ class Shipments
         'received' => ['Received', 'At {hub}'],
     ];
 
+    /** Fewer boxes than this in a container: suggest LCL. */
+    public const LCL_HINT = 40;
+
     /** How the forwarder charges. */
     public const CHARGES = ['cbm' => 'Per CBM', 'kg' => 'Per kilo', 'box' => 'Per box'];
 

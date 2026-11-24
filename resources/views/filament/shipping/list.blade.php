@@ -53,6 +53,10 @@
                     <p class="ds-board__muted">Pick the trip to the port on the left.</p>
                 @endif
                 <label class="ds-sp__lbl"><span>How it's shipped</span><select wire:model.live="mode">@foreach ($modes as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select></label>
+                @php($pickedBoxes = collect($pickedRows)->sum('boxes'))
+                @if ($mode === 'container' && $pickedBoxes > 0 && $pickedBoxes < \App\Support\Shipping\Shipments::LCL_HINT)
+                    <p class="ds-sv__hint"><span>Few boxes ({{ $pickedBoxes }}): LCL may cost less than a container.</span><button type="button" class="ds-fu__link" wire:click="$set('mode', 'lcl')">Use LCL</button></p>
+                @endif
                 @if ($mode !== 'roro')
                     <label class="ds-sp__lbl"><span>Port check</span><select wire:model="portCheck">@foreach ($checks as $k => $l)<option value="{{ $k }}">{{ $l }}</option>@endforeach</select></label>
                 @endif

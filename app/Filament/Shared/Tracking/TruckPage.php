@@ -47,7 +47,9 @@ abstract class TruckPage extends Page
     {
         $this->truckId = (int) request()->query('truck', $this->truckId);
         $truck = Truck::find($this->truckId);
-        abort_unless($truck && Tracker::canSeeTruck($this->hub(), $truck), 404);
+        // board 63: a partner hub may follow our RoRo truck that brings its boxes
+        abort_unless($truck && (Tracker::canSeeTruck($this->hub(), $truck)
+            || (is_int($this->hub()) && \App\Support\Shipping\SeaTrucks::roroTruckFor($this->hub(), $truck->id))), 404);
         if (! in_array($this->tab, ['today', 'history', 'alerts'], true)) {
             $this->tab = 'today';
         }

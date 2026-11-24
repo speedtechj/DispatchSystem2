@@ -191,6 +191,18 @@ class SeaTrucks
         return static::carrierTrip($trip->id) === (int) $trip->id ? $s : null;
     }
 
+    /** Board 63: this truck carries an open RoRo shipment with a stop at this hub. */
+    public static function roroTruckFor(int $hubId, int $truckId): bool
+    {
+        if (! Shipments::ready() || ! Shipments::stopsReady()) {
+            return false;
+        }
+
+        return SeaShipment::where('mode', 'roro')->where('status', '!=', 'received')
+            ->whereIn('id', SeaShipmentStop::where('logistichub_id', $hubId)->whereNull('received_at')->select('sea_shipment_id'))
+            ->whereIn('deliverylog_id', Deliverylog::where('truck_id', $truckId)->select('id'))->exists();
+    }
+
     /** What the RoRo driver presses next: [key, label] or null. */
     public static function roroNext(SeaShipment $s, int $tripId): ?array
     {

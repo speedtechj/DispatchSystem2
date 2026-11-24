@@ -5391,3 +5391,5 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sea__hubs { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .ds-sea__hubs i { font-style: normal; font-size: 0.75rem; font-weight: 800; padding: 2px 9px; border-radius: 999px; background: rgb(140 196 255 / .16); color: #8cc4ff; }
 .ds-sea__btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
+.ds-sv__hint { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.6rem 0.8rem; border-radius: 0.7rem; background: #fff6db; color: #7a5300; font-weight: 700; font-size: 0.85rem; margin: 0; }
+.dark .ds-sv__hint { background: rgb(255 210 77 / .12); color: #ffd24d; }
