@@ -39,7 +39,8 @@ class TripPlanner
         'hub' => 'Hub trips',
     ];
 
-    public function __construct(public readonly User $user, public readonly string $mode) {}
+    /** $here: transfers made from this warehouse (an admin can look from either); null = the user's warehouse. */
+    public function __construct(public readonly User $user, public readonly string $mode, public readonly ?int $here = null) {}
 
     /** Which kinds of trips this person can make in the panel they are in. */
     public static function modesFor(User $user, ?string $panel = null): array
@@ -60,6 +61,10 @@ class TripPlanner
     /** In the warehouse panel only that warehouse's boxes are used. */
     protected function warehouseOnly(): ?int
     {
+        if ($this->mode === 'transfer' && $this->here) {
+            return $this->here;
+        }
+
         return Filament::getCurrentPanel()?->getId() === 'warehouse' || $this->mode === 'transfer'
             ? ($this->user->warehouse_id ?: -1)
             : null;
@@ -187,7 +192,7 @@ class TripPlanner
     public function destinations(): Collection
     {
         return match ($this->mode) {
-            'transfer' => Warehouse::where('id', '!=', $this->user->warehouse_id)->orderBy('name')->get()
+            'transfer' => Warehouse::where('id', '!=', $this->here ?? $this->user->warehouse_id)->orderBy('name')->get()
                 ->map(fn ($w) => ['id' => $w->id, 'name' => $w->name, 'place' => trim($w->city.', '.$w->province, ', ')]),
             'delivery' => Logistichub::where('is_active', true)->orderBy('hub_name')->get()
                 ->map(fn ($h) => ['id' => $h->id, 'name' => $h->hub_name, 'place' => $h->hub_code]),
@@ -412,7 +417,7 @@ class TripPlanner
                     $trip = Whdeliverylog::create([
                         'truck_id' => $truck->id, 'warehouse_id' => $t['dest'] ?: $this->defaultDest(),
                         'departure_date' => $date->toDateString(), 'delivery_date' => $date->toDateString(),
-                        'user_id' => $this->user->id, 'user_whid' => $this->user->warehouse_id,
+                        'user_id' => $this->user->id, 'user_whid' => $this->here ?? $this->user->warehouse_id,
                     ]);
                     $added = $service->addToWarehouseTrip($trip, Invoice::whereKey($ids)->get());
                 } else {

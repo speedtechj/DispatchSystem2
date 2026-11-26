@@ -94,7 +94,7 @@ it('plans only this warehouse\'s provinces and makes one transfer per warehouse 
 
     Livewire::test(PlanTrips::class)->assertSee('Dasmari')->assertDontSee('Dagupan')->assertSee('2 boxes → transfer to Tarlac warehouse');
 
-    Livewire::test(WarehouseTransfers::class)->assertSee('Cavite warehouse → Tarlac warehouse')->assertSee('Pangasinan')
+    Livewire::test(WarehouseTransfers::class)->assertSee('To Tarlac warehouse')->assertSee('Pangasinan')
         ->call('create', $this->tarlac->id)->assertSee('created');
     $trip = Whdeliverylog::where('warehouse_id', $this->tarlac->id)->firstOrFail();
     expect(Whtripinvoice::where('whdeliverylog_id', $trip->id)->pluck('invoice_id')->map(fn ($id) => Invoice::find($id)->invoice)->sort()->values()->all())->toBe(['PAN1', 'PAN2']);

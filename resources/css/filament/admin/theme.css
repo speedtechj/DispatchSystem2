@@ -5393,3 +5393,51 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-sea__btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
 .ds-sv__hint { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.6rem 0.8rem; border-radius: 0.7rem; background: #fff6db; color: #7a5300; font-weight: 700; font-size: 0.85rem; margin: 0; }
 .dark .ds-sv__hint { background: rgb(255 210 77 / .12); color: #ffd24d; }
+
+/* Part 39 · Transfers to warehouses: manual with space bar + Ask the AI */
+.ds-tx { display: flex; flex-direction: column; gap: 0.9rem; }
+.ds-tx__tools { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.ds-tx__tools > small { color: #6b7b88; }
+.ds-tx__ask { height: 2.6rem; padding: 0 1rem; border-radius: 0.7rem; font-weight: 800; display: inline-flex; align-items: center; gap: 0.5rem; background: #7a4fb0; color: #fff; }
+.ds-tx__ask.is-back { background: #eef2f5; color: #0e2433; }
+.ds-tx__ask:disabled { opacity: .5; cursor: not-allowed; }
+.ds-tx__note, .ds-tx__ai { display: flex; gap: 0.6rem; align-items: center; padding: 0.65rem 0.9rem; border-radius: 0.75rem; background: #eef2f5; color: #33424e; font-size: 0.88rem; }
+.ds-tx__note > span, .ds-tx__ai > span { flex: 1; }
+.ds-tx__ai { background: #f1eafb; color: #4c2f7a; }
+.ds-tx__ai small { color: #7a4fb0; }
+.dark .ds-tx__note { background: rgb(255 255 255 / .06); color: inherit; }
+.dark .ds-tx__ai { background: rgb(122 79 176 / .2); color: #e2d4f6; }
+.ds-tx__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr)); gap: 0.9rem; align-items: start; }
+.ds-tx__card { display: flex; flex-direction: column; gap: 0.55rem; padding: 0.9rem 1rem; }
+.ds-tx__head { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; font-size: 1rem; }
+.ds-tx__row { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.85rem; padding: 0.35rem 0; border-top: 1px solid #f0f3f6; }
+.ds-tx__row small { color: #6b7b88; }
+.dark .ds-tx__row { border-color: rgb(255 255 255 / .08); }
+.ds-tx__lbl { color: #6b7b88; font-weight: 700; }
+.ds-tx__space { display: flex; justify-content: space-between; font-size: 0.82rem; }
+.ds-tx__ok { color: #17895e; }
+.ds-tx__bad { color: #c8372d; }
+.ds-tx__why { color: #4c2f7a; }
+.dark .ds-tx__why { color: #cdb6ef; }
+.ds-tx__pill { font-size: 0.75rem; font-weight: 800; padding: 0.2rem 0.6rem; border-radius: 999px; background: #e7f0fb; color: #1d5fa8; white-space: nowrap; }
+.ds-tx__pill.is-over { background: #fdecea; color: #c8372d; }
+.ds-tx__pill.is-made { background: #e6f6ef; color: #17895e; }
+.ds-tx__go { height: 2.6rem; border-radius: 0.7rem; font-weight: 800; background: #0e2433; color: #fff; }
+.ds-tx__go.is-warn { background: #fff1c7; color: #7a5600; }
+.ds-tx__go.is-off { background: #eef2f5; color: #8a99a5; cursor: not-allowed; }
+.ds-tx__go.is-made { background: #e6f6ef; color: #17895e; }
+.ds-tx__go:disabled:not(.is-made):not(.is-off) { opacity: .5; }
+.ds-tx__only { border-radius: 1rem; border: 2px dashed #d5dde3; padding: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; justify-content: center; color: #6b7b88; font-size: 0.88rem; }
+.ds-tx__only b { color: #33424e; }
+.dark .ds-tx__only { border-color: rgb(255 255 255 / .15); }
+.dark .ds-tx__only b { color: inherit; }
+.ds-tx__later { display: flex; gap: 0.75rem; align-items: center; padding: 0.75rem 1rem; flex-wrap: wrap; }
+.ds-tx__later small { flex: 1; color: #6b7b88; }
+.ds-tx__all { height: 2.5rem; padding: 0 1rem; border-radius: 0.7rem; font-weight: 800; background: #f6be00; color: #0e2433; }
+.ds-tx__all:disabled { background: #e6f6ef; color: #17895e; }
+.ds-tx__rules { color: #6b7b88; }
+.ds-tx__tools .ds-wc__sel { height: 2.6rem; background: #fff; color: #0e2433; }
+.dark .ds-tx__tools .ds-wc__sel { background: rgb(255 255 255 / .06); color: inherit; }
+.ds-tx__head b:first-child { flex: 1; }
+.ds-tx__head > b:last-child { font-size: 0.85rem; text-align: right; }
+.ds-tx .ds-tx__later { flex-direction: row; text-align: left; justify-content: flex-start; }
