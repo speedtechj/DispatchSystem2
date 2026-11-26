@@ -42,6 +42,25 @@ class AppServiceProvider extends ServiceProvider
         // Forms are built with Filament schemas, which only pass the fields they render.
         Model::unguard();
 
+        // Photos on this server or in a bucket (Settings → Photo storage): the public and box disks.
+        \Illuminate\Support\Facades\Storage::extend('routed', function ($app, array $config) {
+            $adapter = new \App\Support\Photos\Storage\RoutedAdapter($config['name'], $config);
+
+            return new \Illuminate\Filesystem\FilesystemAdapter(new \League\Flysystem\Filesystem($adapter, $config), $adapter, $config);
+        });
+        // Local only: buckets as folders, to try the page without R2 (PHOTOS_FAKE_BUCKETS=1 in .env).
+        if ($this->app->environment('local') && env('PHOTOS_FAKE_BUCKETS')) {
+            \App\Support\Photos\Storage\PhotoStore::$fake = true;
+        }
+        // The page shows if a queue worker runs (Supervisor or Plesk): it is seen here.
+        Event::listen(\Illuminate\Queue\Events\Looping::class, function () {
+            static $last = 0;
+            if (time() - $last > 60) {
+                $last = time();
+                \Illuminate\Support\Facades\Cache::put('photos.queue.seen', $last, 3600);
+            }
+        });
+
         Section::configureUsing(fn (Section $section) => $section->columnSpanFull());
 
         // Photos are made smaller on the phone before upload (longest side 1600 px), like the

@@ -97,6 +97,7 @@ class Menu
             'Pages\\TripRules' => ['Settings · trucks & boxes', null, 5],
             'Resources\\Boxissues\\BoxissueResource' => ['Settings · trucks & boxes', 'Box issue types', 6],
             'Pages\\BoxPhotoSettings' => ['Settings · trucks & boxes', 'Box photo settings', 7],
+            'Pages\\PhotoStorage' => ['Settings · trucks & boxes', 'Photo storage', 7],
             'Pages\\AgingLimits' => ['Settings · trucks & boxes', null, 8],
             'Resources\\ConsolidatorResource' => ['Settings · trucks & boxes', null, 9],
             'Resources\\CompanyResource' => ['Settings · trucks & boxes', 'Agents', 10],

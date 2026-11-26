@@ -23,6 +23,7 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     $this->seed(DemoSeeder::class);
     Storage::fake('local');
+    Storage::fake('box');
     Storage::fake('public');
     Filament::setCurrentPanel(Filament::getPanel('scan'));
     $base = User::where('email', 'warehouse@example.com')->firstOrFail();

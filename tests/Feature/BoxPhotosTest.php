@@ -40,6 +40,7 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     $this->seed(DemoSeeder::class);
     Storage::fake('local');
+    Storage::fake('box');
     Filament::setCurrentPanel(Filament::getPanel('admin'));
     $this->admin = User::where('email', 'admin@example.com')->firstOrFail();
     $this->actingAs($this->admin);
@@ -82,8 +83,8 @@ it('lets staff add any number of optional photos to the box just scanned', funct
         ->and($photos[0]->fileName())->toBe($this->box->invoice.'_unload_1.jpg')
         ->and($photos[1]->fileName())->toBe($this->box->invoice.'_unload_2.jpg');
 
-    Storage::disk('local')->assertExists($photos[0]->path);
-    [$w, $h] = getimagesizefromstring(Storage::disk('local')->get($photos[0]->path));
+    Storage::disk('box')->assertExists($photos[0]->path);
+    [$w, $h] = getimagesizefromstring(Storage::disk('box')->get($photos[0]->path));
     expect($w)->toBe(1600)->and($h)->toBe(1200);
 
     // the next scan starts with no condition
@@ -225,7 +226,7 @@ it('saves the settings and deletes old photos except boxes with an open issue', 
     $this->artisan('photos:prune')->assertSuccessful();
 
     expect(BoxPhoto::pluck('id')->all())->toBe([$kept->id, $new->id]);
-    Storage::disk('local')->assertMissing($old->path);
+    Storage::disk('box')->assertMissing($old->path);
 });
 
 it('shows all photos of a box from Search Invoice and Track a box', function () {

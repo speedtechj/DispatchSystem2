@@ -142,11 +142,11 @@ class BoxPhoto extends Model
 
     public function exists(): bool
     {
-        return Storage::disk('local')->exists($this->path);
+        return Storage::disk('box')->exists($this->path);
     }
 
     protected static function booted(): void
     {
-        static::deleting(fn (BoxPhoto $p) => Storage::disk('local')->delete($p->path));
+        static::deleting(fn (BoxPhoto $p) => Storage::disk('box')->delete($p->path));
     }
 }

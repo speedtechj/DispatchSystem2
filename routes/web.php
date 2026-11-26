@@ -80,3 +80,23 @@ Route::get('/fuel/vat-export', [FuelController::class, 'vatExport'])->middleware
 
 // Printable QR labels for the warehouse sections.
 Route::get('/sections/labels', App\Http\Controllers\SectionLabelsController::class)->middleware(['web', 'auth'])->name('sections.labels');
+
+// Settings → Photo storage: open a copied photo (a temporary link to the bucket, or the file on this server).
+Route::get('/photo-storage/open/{item}', function (int $item) {
+    abort_unless(\Illuminate\Support\Facades\Auth::user()?->is_admin, 403);
+    $i = \App\Models\Photos\PhotoTaskItem::findOrFail($item);
+    $disk = str_starts_with($i->path, 'wms-v1/') ? 'old' : 'public';
+    $place = \App\Support\Photos\Storage\PhotoStore::placeOf($disk, $i->path);
+    if ($place !== 'server') {
+        return redirect()->away(\App\Support\Photos\Storage\PhotoStore::link($place, $i->path, 1));
+    }
+
+    return $i->source && is_file($i->source) ? response()->file($i->source) : abort(404);
+})->name('photo-storage.open');
+
+// Local only (PHOTOS_FAKE_BUCKETS=1): show a photo from a bucket that is a folder.
+if (app()->environment('local') && env('PHOTOS_FAKE_BUCKETS')) {
+    Route::get('/photo-storage/fake/{slot}/{key}', function (string $slot, string $key) {
+        return response(\App\Support\Photos\Storage\PhotoStore::fs($slot)->get($key) ?? abort(404), 200, ['Content-Type' => 'image/jpeg']);
+    })->where('key', '.*');
+}

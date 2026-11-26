@@ -55,6 +55,7 @@ beforeEach(function () {
     $this->seed(DemoSeeder::class);
     Storage::fake('public');
     Storage::fake('local');
+    Storage::fake('box');
     $this->admin = User::where('email', 'admin@example.com')->firstOrFail();
     $this->actingAs($this->admin);
     Filament::setCurrentPanel(Filament::getPanel('admin'));

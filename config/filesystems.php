@@ -38,13 +38,33 @@ return [
             'report' => false,
         ],
 
+        // Photos and uploads: on this server or in a bucket (Settings → Photo storage, App\Support\Photos\Storage).
+        // "inner" is the folder on this server, as before.
         'public' => [
-            'driver' => 'local',
-            'root' => storage_path('app/public'),
+            'driver' => 'routed',
+            'name' => 'public',
             'url' => env('APP_URL').'/storage',
             'visibility' => 'public',
             'throw' => false,
             'report' => false,
+            'inner' => [
+                'driver' => 'local',
+                'root' => storage_path('app/public'),
+                'url' => env('APP_URL').'/storage',
+                'visibility' => 'public',
+            ],
+        ],
+
+        // Box photos from the scans (private: shown only to signed-in users).
+        'box' => [
+            'driver' => 'routed',
+            'name' => 'box',
+            'throw' => false,
+            'report' => false,
+            'inner' => [
+                'driver' => 'local',
+                'root' => storage_path('app/private'),
+            ],
         ],
 
         's3' => [

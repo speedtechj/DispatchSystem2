@@ -33,7 +33,7 @@ class BoxPhotos
 
         $bytes = static::shrink((string) file_get_contents($file->getRealPath()), $stamp);
         $path = 'box-photos/'.$taken->format('Y/m').'/'.Str::uuid().'.jpg';
-        Storage::disk('local')->put($path, $bytes);
+        Storage::disk('box')->put($path, $bytes);
 
         $photo = BoxPhoto::create([
             'invoice_id' => $invoice?->id,

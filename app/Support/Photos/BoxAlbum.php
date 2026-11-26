@@ -179,7 +179,7 @@ class BoxAlbum
             'condition' => $p->condition, 'note' => $p->note,
             'ref' => $p->reference(), 'place' => $p->place(), 'who' => $p->user?->full_name, 'at' => $p->taken_at,
             'url' => $p->url(), 'download' => $p->downloadUrl(), 'name' => $p->fileName(),
-            'disk' => 'local', 'path' => $p->path, 'size' => (int) $p->size,
+            'disk' => 'box', 'path' => $p->path, 'size' => (int) $p->size,
             'invoice' => $p->invoice, 'photo' => $p,
         ];
     }

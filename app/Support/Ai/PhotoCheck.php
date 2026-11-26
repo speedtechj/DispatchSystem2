@@ -65,7 +65,7 @@ class PhotoCheck
         if ($check->checked_at || ! Ai::enabled('photo_check')) {
             return;
         }
-        $image = $check->source === 'scan' ? Ai::image('local', $check->path) : Ai::image('public', $check->path);
+        $image = $check->source === 'scan' ? Ai::image('box', $check->path) : Ai::image('public', $check->path);
         if (! $image) {
             $check->update(['verdict' => 'unclear', 'note' => 'Photo file not found', 'checked_at' => now()]);
 
@@ -108,7 +108,7 @@ class PhotoCheck
             if ($invoice) {
                 $copy = 'invoiceissue-attachments/ai-'.$check->id.'-'.Str::random(6).'.jpg';
                 try {
-                    $bytes = $check->source === 'scan' ? Storage::disk('local')->get($check->path) : Storage::disk('public')->get($check->path);
+                    $bytes = $check->source === 'scan' ? Storage::disk('box')->get($check->path) : Storage::disk('public')->get($check->path);
                     Storage::disk('public')->put($copy, (string) $bytes);
                 } catch (Throwable) {
                     $copy = null;

@@ -14,7 +14,7 @@ class BoxPhotoController extends Controller
     {
         $p = $this->find($photo);
 
-        return response(Storage::disk('local')->get($p->path), 200, [
+        return response(Storage::disk('box')->get($p->path), 200, [
             'Content-Type' => 'image/jpeg',
             'Cache-Control' => 'private, max-age=86400',
         ]);
@@ -24,7 +24,7 @@ class BoxPhotoController extends Controller
     {
         $p = $this->find($photo);
 
-        return Storage::disk('local')->download($p->path, $p->fileName());
+        return Storage::disk('box')->download($p->path, $p->fileName());
     }
 
     protected function find(int $id): BoxPhoto
