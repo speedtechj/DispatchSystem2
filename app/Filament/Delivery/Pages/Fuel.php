@@ -95,7 +95,7 @@ class Fuel extends Page
     public function savePhoto(): void
     {
         $this->validate(['upload' => 'required|image|max:12288'], ['upload.image' => 'That file is not a photo.']);
-        $path = $this->upload->store('fuel/'.now()->format('Y-m'), 'public');
+        $path = $this->upload->store(\App\Support\Photos\Storage\PhotoFolders::dir('fuel', rescue(fn () => FuelData::truckFor(Auth::user(), DriverTrip::currentTrip(Auth::user()))?->plate_no, null, false)), 'public');
         PhotoShrinker::file('public', $path);
         $this->reset('upload');
 

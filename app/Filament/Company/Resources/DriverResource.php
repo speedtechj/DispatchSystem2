@@ -108,7 +108,7 @@ class DriverResource extends Resource
                                     })
                                     ->maxSize(1024)
                                     ->disk('public')
-                                    ->directory('userpictures')
+                                    ->directory('people')
                                     ->visibility('private')
                                     ->removeUploadedFileButtonPosition('right')
                                     ->label('Profile Picture'),

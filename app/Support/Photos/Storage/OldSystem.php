@@ -159,7 +159,7 @@ class OldSystem
         $task = static::task() ?? PhotoTask::create(['kind' => 'copy_old', 'status' => 'ready', 'user_id' => Auth::id(), 'options' => ['small' => true, 'keep' => false]]);
         $known = $task->items()->get(['id', 'path', 'status', 'size_before', 'src_time', 'other'])->keyBy('path');
         $seen = [];
-        $add = function (string $path, ?string $ref, ?string $src, ?string $other, string $found) use ($task, $known, &$seen) {
+        $add = function (string $path, ?string $ref, ?string $src, ?string $other, string $found, array $tidy = []) use ($task, $known, &$seen) {
             if (isset($seen[$path])) {
                 return;
             }
@@ -168,6 +168,9 @@ class OldSystem
             $time = $src && is_file($src) ? filemtime($src) : null;
             $old = $known[$path] ?? null;
             $data = ['source' => $src, 'other' => $other, 'found' => $found, 'ref' => $ref ? Str::limit($ref, 118, '') : null, 'size_before' => $size, 'src_time' => $time];
+            if (! $old || $old->status !== 'done') {
+                $data += ['new_path' => $tidy[0] ?? null, 'tbl' => $tidy[1] ?? null, 'col' => $tidy[2] ?? null];
+            }
             if ($old) {
                 // copied before and the file did not change: stays done; changed: copied again
                 $changed = $old->status === 'done' && ($old->size_before !== $size || $old->src_time !== $time);
@@ -180,7 +183,8 @@ class OldSystem
         if (($find['same'] ?? false) || ! ($find['found'] ?? false)) {
             foreach (static::columns() as $c) {
                 $hasId = Schema::hasColumn($c['table'], 'id');
-                $q = DB::table($c['table'])->whereNotNull($c['column'])->select(array_filter([$hasId ? 'id' : null, $c['column']]));
+                $isKnown = isset(PhotoFolders::known()[$c['table'].'.'.$c['column']]);
+                $q = DB::table($c['table'])->whereNotNull($c['column'])->select($isKnown ? ['*'] : array_filter([$hasId ? 'id' : null, $c['column']]));
                 $hasId ? $q->orderBy('id') : $q->orderBy($c['column']);
                 foreach ($q->cursor() as $row) {
                     foreach (static::paths($row->{$c['column']}) as $p) {
@@ -189,6 +193,8 @@ class OldSystem
                         $old = collect($olds)->first(fn ($f) => is_file($f));
                         $hasNew = is_file($new);
                         $ref = $c['table'].'.'.$c['column'].(isset($row->id) ? ' #'.$row->id : '');
+                        $np = $isKnown ? PhotoFolders::newPath($c['table'], $c['column'], $row, $p) : null;
+                        $tidy = $np ? [$np, $c['table'], $c['column']] : [];
                         if (PhotoStore::placeOf('public', $p) !== 'server') {
                             // already in a bucket (copied before, or moved): nothing to do
                             if (! isset($known[$p]) && ! isset($seen[$p])) {
@@ -200,9 +206,9 @@ class OldSystem
                             continue;
                         }
                         match (true) {
-                            $hasNew && $old && filesize($new) !== filesize($old) => $add($p, $ref, filemtime($new) >= filemtime($old) ? $new : $old, filemtime($new) >= filemtime($old) ? $old : $new, 'both'),
-                            $hasNew => $add($p, $ref, $new, null, 'wmsv2'),
-                            (bool) $old => $add($p, $ref, $old, null, 'wms'),
+                            $hasNew && $old && filesize($new) !== filesize($old) => $add($p, $ref, filemtime($new) >= filemtime($old) ? $new : $old, filemtime($new) >= filemtime($old) ? $old : $new, 'both', $tidy),
+                            $hasNew => $add($p, $ref, $new, null, 'wmsv2', $tidy),
+                            (bool) $old => $add($p, $ref, $old, null, 'wms', $tidy),
                             default => $add($p, $ref, null, null, 'missing'),
                         };
                     }
@@ -242,7 +248,10 @@ class OldSystem
         }
         $fs = PhotoStore::fs($to);
         $disk = str_starts_with($item->path, 'wms-v1/') ? 'old' : 'public';
-        if (! $task->opt('again') && PhotoStore::placeOf('public', $item->path) === $to && $disk === 'public') {
+        // put in the new folders (board 67): the path in the database is changed after the copy is checked
+        $tidy = $task->opt('tidy', true) && $item->new_path && $item->tbl && $item->col && $disk === 'public';
+        $key = $tidy ? $item->new_path : $item->path;
+        if (! $task->opt('again') && PhotoStore::placeOf('public', $key) === $to && $disk === 'public') {
             $item->update(['status' => 'skipped', 'note' => 'Already in the bucket']);
 
             return;
@@ -255,17 +264,20 @@ class OldSystem
         $bytes = (string) file_get_contents($item->source);
         $out = $task->opt('small', true) ? PhotoWork::smaller($bytes, $item->path) : $bytes;
         if ($task->opt('keep') && strlen($out) !== strlen($bytes)) {
-            $fs->put('_original/'.$item->path, $bytes);
+            $fs->put('_original/'.$key, $bytes);
         }
-        $fs->put($item->path, $out);
-        if ((int) $fs->size($item->path) !== strlen($out)) {
+        $fs->put($key, $out);
+        if ((int) $fs->size($key) !== strlen($out)) {
             throw new \RuntimeException('The copy in the bucket has a different size.');
         }
         if ($item->found === 'both' && $item->other && is_file($item->other)) {
-            $fs->put('_other/'.$item->path, (string) file_get_contents($item->other));
+            $fs->put('_other/'.$key, (string) file_get_contents($item->other));
         }
-        PhotoStore::record($disk, $item->path, $to, strlen($out));
-        $item->update(['status' => 'done', 'size_after' => strlen($out), 'size_before' => strlen($bytes), 'checked' => false]);
+        PhotoStore::record($disk, $key, $to, strlen($out));
+        if ($tidy) {
+            PhotoFolders::rewrite($item->tbl, $item->col, $item->path, $key);
+        }
+        $item->update(['status' => 'done', 'size_after' => strlen($out), 'size_before' => strlen($bytes), 'checked' => false, 'new_path' => $tidy ? $key : null]);
     }
 
     /** Try 50: copy 50 photos now, to look at them before copying all. */

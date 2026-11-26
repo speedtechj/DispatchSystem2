@@ -227,7 +227,7 @@ class Deliveryinv extends Page implements HasActions, HasSchemas, HasTable
                 'delivery_picture' => $this->scannedRecord()?->delivery_picture,
             ])
             ->schema([
-                static::pictureUpload(fn () => $this->scannedRecord()?->invoice),
+                static::pictureUpload(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $this->scannedRecord()?->invoice)),
             ])
             ->action(function (array $data): void {
                 $record = $this->scannedRecord();
@@ -344,7 +344,7 @@ class Deliveryinv extends Page implements HasActions, HasSchemas, HasTable
             ->modalIconColor('danger')
             ->modalWidth('lg')
             ->modalSubmitActionLabel('Save reason')
-            ->schema(static::failedDeliverySchema(fn () => 'not-delivered/'.$this->scannedRecord()?->invoice))
+            ->schema(static::failedDeliverySchema(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('not-delivered', $this->scannedRecord()?->invoice)))
             ->action(function (array $data): void {
                 $this->recordFailure($this->scannedRecord(), $data);
                 $this->scannedId = null;
@@ -455,7 +455,7 @@ class Deliveryinv extends Page implements HasActions, HasSchemas, HasTable
                     ->modalIconColor('danger')
                     ->modalWidth('lg')
                     ->modalSubmitActionLabel('Save reason')
-                    ->schema(static::failedDeliverySchema(fn (Tripinvoice $record) => 'not-delivered/'.$record->invoice))
+                    ->schema(static::failedDeliverySchema(fn (Tripinvoice $record) => \App\Support\Photos\Storage\PhotoFolders::dir('not-delivered', $record->invoice)))
                     ->action(fn (array $data, Tripinvoice $record) => $this->recordFailure(
                         $this->deliveryQuery()->whereKey($record->getKey())->first(),
                         $data,

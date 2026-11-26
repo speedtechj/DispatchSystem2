@@ -86,9 +86,10 @@ Route::get('/photo-storage/open/{item}', function (int $item) {
     abort_unless(\Illuminate\Support\Facades\Auth::user()?->is_admin, 403);
     $i = \App\Models\Photos\PhotoTaskItem::findOrFail($item);
     $disk = str_starts_with($i->path, 'wms-v1/') ? 'old' : 'public';
-    $place = \App\Support\Photos\Storage\PhotoStore::placeOf($disk, $i->path);
+    $key = $i->new_path ?: $i->path;
+    $place = \App\Support\Photos\Storage\PhotoStore::placeOf($disk, $key);
     if ($place !== 'server') {
-        return redirect()->away(\App\Support\Photos\Storage\PhotoStore::link($place, $i->path, 1));
+        return redirect()->away(\App\Support\Photos\Storage\PhotoStore::link($place, $key, 1));
     }
 
     return $i->source && is_file($i->source) ? response()->file($i->source) : abort(404);

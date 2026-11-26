@@ -228,7 +228,7 @@ class TruckEditorPage extends Page
             }
         }
         if ($this->photo) {
-            $path = $this->photo->store('truckypictures', 'public');
+            $path = $this->photo->store('trucks', 'public');
             PhotoShrinker::file('public', $path);
             $values['truck_picture'] = $path;
         } elseif ($this->removePhoto) {

@@ -229,7 +229,7 @@ class DeliveryinvsTable
                                 ->openable()
                                 ->disk('public')
                                 ->directory(function (Model $record) {
-                                    return $record->invoice;
+                                    return \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $record->invoice);
                                 })
                                 ->downloadable()
                                 ->visibility('private')
@@ -272,7 +272,7 @@ class DeliveryinvsTable
                                 ->openable()
                                 ->disk('public')
                                 ->directory(function (Model $record) {
-                                    return $record->invoice;
+                                    return \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $record->invoice);
                                 })
                                 ->visibility('private')
                                 ->required()

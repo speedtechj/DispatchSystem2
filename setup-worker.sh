@@ -97,7 +97,11 @@ touch "$APP_DIR/storage/logs/worker.log" && chown "$RUN_AS" "$APP_DIR/storage/lo
 supervisorctl reread >/dev/null
 supervisorctl update >/dev/null
 sudo -u "$RUN_AS" "$PHP_BIN" "$APP_DIR/artisan" queue:restart >/dev/null 2>&1 || true
-sleep 3
+# Supervisor counts a worker as RUNNING after a few seconds: wait up to 20 s
+for _ in $(seq 1 10); do
+  sleep 2
+  supervisorctl status "${NAME}:*" 2>/dev/null | grep -q STARTING || break
+done
 supervisorctl status "${NAME}:*" || true
 
 if supervisorctl status "${NAME}:*" 2>/dev/null | grep -q RUNNING; then

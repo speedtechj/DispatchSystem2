@@ -47,6 +47,9 @@ class PhotoStorage extends Page
 
     public bool $runHere = false;
 
+    /** Move: put the photos in the new folders (board 67). */
+    public bool $tidyMove = true;
+
     public bool $sureAgain = false;
 
     public string $oldFolder = '';
@@ -175,7 +178,7 @@ class PhotoStorage extends Page
 
             return;
         }
-        $t = PhotoWork::startMove($to);
+        $t = PhotoWork::startMove($to, $this->tidyMove);
         Cache::forget('photos.server.count');
         Notification::make()->title(number_format($t->total).' photos will move to the '.strtolower(PhotoStore::PLACES[$to]))->success()->send();
     }
@@ -241,8 +244,8 @@ class PhotoStorage extends Page
     public function setOpt(string $key): void
     {
         $task = OldSystem::task();
-        if ($task && in_array($key, ['small', 'keep'], true)) {
-            $task->update(['options' => array_merge($task->options ?? [], [$key => ! $task->opt($key, $key === 'small')])]);
+        if ($task && in_array($key, ['small', 'keep', 'tidy'], true)) {
+            $task->update(['options' => array_merge($task->options ?? [], [$key => ! $task->opt($key, $key !== 'keep')])]);
         }
     }
 
@@ -372,6 +375,7 @@ class PhotoStorage extends Page
             'last' => $this->step === 5 && $task ? $task->items()->whereIn('status', ['done', 'skipped', 'failed'])->latest('updated_at')->limit(6)->get() : collect(),
             'checkedN' => $task ? $task->items()->where('checked', true)->count() : 0,
             'missingN' => (int) ($groups['missing'] ?? 0),
+            'maxKb' => \App\Support\Photos\Storage\PhotoFolders::maxKb(), 'folderMap' => \App\Support\Photos\Storage\PhotoFolders::MAP,
             'backup' => AppSetting::get('photos.old_backup'), 'csvAt' => AppSetting::get('photos.old_csv'),
             'mb' => fn ($b) => $b >= 1073741824 ? number_format($b / 1073741824, 1).' GB' : ($b >= 1048576 ? number_format($b / 1048576, 1).' MB' : number_format($b / 1024).' KB'),
             'openUrl' => fn (PhotoTaskItem $i) => route('photo-storage.open', $i->id),

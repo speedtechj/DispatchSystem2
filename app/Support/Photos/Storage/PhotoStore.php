@@ -146,10 +146,12 @@ class PhotoStore
         return static::$memo['server'][$disk] ??= Storage::build(config('filesystems.disks.'.$disk.'.inner') + ['throw' => true]);
     }
 
-    /** The key in the bucket: box photos (private on the server) go under private/. */
+    /** The key in the bucket: the same path (old box photos, box-photos/…, under private/). */
     public static function key(string $disk, string $path): string
     {
-        return ($disk === 'box' ? 'private/' : '').ltrim($path, '/');
+        $path = ltrim($path, '/');
+
+        return ($disk === 'box' && str_starts_with($path, 'box-photos/') ? 'private/' : '').$path;
     }
 
     public static function skip(string $disk, string $path): bool

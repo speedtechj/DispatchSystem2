@@ -87,7 +87,7 @@ protected static string | UnitEnum | null $navigationGroup = 'Settings';
                     ->uploadingMessage('Uploading attachment...')
                     ->openable()
                     ->disk('public')
-                    ->directory('consolidatordoc')
+                    ->directory('papers/consolidators')
                     ->visibility('private')
                     ->removeUploadedFileButtonPosition('right'),
                     Toggle::make('is_active')

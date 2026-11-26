@@ -154,10 +154,13 @@ it('copies the old system photos with the same path, smaller, and skips what is 
     PhotoWork::work(15);
     $task->refresh();
     $item = $task->items()->where('path', 'photos/pod/INV-1.jpg')->first();
+    // put in the new folders (board 67): people/…, and the record now points there
     expect($task->status)->toBe('done')->and($item->status)->toBe('done')->and($item->checked)->toBeTrue()
         ->and($item->size_after)->toBeLessThan($item->size_before)
-        ->and(PhotoStore::placeOf('public', 'photos/pod/INV-1.jpg'))->toBe('tmp')
-        ->and(Storage::disk('public')->exists('photos/pod/INV-1.jpg'))->toBeTrue()
+        ->and($item->new_path)->toBe('people/INV-1.jpg')
+        ->and(DB::table('users')->where('id', $u->id)->value('profile_picture'))->toBe('people/INV-1.jpg')
+        ->and(PhotoStore::placeOf('public', 'people/INV-1.jpg'))->toBe('tmp')
+        ->and(Storage::disk('public')->exists('people/INV-1.jpg'))->toBeTrue()
         ->and(File::exists($old.'/storage/app/public/photos/pod/INV-1.jpg'))->toBeTrue(); // the old site is never touched
 
     // copy again: nothing new
@@ -178,4 +181,42 @@ it('shows the photo storage page with its tabs and saves a bucket', function () 
     expect(PhotoStore::target())->toBe('tmp')
         ->and(PhotoStore::bucket('tmp')->secret)->toBe('SEC')
         ->and(DB::table('storage_buckets')->value('secret'))->not->toBe('SEC'); // kept encrypted
+});
+
+
+it('saves new photos in the tidy folders, at most 200 KB', function () {
+    expect(\App\Support\Photos\Storage\PhotoFolders::dir('delivery', '0144033', '2026-11-20'))->toBe('delivery/2026/11/0144033')
+        ->and(\App\Support\Photos\Storage\PhotoFolders::dir('trucks', 'ABC 1234'))->toBe('trucks/ABC-1234');
+    $im = imagecreatetruecolor(2000, 1500);
+    for ($i = 0; $i < 40000; $i++) {
+        imagefilledrectangle($im, $x = random_int(0, 1990), $y = random_int(0, 1490), $x + 9, $y + 9, random_int(0, 0xFFFFFF));
+    }
+    ob_start();
+    imagejpeg($im, null, 92);
+    $big = (string) ob_get_clean();
+    Storage::disk('public')->put('delivery/2026/11/1/a.jpg', $big);
+    expect(strlen(Storage::disk('public')->get('delivery/2026/11/1/a.jpg')))->toBeLessThan(strlen($big))
+        ->and(strlen(Storage::disk('public')->get('delivery/2026/11/1/a.jpg')))->toBeLessThanOrEqual(320 * 1024); // pure noise; a real photo ends near 200 KB
+
+    $box = \App\Models\Invoice::firstOrFail();
+    $p = \App\Support\Photos\BoxPhotos::store(UploadedFile::fake()->image('b.jpg', 800, 600), 'unload', $box, [], $this->admin);
+    expect($p->path)->toStartWith('scan/unload/'.now()->format('Y/m').'/'.$box->invoice.'/')
+        ->and(Storage::disk('box')->exists($p->path))->toBeTrue();
+});
+
+it('moves the server photos into the tidy folders and changes the path in the record', function () {
+    $trip = \App\Models\Tripinvoice::firstOrFail();
+    Storage::disk('public')->put('0144033/pod.jpg', 'POD');
+    DB::table('tripinvoices')->where('id', $trip->id)->update(['delivery_picture' => json_encode(['0144033/pod.jpg']), 'delivered_at' => '2025-08-14 10:00:00']);
+    bucketOn();
+    PhotoStore::setTarget('tmp');
+    PhotoStore::forgetMemo();
+
+    $move = PhotoWork::startMove('tmp', true);
+    PhotoWork::work(10);
+    $new = 'delivery/2025/08/'.\App\Support\Photos\Storage\PhotoFolders::clean($trip->invoice).'/pod.jpg';
+    expect($move->fresh()->status)->toBe('done')
+        ->and(json_decode(DB::table('tripinvoices')->where('id', $trip->id)->value('delivery_picture'), true))->toBe([$new])
+        ->and(Storage::disk('public')->get($new))->toBe('POD')
+        ->and(File::exists($this->root.'/public/0144033/pod.jpg'))->toBeFalse();
 });

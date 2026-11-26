@@ -440,7 +440,7 @@ abstract class UnloadContainerPage extends Page
                     ->label('Photo')
                     ->image()
                     ->disk('public')
-                    ->directory('boxissue')
+                    ->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('damage'))
                     ->visibility('private')
                     ->required(),
             ])
@@ -480,7 +480,7 @@ abstract class UnloadContainerPage extends Page
                     ->label('Photo')
                     ->image()
                     ->disk('public')
-                    ->directory('unmanifested')
+                    ->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('unmanifested'))
                     ->visibility('private')
                     ->required(),
                 Textarea::make('remarks')->label('Notes')->rows(3),

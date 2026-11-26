@@ -52,7 +52,7 @@ class UserResource extends Resource
                 FileUpload::make('profile_picture')
                     ->hiddenLabel()->image()->avatar()->imageEditor()->circleCropper()
                     ->getUploadedFileNameForStorageUsing(fn ($file, Get $get) => Str::slug($get('last_name') ?: 'user').'-'.Str::random(8).'.'.$file->getClientOriginalExtension())
-                    ->maxSize(1024)->disk('public')->directory('userpictures')->visibility('private')
+                    ->maxSize(1024)->disk('public')->directory('people')->visibility('private')
                     ->extraAttributes(['class' => 'ds-us__photo']),
                 Grid::make(3)->schema([
                     TextInput::make('first_name')->required()->maxLength(255),

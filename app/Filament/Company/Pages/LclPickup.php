@@ -106,7 +106,7 @@ class LclPickup extends Page
     public function savePhoto(): void
     {
         $this->validate(['upload' => 'required|image|max:12288'], ['upload.image' => 'That file is not a photo.']);
-        $path = $this->upload->store('shipments/'.now()->format('Y-m'), 'public');
+        $path = $this->upload->store(\App\Support\Photos\Storage\PhotoFolders::dir('shipments', \App\Models\Shipping\SeaShipment::whereKey($this->shipmentId)->value('code')), 'public');
         PhotoShrinker::file('public', $path);
         $this->photoPath = $path;
         $this->reset('upload');

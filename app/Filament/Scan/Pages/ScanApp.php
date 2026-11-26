@@ -694,7 +694,7 @@ class ScanApp extends Page
             ->modalHeading(fn () => "Unmanifested box {$this->missing}")
             ->modalDescription('This box is in the container but not on its manifest. Take a photo and add a note.')
             ->schema([
-                FileUpload::make('attachment_pic')->label('Photo')->image()->disk('public')->directory('unmanifested')->visibility('private')->required(),
+                FileUpload::make('attachment_pic')->label('Photo')->image()->disk('public')->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('unmanifested'))->visibility('private')->required(),
                 Textarea::make('remarks')->label('Notes')->rows(3),
             ])
             ->visible(fn () => filled($this->missing) && $this->mode === 'unload')

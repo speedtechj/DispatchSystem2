@@ -92,7 +92,7 @@ class ContainerResource extends Resource
                     ->uploadingMessage('Uploading attachment...')
                     ->openable()
                     ->disk('public')
-                    ->directory('continerpictures')
+                    ->directory('papers/containers')
                     ->visibility('private')
                     ->removeUploadedFileButtonPosition('right')
                     ->columnSpanFull(),

@@ -294,7 +294,7 @@ class Dashboard extends BaseDashboard
 
         $this->validate(['upload' => 'required|image|max:12288'], ['upload.image' => 'That file is not a photo.']);
 
-        $dir = $this->sheet === 'deliver' ? $box->invoice : 'not-delivered/'.$box->invoice;
+        $dir = \App\Support\Photos\Storage\PhotoFolders::dir($this->sheet === 'deliver' ? 'delivery' : 'not-delivered', $box->invoice);
         $path = $this->upload->store($dir, 'public');
         PhotoShrinker::file('public', $path); // the phone could not make it smaller: do it here
         $this->photos[] = $path;

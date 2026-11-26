@@ -133,7 +133,7 @@ abstract class SeaShipmentPage extends Page
         }
         foreach (['sealPhoto' => 'seal_photo', 'receipt' => 'port_receipt'] as $prop => $col) {
             if ($this->{$prop}) {
-                $path = $this->{$prop}->store('shipments/'.now()->format('Y-m'), 'public');
+                $path = $this->{$prop}->store(\App\Support\Photos\Storage\PhotoFolders::dir('shipments', $s->code ?? null), 'public');
                 PhotoShrinker::file('public', $path);
                 $data[$col] = $path;
                 $this->{$prop} = null;

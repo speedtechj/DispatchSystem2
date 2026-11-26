@@ -129,7 +129,7 @@ class DriverOfflineController extends Controller
                 ? ['status' => 'saved', 'message' => 'Already delivered by you.']
                 : ['status' => 'conflict', 'message' => 'Someone else already marked this box delivered. Call the office.'];
         } else {
-            $dir = $data['type'] === 'deliver' ? $box->invoice : 'not-delivered/'.$box->invoice;
+            $dir = \App\Support\Photos\Storage\PhotoFolders::dir($data['type'] === 'deliver' ? 'delivery' : 'not-delivered', $box->invoice);
             $paths = collect($request->file('photos', []))->map(function ($f) use ($dir) {
                 $path = $f->store($dir, 'public');
                 PhotoShrinker::file('public', $path);

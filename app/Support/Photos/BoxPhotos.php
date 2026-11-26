@@ -32,7 +32,7 @@ class BoxPhotos
         ])->filter()->join('  |  ');
 
         $bytes = static::shrink((string) file_get_contents($file->getRealPath()), $stamp);
-        $path = 'box-photos/'.$taken->format('Y/m').'/'.Str::uuid().'.jpg';
+        $path = \App\Support\Photos\Storage\PhotoFolders::dir('scan/'.\App\Support\Photos\Storage\PhotoFolders::clean($step), $invoice?->invoice ?? 'batch', $taken).'/'.Str::uuid().'.jpg';
         Storage::disk('box')->put($path, $bytes);
 
         $photo = BoxPhoto::create([

@@ -96,7 +96,7 @@ class CompanyResource extends Resource
                     ->openable()
                     ->maxSize(1024)
                     ->disk('public')
-                    ->directory('companypictures')
+                    ->directory('papers/companies')
                     ->visibility('private')
                     ->removeUploadedFileButtonPosition('right')
                     ->label('Logo')
@@ -108,7 +108,7 @@ class CompanyResource extends Resource
                     ->uploadingMessage('Uploading attachment...')
                     ->openable()
                     ->disk('public')
-                    ->directory('companydoc')
+                    ->directory('papers/companies')
                     ->visibility('private')
                     ->removeUploadedFileButtonPosition('right')
                     ->columnSpanFull(),

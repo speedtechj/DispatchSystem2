@@ -19,9 +19,12 @@ use Illuminate\Support\Str;
 class PhotoWork
 {
     /** Server → a bucket: every photo still on the server (not the logos and icons). */
-    public static function startMove(string $to): PhotoTask
+    public static function startMove(string $to, bool $tidy = true): PhotoTask
     {
-        $task = PhotoTask::create(['kind' => 'move', 'from_place' => 'server', 'to_place' => $to, 'status' => 'running', 'user_id' => Auth::id(), 'started_at' => now()]);
+        @set_time_limit(600);
+        $task = PhotoTask::create(['kind' => 'move', 'from_place' => 'server', 'to_place' => $to, 'status' => 'running', 'user_id' => Auth::id(), 'started_at' => now(),
+            'options' => ['tidy' => $tidy]]);
+        $refs = $tidy ? PhotoFolders::refs() : [];
         $rows = [];
         foreach (['public', 'box'] as $disk) {
             $server = PhotoStore::server($disk);
@@ -30,7 +33,9 @@ class PhotoWork
                 if (PhotoStore::skip($disk, $path) || str_starts_with(basename($path), '.')) {
                     continue;
                 }
-                $rows[] = ['photo_task_id' => $task->id, 'disk' => $disk, 'path' => $path, 'status' => 'pending', 'created_at' => now(), 'updated_at' => now()];
+                $r = $refs[$disk.'|'.$path] ?? null;
+                $rows[] = ['photo_task_id' => $task->id, 'disk' => $disk, 'path' => $path, 'status' => 'pending', 'created_at' => now(), 'updated_at' => now(),
+                    'new_path' => $r[2] ?? null, 'tbl' => $r[0] ?? null, 'col' => $r[1] ?? null];
                 if (count($rows) >= 500) {
                     PhotoTaskItem::insert($rows);
                     $rows = [];
@@ -172,19 +177,28 @@ class PhotoWork
         }
         $bytes = (string) $src->get($srcKey);
         $dest = PhotoStore::fs($to);
+        // put in the new folders (board 67): only photos of the server whose record is known
+        $tidy = $from === 'server' && $task->opt('tidy') && $item->new_path && $item->tbl && $item->col;
+        $path = $tidy ? $item->new_path : $item->path;
+        $key = PhotoStore::key($item->disk, $path);
         $dest->put($key, $bytes);
         if ((int) $dest->size($key) !== strlen($bytes)) {
             throw new \RuntimeException('The copy in the bucket has a different size.');
         }
-        PhotoStore::record($item->disk, $item->path, $to, strlen($bytes));
+        PhotoStore::record($item->disk, $path, $to, strlen($bytes));
+        if ($tidy) {
+            PhotoFolders::rewrite($item->tbl, $item->col, $item->path, $path);
+            PhotoStore::forget($item->disk, $item->path);
+        }
         $src->delete($srcKey);
-        $item->update(['status' => 'done', 'size_before' => strlen($bytes), 'size_after' => strlen($bytes)]);
+        $item->update(['status' => 'done', 'size_before' => strlen($bytes), 'size_after' => strlen($bytes), 'new_path' => $tidy ? $path : null]);
     }
 
     /** Check: the photo is in the bucket. A missing one is copied again. */
     protected static function check(PhotoTask $task, PhotoTaskItem $item): void
     {
-        $ok = $task->to_place && rescue(fn () => PhotoStore::fs($task->to_place)->exists($item->path), false, false);
+        $key = $item->new_path ?: $item->path;
+        $ok = $task->to_place && rescue(fn () => PhotoStore::fs($task->to_place)->exists($key), false, false);
         $item->update($ok ? ['checked' => true] : ['status' => 'pending', 'checked' => false, 'note' => 'Missing in the bucket: copied again']);
     }
 
@@ -206,20 +220,28 @@ class PhotoWork
         $src = PhotoShrinker::upright($src, PhotoShrinker::orientation($bytes));
         $w = imagesx($src);
         $h = imagesy($src);
-        $scale = min(1, PhotoShrinker::MAX_SIDE / max($w, $h));
-        $img = imagecreatetruecolor(max(1, (int) round($w * $scale)), max(1, (int) round($h * $scale)));
-        imagecopyresampled($img, $src, 0, 0, 0, 0, imagesx($img), imagesy($img), $w, $h);
-        imagedestroy($src);
         $out = $bytes;
-        foreach ([80, 75, 70, 65, 60] as $q) {
-            ob_start();
-            $ext === 'webp' && function_exists('imagewebp') ? imagewebp($img, null, $q) : imagejpeg($img, null, $q);
-            $out = (string) ob_get_clean();
-            if (strlen($out) <= $max) {
+        // 1600 px with quality 80 down to 60; still too big (a very busy photo): 1280 px, then 1024 px
+        foreach ([PhotoShrinker::MAX_SIDE, 1280, 1024] as $side) {
+            $scale = min(1, $side / max($w, $h));
+            $img = imagecreatetruecolor(max(1, (int) round($w * $scale)), max(1, (int) round($h * $scale)));
+            imagecopyresampled($img, $src, 0, 0, 0, 0, imagesx($img), imagesy($img), $w, $h);
+            foreach ([80, 75, 70, 65, 60] as $q) {
+                ob_start();
+                $ext === 'webp' && function_exists('imagewebp') ? imagewebp($img, null, $q) : imagejpeg($img, null, $q);
+                $out = (string) ob_get_clean();
+                if (strlen($out) <= $max) {
+                    break 2;
+                }
+            }
+            imagedestroy($img);
+            $img = null;
+            if ($scale < 1 && $side === 1024) {
                 break;
             }
         }
-        imagedestroy($img);
+        $img && imagedestroy($img);
+        imagedestroy($src);
 
         return $out !== '' && strlen($out) < strlen($bytes) ? $out : $bytes;
     }

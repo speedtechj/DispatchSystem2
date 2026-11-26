@@ -121,7 +121,7 @@ class ListInvoices extends ListRecords
                     ->image()
                     ->openable()
                     ->disk('public')
-                    ->directory(fn () => $this->scannedTrip()?->invoice)
+                    ->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $this->scannedTrip()?->invoice))
                     ->visibility('private')
                     ->required()
                     ->removeUploadedFileButtonPosition('right'),

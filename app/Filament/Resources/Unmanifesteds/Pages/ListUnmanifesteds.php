@@ -47,7 +47,7 @@ class ListUnmanifesteds extends ListRecords
                 ->uploadingMessage('Uploading attachment...')
                 ->image()
                 ->disk('public')
-                ->directory('unmanifested')
+                ->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('unmanifested'))
                 ->visibility('private')
                 ->required()
                 ->maxSize(5120), // 5MB

@@ -68,7 +68,7 @@ class TruckForm
                                     ->openable()
                                     ->maxSize(1024)
                                     ->disk('public')
-                                    ->directory('truckypictures')
+                                    ->directory('trucks')
                                     ->visibility('private')
                                     ->removeUploadedFileButtonPosition('right')
                                     ->label('Vehicles Picture')

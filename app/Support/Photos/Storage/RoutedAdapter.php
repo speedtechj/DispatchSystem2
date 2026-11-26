@@ -58,6 +58,12 @@ class RoutedAdapter implements FlyAdapter
     {
         $place = PhotoStore::targetFor($this->disk, $path);
         $options = array_filter(['visibility' => $config->get('visibility')]);
+        // new photos at most 200 KB (Settings → Photo storage), wherever they are saved
+        $max = PhotoStore::ready() && ! PhotoStore::skip($this->disk, $path) ? PhotoFolders::maxKb() : 0;
+        if ($max > 0 && in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), ['jpg', 'jpeg', 'webp'], true)) {
+            $contents = is_resource($contents) ? (string) stream_get_contents($contents) : $contents;
+            $contents = PhotoWork::smaller($contents, $path, $max * 1024);
+        }
         if ($place !== 'server') {
             $bytes = is_resource($contents) ? (string) stream_get_contents($contents) : $contents;
             try {

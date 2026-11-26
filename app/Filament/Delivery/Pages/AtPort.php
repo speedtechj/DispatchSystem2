@@ -108,7 +108,7 @@ class AtPort extends Page
     public function savePhoto(): void
     {
         $this->validate(['upload' => 'required|image|max:12288'], ['upload.image' => 'That file is not a photo.']);
-        $path = $this->upload->store('shipments/'.now()->format('Y-m'), 'public');
+        $path = $this->upload->store(\App\Support\Photos\Storage\PhotoFolders::dir('shipments', $this->shipment()?->code), 'public');
         PhotoShrinker::file('public', $path);
         if ($this->receiptPath) {
             Storage::disk('public')->delete($this->receiptPath);

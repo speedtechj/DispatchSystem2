@@ -127,6 +127,16 @@
             @endforeach
         </div>
 
+        <section class="ds-pst__card">
+            <span class="ds-pst__row"><b class="ds-pst__h">Folders</b><small class="ds-pst__mute">New photos: kind / year / month / invoice, the same on this server and in the bucket · at most {{ $maxKb }} KB each</small></span>
+            <span class="ds-pst__fmap">
+                @foreach ($folderMap as [$n, $f])
+                    <span><b>{{ $n }}</b><code>{{ $f }}</code></span>
+                @endforeach
+            </span>
+            <small class="ds-pst__mute">Old photos keep their folder and keep opening. Move and Copy can put them in these folders (the path in the database is changed after each copy is checked). Logos, app icons and issue e-mail attachments stay on the server.</small>
+        </section>
+
         <div class="ds-pst__two">
             <section class="ds-pst__card">
                 <b class="ds-pst__h">Last 7 days</b>
@@ -144,6 +154,7 @@
                     <span class="ds-pst__col"><small>{{ number_format($serverCount) }} photos still on this server</small></span>
                     <button type="button" class="ds-pst__go" wire:click="startMove" @disabled($target === 'server' || $active || ! $serverCount)>Start</button>
                 </span>
+                <label class="ds-pst__tog"><input type="checkbox" wire:model.live="tidyMove"><span><b>Put them in the new folders</b><small>delivery/2025/08/0144033/… · the path in the database is changed after each copy is checked</small></span></label>
                 @foreach ($moves as $m)
                     <span class="ds-pst__mv" wire:key="mv-{{ $m->id }}">
                         <b>{{ $pl[$m->from_place] ?? $m->from_place }} → {{ $pl[$m->to_place] ?? $m->to_place }}</b>
@@ -247,7 +258,7 @@
                     </span>
                     <span class="ds-pst__tr4 is-head"><span>Path in the database</span><span>Record</span><span>File found in</span><span></span></span>
                     @forelse ($rows as $r)
-                        <span class="ds-pst__tr4" wire:key="r-{{ $r->id }}"><span class="ds-pst__mono ds-pst__cut">{{ $r->path }}</span><span class="ds-pst__mute ds-pst__cut">{{ $r->ref }}</span>
+                        <span class="ds-pst__tr4" wire:key="r-{{ $r->id }}"><span class="ds-pst__col"><span class="ds-pst__mono ds-pst__cut">{{ $r->path }}</span>@if ($r->new_path)<small class="ds-pst__mono ds-pst__cut ds-pst__ok">→ {{ $r->new_path }}</small>@endif</span><span class="ds-pst__mute ds-pst__cut">{{ $r->ref }}</span>
                             <span @class(['ds-pst__cut', 'ds-pst__bad' => $r->found === 'missing', 'ds-pst__warn' => $r->found === 'both'])>{{ match ($r->found) { 'wmsv2' => 'wmsv2 folder', 'wms' => 'wms folder', 'both' => 'both · '.$mb((int) $r->size_before).' used, other kept', default => 'no file in either folder' } }}</span>
                             <span>@if ($r->found === 'both')<button type="button" class="ds-pst__link" wire:click="pick({{ $r->id }})">Pick the other</button>@elseif ($r->found !== 'missing')<a class="ds-pst__link" href="{{ $openUrl($r) }}" target="_blank" rel="noopener">Open</a>@endif</span></span>
                     @empty
@@ -275,10 +286,13 @@
                     <span class="ds-pst__row"><span class="ds-pst__col"><b class="ds-pst__h2">5 · Copy to the bucket</b><small class="ds-pst__mute">Runs in the background. Press it again any time: only what is missing is copied.</small></span><span @class(['ds-pst__pill', 'is-ok' => $copyDone])>{{ $copyDone ? '✓ Done' : ($task && in_array($task->status, ['running', 'checking']) ? 'Copying' : 'Ready') }}</span></span>
                     @if ($task)
                         <span class="ds-pst__two">
-                            @foreach (['small' => ['Make photos smaller (max 200 KB)', '1600 px, clear enough to read the invoice. Signatures and other files stay as they are.', true], 'keep' => ['Also keep the originals in the bucket', 'Full size under _original/ · a few cents a month · safe to delete the old server later', false]] as $k => [$n, $t, $def])
+                            @foreach (['small' => ['Make photos smaller (max 200 KB)', '1600 px, clear enough to read the invoice. Signatures and other files stay as they are.', true], 'keep' => ['Also keep the originals in the bucket', 'Full size under _original/ · a few cents a month · safe to delete the old server later', false], 'tidy' => ['Put them in the new folders', 'kind / year / month / invoice · the path in the database is changed after each copy is checked', true]] as $k => [$n, $t, $def])
                                 <button type="button" class="ds-pst__tog" wire:click="setOpt('{{ $k }}')"><span @class(['ds-pst__sw', 'is-on' => $task->opt($k, $def)])><i></i></span><span class="ds-pst__col"><b>{{ $n }}</b><small>{{ $t }}</small></span></button>
                             @endforeach
                         </span>
+                        @if ($task->opt('tidy', true) && ($find['same'] ?? false))
+                            <small class="ds-pst__res is-bad">The old site uses the same database: after a photo is put in the new folders, the old site can no longer show it (wmsv2 does). Turn this off while the old site is still used.</small>
+                        @endif
                         @php $all = max(1, $task->total); @endphp
                         <span class="ds-pst__col"><span class="ds-pst__row"><small>{{ $copyDone ? '✓ Done · '.number_format($task->done).' copied · '.number_format($task->skipped).' already there · '.$task->failed.' failed' : number_format($task->done + $task->skipped).' of '.number_format($task->total).' photos'.($task->failed ? ' · '.$task->failed.' failed' : '') }}</small><small class="ds-pst__mute">{{ $mb((int) $task->bytes_before) }} → {{ $mb((int) $task->bytes_after) }}</small></span><span class="ds-pst__bar is-blue"><i style="width: {{ $task->pct() }}%"></i></span></span>
                         @if ($task->last_error && $task->failed)<small class="ds-pst__res is-bad">Last problem: {{ $task->last_error }}</small>@endif
@@ -294,7 +308,7 @@
                         </span>
                         <small class="ds-pst__lbl">Last copied: old link → new link</small>
                         @foreach ($last as $i)
-                            <span class="ds-pst__tr5" wire:key="l-{{ $i->id }}"><a class="ds-pst__mono ds-pst__cut ds-pst__link" href="{{ $oldUrl($i) }}" target="_blank" rel="noopener">{{ $oldUrl($i) }}</a><span class="ds-pst__mute">→</span><a class="ds-pst__mono ds-pst__cut ds-pst__link" href="{{ $openUrl($i) }}" target="_blank" rel="noopener">{{ ($tmp->bucket && $target !== 'real' ? $tmp->bucket : $real->bucket).'/'.$i->path }}</a><span class="ds-pst__mute">{{ $i->size_after && $i->size_after !== $i->size_before ? $mb((int) $i->size_before).' → '.$mb((int) $i->size_after) : $mb((int) $i->size_before) }}</span><b @class(['ds-pst__ok' => $i->status === 'done', 'ds-pst__bad' => $i->status === 'failed'])>{{ ['done' => '✓ Copied', 'skipped' => 'Already there', 'failed' => '✗ '.Str::limit((string) $i->note, 40)][$i->status] ?? $i->status }}</b></span>
+                            <span class="ds-pst__tr5" wire:key="l-{{ $i->id }}"><a class="ds-pst__mono ds-pst__cut ds-pst__link" href="{{ $oldUrl($i) }}" target="_blank" rel="noopener">{{ $oldUrl($i) }}</a><span class="ds-pst__mute">→</span><a class="ds-pst__mono ds-pst__cut ds-pst__link" href="{{ $openUrl($i) }}" target="_blank" rel="noopener">{{ ($tmp->bucket && $target !== 'real' ? $tmp->bucket : $real->bucket).'/'.($i->new_path ?: $i->path) }}</a><span class="ds-pst__mute">{{ $i->size_after && $i->size_after !== $i->size_before ? $mb((int) $i->size_before).' → '.$mb((int) $i->size_after) : $mb((int) $i->size_before) }}</span><b @class(['ds-pst__ok' => $i->status === 'done', 'ds-pst__bad' => $i->status === 'failed'])>{{ ['done' => '✓ Copied', 'skipped' => 'Already there', 'failed' => '✗ '.Str::limit((string) $i->note, 40)][$i->status] ?? $i->status }}</b></span>
                         @endforeach
                         <small class="ds-pst__mute">Same path in the bucket as in the database, so every photo opens in wmsv2 right after. Copy new only: photos already in the bucket are skipped. A photo that changed on the old site is copied again after a new Scan.</small>
                     @else
