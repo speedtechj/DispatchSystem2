@@ -10,7 +10,7 @@ class Templates
 {
     public const LANGS = ['en' => 'English', 'tl' => 'Tagalog', 'ceb' => 'Bisaya'];
 
-    public const BLANKS = ['{name}', '{boxes}', '{box_count}', '{truck}', '{driver}', '{time}', '{minutes}', '{reason}', '{next_day}', '{hub}', '{hub_phone}'];
+    public const BLANKS = ['{name}', '{boxes}', '{box_count}', '{truck}', '{driver}', '{time}', '{minutes}', '{reason}', '{next_day}', '{hub}', '{hub_phone}', '{by}', '{damage}', '{receipt}'];
 
     public const DEFAULTS = [
         'out_for_delivery' => [
@@ -42,6 +42,11 @@ class Templates
             'en' => 'Hi {name}, your box {boxes} arrived at {hub} and will be delivered soon.',
             'tl' => 'Hi {name}, ang box mo ({boxes}) ay dumating na sa {hub} at ide-deliver na sa lalong madaling panahon.',
             'ceb' => 'Hi {name}, ang imong box ({boxes}) niabot na sa {hub} ug i-deliver dayon.',
+        ],
+        'delivered_damaged' => [
+            'en' => 'Hi {name}, box {boxes} was received by {by} at {time}, damaged: {damage}. Your receipt: {receipt} Questions: {hub_phone}.',
+            'tl' => 'Hi {name}, natanggap ni {by} ang box {boxes} nang {time}, may sira: {damage}. Ang resibo mo: {receipt} Tanong: {hub_phone}.',
+            'ceb' => 'Hi {name}, nadawat ni {by} ang box {boxes} sa {time}, naay guba: {damage}. Imong resibo: {receipt} Pangutana: {hub_phone}.',
         ],
         'set_split' => [
             'en' => 'Hi {name}, {box_count} of your boxes are on the way. Box {boxes} follows on the next trip. Call {hub_phone}.',

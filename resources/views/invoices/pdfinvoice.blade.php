@@ -215,12 +215,12 @@
                                 <td class="td-head">STATUS OF THE BOX UPON DELIVERY</td>
                             </tr>
                             <tr>
-                                <td><input type="checkbox" id="sixside" name="sixside" />
+                                <td><input type="checkbox" id="sixside" name="sixside" @if (! empty($signed)) checked @endif />
                                     <label for="sixside">SIX SIDE INSPECTED</label>
                                 </td>
                             </tr>
                             <tr>
-                                <td><input type="checkbox" id="good" name="good" />
+                                <td><input type="checkbox" id="good" name="good" @if (! empty($signed) && empty($signed['damaged'])) checked @endif />
                                     <label for="good">IN GOOD CONDITION</label>
                                 </td>
                             </tr>
@@ -233,7 +233,7 @@
 
                                     <textarea id="story" name="story" rows="5" cols="75">
 REMARKS
-</textarea>
+{{ $signed['remarks'] ?? '' }}</textarea>
                                 </td>
 
                             </tr>
@@ -252,12 +252,12 @@ REMARKS
                                 <td>ASSISTANT<span class="line">{{ $leadman->full_name ?? '' }}</span></td>
                             </tr>
                             <tr>
-                                <td>DELIVERY DATE<span class="line"></span></td>
+                                <td>DELIVERY DATE<span class="line">{{ $signed['date'] ?? '' }}</span></td>
                                 <td>PLATE NO<span class="line">{{ $truck->plate_no ?? '' }}</span></td>
                             </tr>
                             <tr>
-                                <td>TIME<span class="line"></span></td>
-                                <td>TRUCK<span class="line"></span></td>
+                                <td>TIME<span class="line">{{ $signed['time'] ?? '' }}</span></td>
+                                <td>TRUCK<span class="line">{{ $signed['truck'] ?? '' }}</span></td>
                             </tr>
                             <tr>
                                 <td colspan="2">SIGNATURE<span class="line"></span></td>
@@ -267,18 +267,18 @@ REMARKS
                     <td>
                         <table class="table-inner two-col">
                             <tr>
-                                <td colspan="2">RECIPIENT NAME<span class="line"></span></td>
+                                <td colspan="2">RECIPIENT NAME<span class="line">{{ $signed['name'] ?? '' }}</span></td>
 
                             </tr>
                             <tr>
-                                <td colspan="2">RELATIONSHIP TO SENDER <span class="line"></span></td>
+                                <td colspan="2">RELATIONSHIP TO SENDER <span class="line">{{ $signed['relationship'] ?? '' }}</span></td>
                             </tr>
                             <tr>
                                 <td>ID TYPE<span class="line"></span></td>
                                 <td>ID NUMBER <span class="line"></span></td>
                             </tr>
                             <tr>
-                                <td colspan="2">SIGNATURE <span class="line"></span></td>
+                                <td colspan="2">SIGNATURE <span class="line">@if (! empty($signed['sig']))<img src="{{ $signed['sig'] }}" alt="" style="height: 34px; vertical-align: bottom;">@endif</span></td>
                             </tr>
                         </table>
                     </td>
@@ -392,12 +392,12 @@ REMARKS
                                 <td class="td-head">STATUS OF THE BOX UPON DELIVERY</td>
                             </tr>
                             <tr>
-                                <td><input type="checkbox" id="sixside" name="sixside" />
+                                <td><input type="checkbox" id="sixside" name="sixside" @if (! empty($signed)) checked @endif />
                                     <label for="sixside">SIX SIDE INSPECTED</label>
                                 </td>
                             </tr>
                             <tr>
-                                <td><input type="checkbox" id="good" name="good" />
+                                <td><input type="checkbox" id="good" name="good" @if (! empty($signed) && empty($signed['damaged'])) checked @endif />
                                     <label for="good">IN GOOD CONDITION</label>
                                 </td>
                             </tr>
@@ -410,7 +410,7 @@ REMARKS
 
                                     <textarea id="story" name="story" rows="5" cols="75">
 REMARKS
-</textarea>
+{{ $signed['remarks'] ?? '' }}</textarea>
                                 </td>
 
                             </tr>
@@ -429,12 +429,12 @@ REMARKS
                                 <td>ASSISTANT<span class="line">{{ $leadman->full_name ?? '' }}</span></td>
                             </tr>
                             <tr>
-                                <td>DELIVERY DATE<span class="line"></span></td>
+                                <td>DELIVERY DATE<span class="line">{{ $signed['date'] ?? '' }}</span></td>
                                 <td>PLATE NO<span class="line">{{ $truck->plate_no ?? '' }}</span></td>
                             </tr>
                             <tr>
-                                <td>TIME<span class="line"></span></td>
-                                <td>TRUCK<span class="line"></span></td>
+                                <td>TIME<span class="line">{{ $signed['time'] ?? '' }}</span></td>
+                                <td>TRUCK<span class="line">{{ $signed['truck'] ?? '' }}</span></td>
                             </tr>
                             <tr>
                                 <td colspan="2">SIGNATURE<span class="line"></span></td>
@@ -444,18 +444,18 @@ REMARKS
                     <td>
                         <table class="table-inner two-col">
                             <tr>
-                                <td colspan="2">RECIPIENT NAME<span class="line"></span></td>
+                                <td colspan="2">RECIPIENT NAME<span class="line">{{ $signed['name'] ?? '' }}</span></td>
 
                             </tr>
                             <tr>
-                                <td colspan="2">RELATIONSHIP TO SENDER <span class="line"></span></td>
+                                <td colspan="2">RELATIONSHIP TO SENDER <span class="line">{{ $signed['relationship'] ?? '' }}</span></td>
                             </tr>
                             <tr>
                                 <td>ID TYPE<span class="line"></span></td>
                                 <td>ID NUMBER<span class="line"></span></td>
                             </tr>
                             <tr>
-                                <td colspan="2">SIGNATURE<span class="line"></span></td>
+                                <td colspan="2">SIGNATURE<span class="line">@if (! empty($signed['sig']))<img src="{{ $signed['sig'] }}" alt="" style="height: 34px; vertical-align: bottom;">@endif</span></td>
                             </tr>
                         </table>
                     </td>

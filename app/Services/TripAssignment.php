@@ -333,6 +333,7 @@ class TripAssignment
         FailedDeliveryReason $reason,
         ?string $note = null,
         array $photos = [],
+        ?string $nextOn = null,
     ): DeliveryAttempt {
         if ($tripinvoice->is_delivered) {
             throw new DomainException("{$tripinvoice->invoice} is already delivered.");
@@ -354,11 +355,22 @@ class TripAssignment
             'reason' => $reason,
             'note' => filled($note) ? trim($note) : null,
             'photos' => array_values($photos) ?: null,
-        ]));
+        ] + static::nextTryFields($tripinvoice, $reason, $nextOn)));
 
         $this->notifyDispatcher($attempt);
 
         return $attempt;
+    }
+
+    /** Part 44: when to try again, from the reason and how many tries there were. */
+    public static function nextTryFields(Tripinvoice $box, FailedDeliveryReason $reason, ?string $picked = null): array
+    {
+        if (! \Illuminate\Support\Facades\Schema::hasColumn('delivery_attempts', 'next_try_on')) {
+            return [];
+        }
+        $plan = \App\Support\Deliveries\NextTry::plan($reason, DeliveryAttempt::where('invoice_id', $box->invoice_id)->count() + 1, $picked);
+
+        return ['next_try_on' => $plan['on']?->toDateString(), 'needs_office' => $plan['office']];
     }
 
     protected function notifyDispatcher(DeliveryAttempt $attempt): void

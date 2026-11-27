@@ -213,8 +213,11 @@
                             <span class="ds-dr__cardtop"><strong>{{ $r->invoice }}</strong>
                                 @if ($r->is_delivered)
                                     <em class="is-ok">{{ ($r->delivered_at ?? $r->updated_at)?->format('g:i A') }}</em>
-                                @elseif ($r->latestDeliveryAttempt)
+                                @elseif ($r->latestDeliveryAttempt && $r->latestDeliveryAttempt->tripinvoice_id === $r->id)
                                     <em class="is-warn">{{ $r->latestDeliveryAttempt->reason->getLabel() }}</em>
+                                @elseif ($r->delivery_attempts_count > 0)
+                                    @php($n = $r->delivery_attempts_count + 1)
+                                    <em class="is-try">{{ $n === 2 ? '2nd' : ($n === 3 ? '3rd' : $n.'th') }} try{{ $n >= \App\Support\Deliveries\NextTry::MAX_TRIES ? ' · last' : '' }}</em>
                                 @else
                                     <em>To deliver</em>
                                 @endif
@@ -268,9 +271,9 @@
             <span class="hidden" wire:key="pz-{{ $sheet ?? 'none' }}-{{ $boxId ?? 0 }}" x-init="$dispatch('ds-scanner', { paused: @js((bool) $sheet) })"></span>
 
             @if ($just)
-                <div class="ds-dr__toast" wire:key="toast-{{ $just->id }}" x-data="{ left: 15 }" x-init="const t = setInterval(() => { left--; if (left <= 0) { clearInterval(t); $wire.set('justDelivered', null) } }, 1000)">
+                <div class="ds-dr__toast" wire:key="toast-{{ $just->id }}" x-data="{ left: {{ $justLink ? 60 : 15 }} }" x-init="const t = setInterval(() => { left--; if (left <= 0) { clearInterval(t); $wire.set('justDelivered', null) } }, 1000)">
                     <span class="ds-sa__mark is-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
-                    <span><strong>{{ $just->invoice }} delivered</strong><small>{{ $justPhotos }} {{ str('photo')->plural($justPhotos) }} saved · undo for <span x-text="left"></span> s</small></span>
+                    <span><strong>{{ $just->invoice }} delivered</strong><small>{{ $justPhotos }} {{ str('photo')->plural($justPhotos) }} saved · undo for <span x-text="left"></span> s</small>@if ($justLink)<a class="ds-dr__receiptlink" href="{{ $justLink }}" target="_blank" rel="noopener">📄 Show the receipt to the receiver</a>@endif</span>
                     <button type="button" wire:click="undoJust"><svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" class="is-track"/><circle cx="20" cy="20" r="18" class="is-fill"/></svg>Undo</button>
                 </div>
             @endif
@@ -289,8 +292,16 @@
                         <a href="https://www.google.com/maps/search/?api=1&query={{ urlencode($addr.', Philippines') }}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="#5aa8ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-8-8 18-2-8z"/></svg>Directions</a>
                     </div>
                     <span class="ds-dr__meta">From {{ \Illuminate\Support\Str::title($inv?->sender_name) ?: 'sender' }}@if ($household && $household['count'] > 1) · {{ $household['count'] }} boxes for this house, {{ $household['delivered'] }} delivered @endif</span>
-                    @if ($box->latestDeliveryAttempt)
-                        <span class="ds-dr__prev">Tried before: {{ $box->latestDeliveryAttempt->reason->getLabel() }} · {{ $box->latestDeliveryAttempt->created_at->diffForHumans() }}</span>
+                    @if ($lastTry)
+                        <div class="ds-dr__lasttry">
+                            <span class="ds-dr__trybadge">{{ $tryNo === 2 ? '2nd' : ($tryNo === 3 ? '3rd' : $tryNo.'th') }} try{{ $tryNo >= \App\Support\Deliveries\NextTry::MAX_TRIES ? ' · last' : '' }}</span>
+                            <b>Last time · {{ $lastTry->created_at->format('M j, g:i A') }}{{ filled($lastTry->user?->full_name) ? ' · '.$lastTry->user->full_name : '' }}</b>
+                            <span>{{ $lastTry->reason->getLabel() }}</span>
+                            @if ($lastTry->note)<q>{{ $lastTry->note }}</q>@endif
+                            @if (in_array($lastTry->reason, [\App\Enums\FailedDeliveryReason::NoOneHome, \App\Enums\FailedDeliveryReason::PhoneUnreachable, \App\Enums\FailedDeliveryReason::Rescheduled], true) && $inv?->receiver_mobile_no)
+                                <small>📞 Call before you go.</small>
+                            @endif
+                        </div>
                     @endif
                     @if ($risk && $risk['score'] >= 50)
                         <span class="ds-dr__risk"><b>Heads up · may not be delivered</b>{{ implode(' · ', $risk['reasons']) }}. {{ $inv?->receiver_mobile_no ? 'Call before you go.' : '' }}</span>
@@ -319,8 +330,78 @@
                         </button>
                         <p class="ds-sa__err" x-show="failed" x-cloak>The photo did not upload. Try again.</p>
                     </div>
-                    <button type="button" @class(['ds-sa__primary', 'is-green' => $photoUrls, 'is-off' => ! $photoUrls]) wire:click="confirmDelivered" @disabled(! $photoUrls)>
-                        {{ $photoUrls ? 'Delivered · '.count($photoUrls).' '.str('photo')->plural(count($photoUrls)) : 'Take at least 1 photo' }}
+                    {{-- Part 44 (boards 69, 70b): box condition, then the paper receipt or a signature on this phone --}}
+                    @php($dmg = $condition === 'damaged')
+                    @php($signing = $dmg || $receipt === 'phone')
+                    <div class="ds-dr__block">
+                        <span class="ds-dr__blocklabel">Box condition</span>
+                        <div class="ds-sa__seg is-2" role="group" aria-label="Box condition">
+                            <span @class(['ds-sa__segthumb', 'is-damaged' => $dmg]) style="left: calc(4px + {{ $dmg ? 1 : 0 }} * (100% - 8px) / 2)"></span>
+                            <button type="button" wire:click="setCondition('good')" @class(['is-on' => ! $dmg])><i class="is-good"></i>Good</button>
+                            <button type="button" wire:click="setCondition('damaged')" @class(['is-on' => $dmg])><i class="is-damaged"></i>Damaged</button>
+                        </div>
+                        @if ($dmg)
+                            <p @class(['ds-dr__need', 'is-done' => count($photoUrls) >= 2])>{{ count($photoUrls) >= 2 ? '✓' : '⚠' }} Damaged: 2 photos needed · the whole box, and the damage up close ({{ min(2, count($photoUrls)) }} of 2)</p>
+                            <span class="ds-dr__blocklabel">What is damaged?</span>
+                            <div class="ds-dr__chips is-bad" role="group" aria-label="What is damaged">
+                                @foreach ($damageList as $k => $l)
+                                    <button type="button" wire:click="toggleDamage('{{ $k }}')" @class(['is-on' => in_array($k, $damage, true)]) aria-pressed="{{ in_array($k, $damage, true) ? 'true' : 'false' }}">{{ $l }}</button>
+                                @endforeach
+                            </div>
+                            <input type="text" class="ds-sa__note-in" wire:model.blur="damageNote" maxlength="290" placeholder="Anything else? (optional)" aria-label="Damage note">
+                        @endif
+                    </div>
+
+                    <div class="ds-dr__block">
+                        <span class="ds-dr__blocklabel">Delivery receipt</span>
+                        @if ($dmg)
+                            <p class="ds-dr__hint">Damaged: the receiver signs on this phone that they saw the damage. They get an SMS with the link to the signed receipt.</p>
+                        @else
+                            <div class="ds-sa__seg is-2" role="group" aria-label="Delivery receipt">
+                                <span class="ds-sa__segthumb is-light" style="left: calc(4px + {{ $receipt === 'phone' ? 1 : 0 }} * (100% - 8px) / 2)"></span>
+                                <button type="button" wire:click="setReceipt('paper')" @class(['is-on' => $receipt !== 'phone'])>📄 Paper receipt</button>
+                                <button type="button" wire:click="setReceipt('phone')" @class(['is-on' => $receipt === 'phone'])>✍ Sign on the phone</button>
+                            </div>
+                            @if ($receipt === 'phone')
+                                <span class="ds-dr__blocklabel">Why no paper?</span>
+                                <div class="ds-dr__chips" role="group" aria-label="Why no paper">
+                                    @foreach ($paperList as $k => $l)
+                                        <button type="button" wire:click="$set('paperWhy', '{{ $k }}')" @class(['is-on' => $paperWhy === $k])>{{ $l }}</button>
+                                    @endforeach
+                                </div>
+                            @else
+                                <p class="ds-dr__hint">The receiver signs your paper receipt, like today. Bring it back to the office.</p>
+                            @endif
+                        @endif
+
+                        @if ($signing)
+                            <label class="ds-dr__field"><span>Received by</span><input type="text" class="ds-sa__note-in" wire:model.blur="signName" maxlength="117" placeholder="Name of the person who received it" aria-label="Received by"></label>
+                            <div class="ds-dr__chips is-light" role="group" aria-label="Relationship">
+                                @foreach ($relList as $r)
+                                    <button type="button" wire:click="$set('signRel', '{{ $r }}')" @class(['is-on' => $signRel === $r])>{{ $r }}</button>
+                                @endforeach
+                            </div>
+                            <div class="ds-dr__sign" wire:ignore wire:key="sign-{{ $box->id }}-{{ $dmg ? 1 : 0 }}" x-data="dsSignPad(@js($dmg))" x-on:ds-sign-clear.window="clear()">
+                                <p class="ds-dr__signtext" x-text="damaged ? 'I received this box damaged. I saw the damage before I signed.' : 'I received this box in good condition.'"></p>
+                                <canvas x-ref="pad" aria-label="Sign here with your finger"></canvas>
+                                <span class="ds-dr__signhint" x-show="empty">✍ Sign here with your finger</span>
+                                <div class="ds-dr__signbar"><button type="button" x-on:click="clear()">Clear</button><span x-show="! empty" x-cloak>✓ Signed</span></div>
+                            </div>
+                            <label class="ds-dr__cant"><input type="checkbox" wire:model.live="cantSign"> The receiver can't sign (the receipt says so)</label>
+                        @endif
+                    </div>
+                    @php($need = $dmg ? 2 : 1)
+                    @php($ready = count($photoUrls) >= $need && (! $signing || (trim($signName) !== '' && ($signature || $cantSign) && ($dmg ? ($damage || trim($damageNote) !== '') : (bool) $paperWhy))))
+                    <button type="button" @class(['ds-sa__primary', 'is-green' => $ready && ! $dmg, 'is-red' => $ready && $dmg, 'is-off' => ! $ready]) wire:click="confirmDelivered" @disabled(! $ready)>
+                        @if (count($photoUrls) < $need)
+                            {{ $dmg ? 'Take 2 photos' : 'Take at least 1 photo' }}
+                        @elseif ($signing && ! $signature && ! $cantSign)
+                            Ask the receiver to sign
+                        @elseif (! $ready)
+                            {{ $dmg ? 'Tap what is damaged' : (trim($signName) === '' ? 'Type who received it' : 'Tap why there is no paper') }}
+                        @else
+                            Delivered{{ $dmg ? ' · damaged' : '' }}{{ $signing ? ' · signed' : '' }} · {{ count($photoUrls) }} {{ str('photo')->plural(count($photoUrls)) }}
+                        @endif
                     </button>
                     <button type="button" class="ds-dr__link" wire:click="backToBox">Back</button>
                 </div>
@@ -374,6 +455,17 @@
                             </button>
                         @endif
                     </div>
+                    @if ($reasonCase === \App\Enums\FailedDeliveryReason::Rescheduled && $tryNo < \App\Support\Deliveries\NextTry::MAX_TRIES)
+                        <span class="ds-dr__blocklabel">Which day did they ask for?</span>
+                        <div class="ds-dr__chips" role="group" aria-label="Next try day">
+                            @foreach ($nextChoices as $d => $l)
+                                <button type="button" wire:click="$set('nextOn', '{{ $d }}')" @class(['is-on' => ($nextOn ?? array_key_first($nextChoices)) === $d])>{{ $l }}</button>
+                            @endforeach
+                        </div>
+                    @endif
+                    @if ($nextPlan)
+                        <p @class(['ds-dr__next', 'is-office' => $nextPlan['office']])><b>{{ $nextPlan['office'] ? '🏢' : '📅' }} {{ $nextPlan['text'] }}</b><small>{{ $tryNo > 1 ? 'Try '.$tryNo.' of '.\App\Support\Deliveries\NextTry::MAX_TRIES.' · ' : '' }}{{ $nextPlan['office'] ? 'The box goes on the office list (Redelivery → Needs office).' : 'The box goes on the redelivery list for that day.' }}</small></p>
+                    @endif
                     <button type="button" class="ds-sa__primary is-amber" wire:click="saveMissed">Keep it on the truck</button>
                     <button type="button" class="ds-dr__link" wire:click="backToBox">Back</button>
                 </div>

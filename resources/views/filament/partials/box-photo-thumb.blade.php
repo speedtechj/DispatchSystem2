@@ -9,7 +9,7 @@
     </button>
     <span class="pointer-events-none absolute left-2 top-2 inline-flex max-w-[calc(100%-3rem)] items-center gap-1.5 truncate whitespace-nowrap rounded-full bg-black/55 px-2 py-0.5 text-[0.68rem] font-extrabold text-white backdrop-blur-sm">
         @if ($tone)<i @class(['ds-bp__dot', 'is-'.$tone])></i>@endif
-        {{ $i['kind'] === 'scan' ? $i['label'] : ($i['kind'] === 'delivered' ? 'Delivered' : 'Not delivered') }}{{ $tone && $tone !== 'ok' ? ' · '.(\App\Models\BoxPhoto::CONDITIONS[$i['condition']] ?? '') : '' }}
+        {{ $i['label'] }}{{ $tone && $tone !== 'ok' ? ' · '.(\App\Models\BoxPhoto::CONDITIONS[$i['condition']] ?? '') : '' }}
     </span>
     <button type="button" x-on:click.stop="toggle(@js($key))" aria-label="Select {{ $i['name'] }}" x-bind:aria-pressed="isSel(@js($key))"
             class="absolute right-2 top-2 grid size-7 place-items-center rounded-full text-sm font-black transition"

@@ -56,6 +56,12 @@ class InvoiceController extends Controller
 
     protected function receiptHtml(Invoice $invoice): string
     {
+        return view('invoices.pdfinvoice', static::receiptData($invoice))->render();
+    }
+
+    /** What the printed receipt shows (Part 44: the signed receipt uses the same, with its blank lines filled). */
+    public static function receiptData(Invoice $invoice): array
+    {
         $trip = Tripinvoice::with('deliverylog.truck')
             ->where('invoice_id', $invoice->id)
             ->latest('id')
@@ -79,13 +85,13 @@ class InvoiceController extends Controller
         $driver = $crew->first($isDriver) ?? $crew->first();
         $leadman = $crew->reject(fn (User $user) => $user->is($driver))->first();
 
-        return view('invoices.pdfinvoice', [
+        return [
             'invoice' => $invoice,
             'truck' => $truck,
             'driver' => $driver,
             'leadman' => $leadman,
             'consolidator' => Consolidator::where('code', $invoice->location_code)->first(),
-        ])->render();
+        ];
     }
 
     /**

@@ -69,6 +69,37 @@ class Dashboard extends BaseDashboard
     /** Board 68: another box was read while a delivery was open; the open sheet stays. */
     public ?string $otherCode = null;
 
+    // Part 44 (boards 69, 70, 70b): box condition, and the receipt signed on the phone
+    public string $condition = 'good';
+
+    public array $damage = [];
+
+    public string $damageNote = '';
+
+    /** paper = the receiver signs the paper receipt (like today) · phone = signs on this phone */
+    public string $receipt = 'paper';
+
+    public ?string $paperWhy = null;
+
+    public string $signName = '';
+
+    public ?string $signRel = null;
+
+    /** The signature pad as a PNG data URL. */
+    public ?string $signature = null;
+
+    public bool $cantSign = false;
+
+    public ?float $signLat = null;
+
+    public ?float $signLng = null;
+
+    /** Can't deliver · asked for another day: the day the receiver picked. */
+    public ?string $nextOn = null;
+
+    /** The signed receipt of the box just delivered (its link code). */
+    public ?string $justReceipt = null;
+
     /** Photos already uploaded for the open sheet (paths on the public disk). */
     #[Locked]
     public array $photos = [];
@@ -132,6 +163,33 @@ class Dashboard extends BaseDashboard
     {
         $this->deleteUnusedPhotos();
         $this->reset('boxId', 'sheet', 'wrongText', 'photos', 'upload', 'reason', 'note', 'whichIds', 'whichCode', 'otherCode');
+        $this->resetProof();
+    }
+
+    protected function resetProof(): void
+    {
+        $this->reset('condition', 'damage', 'damageNote', 'receipt', 'paperWhy', 'signName', 'signRel', 'signature', 'cantSign', 'signLat', 'signLng', 'nextOn');
+    }
+
+    public function setCondition(string $c): void
+    {
+        $this->condition = $c === 'damaged' ? 'damaged' : 'good';
+        if ($this->condition === 'damaged') {
+            $this->receipt = 'phone'; // the receiver signs that they saw the damage
+        }
+    }
+
+    public function toggleDamage(string $d): void
+    {
+        if (! isset(\App\Models\DeliverySignature::DAMAGE[$d])) {
+            return;
+        }
+        $this->damage = in_array($d, $this->damage, true) ? array_values(array_diff($this->damage, [$d])) : [...$this->damage, $d];
+    }
+
+    public function setReceipt(string $r): void
+    {
+        $this->receipt = $this->condition === 'damaged' || $r === 'phone' ? 'phone' : 'paper';
     }
 
     /** Board 68: the driver chose to leave the open delivery and open the other box that was read. */
@@ -263,6 +321,8 @@ class Dashboard extends BaseDashboard
         if ($this->box() && ! $this->box()->is_delivered) {
             $this->sheet = 'deliver';
             $this->photos = [];
+            $this->resetProof();
+            $this->signName = Str::title((string) $this->box()->invdata?->receiver_name);
         }
     }
 
@@ -272,6 +332,7 @@ class Dashboard extends BaseDashboard
             $this->sheet = 'miss';
             $this->photos = [];
             $this->reason = FailedDeliveryReason::NoOneHome->value;
+            $this->nextOn = null;
         }
     }
 
@@ -358,14 +419,46 @@ class Dashboard extends BaseDashboard
 
             return;
         }
+        $damaged = $this->condition === 'damaged';
+        if ($damaged && count($this->photos) < 2) {
+            Notification::make()->title('Damaged: take 2 photos')->body('The whole box, and the damage up close.')->warning()->send();
+
+            return;
+        }
+        $sig = null;
+        if ($damaged || $this->receipt === 'phone') {
+            if (! $damaged && ! $this->paperWhy) {
+                Notification::make()->title('Why is there no paper receipt?')->warning()->send();
+
+                return;
+            }
+            try {
+                $sig = \App\Support\Deliveries\DeliveryProof::record($box, Auth::user(), [
+                    'why' => $damaged ? 'damaged' : 'no_paper', 'paper_reason' => $this->paperWhy,
+                    'recipient_name' => $this->signName, 'relationship' => $this->signRel,
+                    'damage' => $this->damage, 'damage_note' => $this->damageNote,
+                    'cant_sign' => $this->cantSign, 'signature' => $this->signature,
+                    'lat' => $this->signLat, 'lng' => $this->signLng,
+                ]);
+            } catch (\DomainException $e) {
+                Notification::make()->title($e->getMessage())->warning()->send();
+
+                return;
+            }
+        }
 
         // Delivering means the trip is on the road, even if nobody tapped "I take the trip".
         if ($this->driverTrip()->trip) {
             \App\Support\TripFlow::take($this->driverTrip()->trip, Auth::user());
         }
         app(TripAssignment::class)->markDelivered($box, $this->photos);
+        if ($sig) {
+            \App\Support\Deliveries\DeliveryProof::after($sig);
+        }
 
         $this->justDelivered = $box->id;
+        $this->justReceipt = $sig?->token;
+        $this->resetProof();
         $this->justPhotos = count($this->photos);
         $this->photos = []; // they belong to the box now
         $this->reset('boxId', 'sheet', 'reason', 'note', 'upload');
@@ -405,7 +498,7 @@ class Dashboard extends BaseDashboard
         }
 
         try {
-            app(TripAssignment::class)->recordFailedAttempt($box, Auth::user(), $reason, $this->note ?: null, $this->photos);
+            $attempt = app(TripAssignment::class)->recordFailedAttempt($box, Auth::user(), $reason, $this->note ?: null, $this->photos, $this->nextOn);
         } catch (\DomainException $e) {
             Notification::make()->title($e->getMessage())->warning()->send();
 
@@ -414,7 +507,8 @@ class Dashboard extends BaseDashboard
 
         $this->photos = [];
         $this->closeSheet();
-        Notification::make()->title("{$box->invoice} stays on your truck")->body('The office has been told.')->warning()->send();
+        $next = $attempt->needs_office ? 'The office decides the next try.' : ($attempt->next_try_on ? 'Next try: '.\Carbon\Carbon::parse($attempt->next_try_on)->format('D M j').'.' : '');
+        Notification::make()->title("{$box->invoice} stays on your truck")->body(trim('The office has been told. '.$next))->warning()->send();
     }
 
     protected static ?string $navigationLabel = 'Today';
@@ -632,7 +726,15 @@ class Dashboard extends BaseDashboard
             'voiceOn' => Ai::enabled('voice'),
             'household' => $household,
             'reasons' => FailedDeliveryReason::cases(),
-            'reasonCase' => FailedDeliveryReason::tryFrom((string) $this->reason),
+            'reasonCase' => $reasonCase = FailedDeliveryReason::tryFrom((string) $this->reason),
+            'tryNo' => $tryNo = $box ? $box->deliveryAttempts()->count() + 1 : 1,
+            'lastTry' => $box && $tryNo > 1 ? $box->latestDeliveryAttempt()->with('user:id,full_name')->first() : null,
+            'nextPlan' => $box && $reasonCase && $this->sheet === 'miss' ? \App\Support\Deliveries\NextTry::plan($reasonCase, $tryNo, $this->nextOn) : null,
+            'nextChoices' => $this->sheet === 'miss' ? \App\Support\Deliveries\NextTry::choices() : [],
+            'damageList' => \App\Models\DeliverySignature::DAMAGE,
+            'paperList' => \App\Models\DeliverySignature::PAPER,
+            'relList' => \App\Models\DeliverySignature::RELATIONSHIP,
+            'justLink' => $this->justReceipt ? url('/r/'.$this->justReceipt) : null,
             'photoUrls' => array_map(fn ($p) => Storage::disk('public')->url($p), $this->photos),
             'just' => $this->justDelivered ? $trip->boxes()->find($this->justDelivered) : null,
             'greeting' => (int) now()->format('G') < 12 ? 'Good morning' : ((int) now()->format('G') < 18 ? 'Good afternoon' : 'Good evening'),
@@ -641,7 +743,7 @@ class Dashboard extends BaseDashboard
 
     protected function listQuery()
     {
-        $q = $this->driverTrip()->boxes()->with('invdata', 'latestDeliveryAttempt');
+        $q = $this->driverTrip()->boxes()->with('invdata', 'latestDeliveryAttempt')->withCount('deliveryAttempts');
         $term = trim($this->search);
         if ($term !== '') {
             $q->where(fn ($w) => $w->where('invoice', 'like', "%{$term}%")->orWhereHas('invdata', fn ($i) => $i

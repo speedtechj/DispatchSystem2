@@ -23,6 +23,7 @@ class SmsSettings
         'driver_next' => ['Driver is next', 'When the receiver is the next 1–2 stops', true],
         'delivered' => ['Delivered', 'When the last box of the receiver is delivered', true],
         'not_delivered' => ['Not delivered', 'When the driver marks it not delivered', true],
+        'delivered_damaged' => ['Delivered damaged', 'When a box is handed over damaged and the receiver signs on the phone: the link to the signed receipt', true],
         'hub_arrived' => ['Arrived at partner hub', 'When the box is handed to a partner hub', false],
         'set_split' => ['Rest of the boxes follow', 'When some of a customer\'s boxes stay behind at loading', false],
     ];

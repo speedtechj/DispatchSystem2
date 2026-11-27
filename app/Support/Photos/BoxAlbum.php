@@ -122,12 +122,25 @@ class BoxAlbum
                 $photos = collect($row->delivery_picture)->filter()->values();
                 $at = $row->delivered_at ? Carbon::parse($row->delivered_at) : $row->updated_at;
                 $trip = $row->hubTrip?->trip_number ?? $row->deliverylog?->trip_number;
+                // Part 44: signed on the phone (damaged, or no paper receipt)
+                $sig = \Illuminate\Support\Facades\Schema::hasTable('delivery_signatures') ? \App\Models\DeliverySignature::where('tripinvoice_id', $row->id)->latest('id')->first() : null;
                 $cardItems = $photos->map(fn ($path, $n) => $this->publicItem('d:'.$row->id.':'.$n, $box, 'delivered', $path, $n + 1, $photos->count(), [
-                    'ref' => 'Trip '.($trip ?? '—').' · delivered to '.($box->receiver_name ?: 'receiver'),
+                    'ref' => 'Trip '.($trip ?? '—').' · delivered to '.($sig?->recipient_name ?: ($box->receiver_name ?: 'receiver')),
                     'who' => $row->deliverer?->full_name, 'at' => $at, 'note' => null,
-                ]))->filter();
+                ]))->filter()->map(function ($i) use ($sig) {
+                    if (str_contains((string) $i['path'], '/receipt-')) {
+                        $i['label'] = 'Signed receipt';
+                    } elseif ($sig?->isDamaged()) {
+                        $i['condition'] = 'damaged';
+                        $i['note'] = $sig->damageText();
+                    }
+
+                    return $i;
+                });
                 $items = $items->merge($cardItems);
-                $delivered = ['at' => $at, 'who' => $row->deliverer?->full_name, 'to' => $box->receiver_name, 'trip' => $trip, 'keys' => $cardItems->pluck('key')->all()];
+                $delivered = ['at' => $at, 'who' => $row->deliverer?->full_name, 'to' => $sig?->recipient_name ?: $box->receiver_name, 'trip' => $trip, 'keys' => $cardItems->pluck('key')->all(),
+                    'signed' => $sig ? ['by' => $sig->recipient_name, 'rel' => $sig->relationship, 'damaged' => $sig->isDamaged(), 'damage' => $sig->damageText(),
+                        'paper' => \App\Models\DeliverySignature::PAPER[$sig->paper_reason] ?? null, 'link' => $sig->link(), 'cant' => $sig->cant_sign, 'issue' => $sig->invoiceissue_id] : null];
             }
 
             if ($items->isEmpty()) {
@@ -206,7 +219,7 @@ class BoxAlbum
     /** Steps in the order they happened, each with its worst condition. */
     protected function journey(Collection $items): array
     {
-        return $items->sortBy(fn ($i) => $i['at']?->timestamp ?? 0)->groupBy('label')
+        return $items->reject(fn ($i) => $i['label'] === 'Signed receipt')->sortBy(fn ($i) => $i['at']?->timestamp ?? 0)->groupBy('label')
             ->map(fn ($g, $label) => ['label' => $label, 'kind' => $g->first()['kind'], 'condition' => static::worst($g->pluck('condition')), 'at' => $g->first()['at']?->timestamp ?? 0])
             ->sortBy('at')->values()->all();
     }

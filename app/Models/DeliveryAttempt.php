@@ -14,6 +14,8 @@ class DeliveryAttempt extends Model
         return [
             'reason' => FailedDeliveryReason::class,
             'photos' => 'array',
+            'needs_office' => 'boolean',
+            'handled_at' => 'datetime',
         ];
     }
 

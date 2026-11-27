@@ -78,6 +78,10 @@ class SmsEvents
     /** The last box of a receiver was delivered. */
     public static function delivered(Tripinvoice $box): void
     {
+        // Part 44: a damaged box gets its own text with the signed receipt instead
+        if (\App\Models\DeliverySignature::where('tripinvoice_id', $box->id)->where('why', 'damaged')->exists()) {
+            return;
+        }
         if (! SmsSettings::on('delivered') || ! ($trip = static::tripOf($box)) || ! TripSorter::ensure($trip, 0)) {
             return;
         }
@@ -107,6 +111,28 @@ class SmsEvents
             'reason' => SmsWriter::reason($a, $lang),
             'next_day' => static::nextDay(),
         ], [$box->id], perDay: true);
+    }
+
+    /** Part 44: a box handed over damaged, signed on the phone. The receiver gets the receipt link. */
+    public static function damaged(\App\Models\DeliverySignature $s): ?SmsMessage
+    {
+        $box = Tripinvoice::with('invdata')->find($s->tripinvoice_id);
+        $inv = $box?->invdata;
+        if (! SmsSettings::on('delivered_damaged') || ! $s->isDamaged() || ! $inv || $s->sms_message_id) {
+            return null;
+        }
+        $lang = Templates::langFor($inv->receiver_province);
+        $text = Templates::render(Templates::get('delivered_damaged', $lang), [
+            'name' => static::firstName($inv->receiver_name), 'boxes' => (string) $box->invoice, 'box_count' => 1,
+            'by' => Str::title((string) $s->recipient_name), 'time' => ($s->signed_at ?? now())->format('M j, g:i A'),
+            'damage' => Str::lower($s->damageText()) ?: 'see the photos', 'receipt' => $s->link(), 'hub_phone' => SmsSettings::officePhone(),
+        ]);
+        $msg = SmsSender::send('delivered_damaged', $inv->receiver_mobile_no, Str::title((string) $inv->receiver_name), $text, [
+            'deliverylog_id' => $box->deliveryloghub_id ?: $box->deliverylog_id, 'invoice_ids' => [$box->invoice_id], 'lang' => $lang, 'user_id' => $s->user_id,
+        ]);
+        $s->update(['sms_message_id' => $msg->id]);
+
+        return $msg;
     }
 
     /** Handed to a partner hub. */

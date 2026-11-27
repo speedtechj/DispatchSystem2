@@ -216,7 +216,8 @@ class SmsSettings extends Page
     protected function getViewData(): array
     {
         $sample = ['name' => 'Liza', 'boxes' => '52211, 52212', 'box_count' => 2, 'truck' => 'ABC 1234', 'driver' => 'Dan', 'time' => '10:42 AM',
-            'minutes' => 20, 'reason' => 'nobody was home', 'next_day' => SmsEvents::nextDay(), 'hub' => 'Cebu Partner Hub', 'hub_phone' => $this->officePhone ?: '0917 555 0101'];
+            'minutes' => 20, 'reason' => 'nobody was home', 'next_day' => SmsEvents::nextDay(), 'hub' => 'Cebu Partner Hub', 'hub_phone' => $this->officePhone ?: '0917 555 0101',
+            'by' => 'Maria Dela Cruz', 'damage' => 'torn, crushed', 'receipt' => url('/r/7kq2m9xa1b')];
         $preview = Templates::render($this->text, $sample);
         $parts = Templates::parts($preview);
         $month = SmsMessage::where('created_at', '>=', now()->startOfMonth())->get(['kind', 'status', 'parts']);

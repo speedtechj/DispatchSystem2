@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Dispatch System — Part 41: tidy photo folders and 200 KB photos
+# Dispatch System — Part 44 · Damaged delivery, signed receipt, redelivery
 # Only the files changed in this step; the rest of your project is left as it is.
 #
 #   cd ~/Desktop/Project/DispatchSystem
-#   bash ~/Desktop/Project/part41-photo-folders.sh
+#   bash ~/Desktop/Project/part44-damaged-signed.sh
 
 set -euo pipefail
 [ -f artisan ] || { echo "Run this from inside your DispatchSystem project folder (the one with 'artisan')."; exit 1; }
@@ -14,807 +14,11 @@ BACKUP="../DispatchSystem-backup-$STAMP.tar.gz"
 echo "▶ Backing up the project to $BACKUP"
 tar -czf "$BACKUP" --exclude=vendor --exclude=node_modules --exclude=storage/logs .
 
-echo "▶ Writing 39 files"
-
-# ---------------------------------------------------------------- app/Filament/Company/Pages/LclPickup.php
-mkdir -p 'app/Filament/Company/Pages'
-cat > 'app/Filament/Company/Pages/LclPickup.php' <<'DISPATCH_FILE_END_0'
-<?php
-
-namespace App\Filament\Company\Pages;
-
-use App\Models\Shipping\SeaShipment;
-use App\Models\Tripinvoice;
-use App\Support\Photos\PhotoShrinker;
-use App\Support\Shipping\Shipments;
-use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
-use Livewire\Attributes\Locked;
-use Livewire\Attributes\Url;
-use Livewire\WithFileUploads;
-
-/**
- * Board 63 · LCL pick-up at the forwarder (phone): count the boxes there, take a photo of the release,
- * press Picked up. Then the hub scans them in as usual.
- */
-class LclPickup extends Page
-{
-    use WithFileUploads;
-
-    protected string $view = 'filament.shipping.lcl-pickup';
-
-    protected static bool $shouldRegisterNavigation = false;
-
-    protected static ?string $slug = 'lcl-pickup';
-
-    #[Url(as: 'shipment')]
-    #[Locked]
-    public int $shipmentId = 0;
-
-    /** intro, count, photo, done */
-    #[Locked]
-    public string $step = 'intro';
-
-    public string $count = '';
-
-    public $upload = null;
-
-    #[Locked]
-    public ?string $photoPath = null;
-
-    public static function canAccess(): bool
-    {
-        return Shipments::ready() && \Illuminate\Support\Facades\Schema::hasColumn('sea_shipments', 'pickup_count') && Auth::check();
-    }
-
-    public function getTitle(): string|Htmlable
-    {
-        return 'LCL pick-up';
-    }
-
-    public function getHeading(): string|Htmlable
-    {
-        return '';
-    }
-
-    /** The LCL shipment for this hub, ready to pick up (or just picked up). */
-    protected function shipment(): ?SeaShipment
-    {
-        $s = SeaShipment::find($this->shipmentId ?: (int) request()->query('shipment'));
-        $mine = (int) Auth::user()?->logistichub_id;
-
-        return $s && $s->mode === 'lcl' && in_array($s->status, ['arrived', 'picked_up'], true) && Shipments::stopFor($s, $mine) ? $s : null;
-    }
-
-    protected function expected(): int
-    {
-        $s = $this->shipment();
-        $stop = $s ? Shipments::stopFor($s, (int) Auth::user()?->logistichub_id) : null;
-
-        return $stop ? Tripinvoice::where('deliverylog_id', $stop->deliverylog_id)->count() : 0;
-    }
-
-    public function mount(): void
-    {
-        $this->shipmentId = (int) request()->query('shipment', $this->shipmentId);
-        $s = $this->shipment();
-        if ($s?->status === 'picked_up') {
-            $this->step = 'done';
-        }
-    }
-
-    public function start(): void
-    {
-        if ($this->shipment()) {
-            $this->count = $this->count !== '' ? $this->count : (string) $this->expected();
-            $this->step = 'count';
-        }
-    }
-
-    public function bump(int $by): void
-    {
-        $this->count = (string) max(0, min(9999, (int) $this->count + $by));
-    }
-
-    public function toPhoto(): void
-    {
-        $this->validate(['count' => 'required|integer|min:0|max:9999'], ['count.required' => 'Type the number of boxes.']);
-        $this->step = 'photo';
-    }
-
-    public function savePhoto(): void
-    {
-        $this->validate(['upload' => 'required|image|max:12288'], ['upload.image' => 'That file is not a photo.']);
-        $path = $this->upload->store(\App\Support\Photos\Storage\PhotoFolders::dir('shipments', \App\Models\Shipping\SeaShipment::whereKey($this->shipmentId)->value('code')), 'public');
-        PhotoShrinker::file('public', $path);
-        $this->photoPath = $path;
-        $this->reset('upload');
-        $this->save();
-    }
-
-    /** Picked up (with or without the photo). */
-    public function save(): void
-    {
-        $s = $this->shipment();
-        if (! $s || $s->status !== 'arrived') {
-            return;
-        }
-        $this->validate(['count' => 'required|integer|min:0|max:9999']);
-        $s->update(['pickup_count' => (int) $this->count, 'pickup_photo' => $this->photoPath ?? $s->pickup_photo, 'pickup_by' => Auth::id(), 'pickup_at' => now()]);
-        Shipments::move($s->fresh(), 'picked_up');
-        $this->step = 'done';
-    }
-
-    protected function getViewData(): array
-    {
-        $s = $this->shipment();
-        $expected = $this->expected();
-
-        return [
-            's' => $s, 'expected' => $expected, 'n' => (int) $this->count,
-            'short' => $this->count !== '' && (int) $this->count < $expected ? $expected - (int) $this->count : 0,
-            'scanUrl' => (function () {
-                try {
-                    return \App\Filament\Scan\Pages\ScanApp::getUrl(panel: 'scan');
-                } catch (\Throwable) {
-                    return '/scan';
-                }
-            })(),
-            'backUrl' => IncomingShipments::getUrl(),
-        ];
-    }
-}
-DISPATCH_FILE_END_0
-
-# ---------------------------------------------------------------- app/Filament/Company/Resources/Deliveryinvs/Tables/DeliveryinvsTable.php
-mkdir -p 'app/Filament/Company/Resources/Deliveryinvs/Tables'
-cat > 'app/Filament/Company/Resources/Deliveryinvs/Tables/DeliveryinvsTable.php' <<'DISPATCH_FILE_END_1'
-<?php
-
-namespace App\Filament\Company\Resources\Deliveryinvs\Tables;
-
-use App\Filament\Company\Resources\Deliverylogs\DeliverylogResource;
-use App\Models\Consolidator;
-use App\Models\Deliverylog;
-use App\Models\Invoice;
-use App\Models\Tripinvoice;
-use Filament\Actions\Action;
-use Filament\Actions\ActionGroup;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Forms\Components\FileUpload;
-use Filament\Support\Icons\Heroicon;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Filters\SelectFilter;
-use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\Auth;
-
-class DeliveryinvsTable
-{
-    public static function configure(Table $table): Table
-    {
-        return $table
-            ->query(
-                Tripinvoice::query()
-                    ->with([
-                        'invoice',           // Eager load the invoice
-                        // 'deliveryLogs'       // Eager load delivery logs
-                    ])
-                    ->where('is_loaded_hub', true)
-                    ->where('logistichub_id', Auth::user()->logistichub_id)
-                //     ->where('hub_assigned', false)
-            )
-            ->columns([
-                TextColumn::make('deliverylog.trip_number')
-                    ->searchable()
-                    ->label('Trip Number')
-                    ->color('primary')
-                    ->getStateUsing(function (Model $record) {
-                        $tripnumber = Deliverylog::where('id', $record->deliveryloghub_id)->value('trip_number');
-
-                        return $tripnumber ?? 'N/A';
-                    })
-
-                    ->url(fn (Model $record) => DeliverylogResource::getUrl('edit', ['record' => $tripnumber = Deliverylog::where('id', $record->deliveryloghub_id)->value('id')])),
-                TextColumn::make('company')
-                    ->label('Company')
-                    ->getStateUsing(function ($record) {
-                        return Consolidator::nameForCode($record->location_code);
-                    }),
-                TextColumn::make('invdata.invoice')
-                    ->searchable()
-                    ->label('Invoice'),
-                TextColumn::make('invdata.container.batch_no')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable()
-                    ->label('Batch No'),
-                TextColumn::make('invdata.container.batch_year')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable()
-                    ->label('Batch Year'),
-                TextColumn::make('invdata.container.container_no')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable()
-                    ->label('Container No'),
-                TextColumn::make('invdata.sender_name')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Sender'),
-                TextColumn::make('invdata.receiver_name')
-                    ->label('Receiver'),
-                TextColumn::make('invdata.receiver_address')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Address'),
-                TextColumn::make('is_delivered')
-                    ->label('Status')
-                    ->formatStateUsing(function (Model $record) {
-                        return $record->is_delivered ? 'Delivered' : 'In Transit';
-                    })
-                    ->color(function ($record) {
-                        return $record->is_delivered ? 'success' : 'danger';
-                    }),
-                TextColumn::make('company')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Company')
-                    ->getStateUsing(function (Model $record) {
-                        // $companyname = Consolidator::where('code', $records->location_code)->first();
-                        $locationcode = Invoice::where('id', $record->invoice_id)->value('location_code');
-
-                        return $companyname = Consolidator::nameForCode($locationcode);
-                    }),
-                TextColumn::make('invdata.receiver_province')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Province'),
-                TextColumn::make('invdata.receiver_city')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('City'),
-                TextColumn::make('invdata.receiver_barangay')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Barangay'),
-                TextColumn::make('invdata.boxtype')
-                    ->label('Box Type'),
-                TextColumn::make('invdata.routearea.description')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Route Area'),
-            ])
-            ->filters([
-                SelectFilter::make('is_delivered')
-                    ->label('Is Delivered')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ])->default(0),
-                SelectFilter::make('routearea_id')
-                    ->label('Route')
-                    ->relationship('invdata.routearea', 'description'),
-                SelectFilter::make('deliveryloghub_id')
-                    ->label('Trip Number')
-                    ->searchable()
-                    ->preload()
-                   // ->relationship('deliverylog', 'trip_number')
-                    ->options(Deliverylog::query()
-                        ->where('logistichub_id', Auth::user()->logistichub_id)
-                        ->pluck('trip_number', 'id')),
-            ])
-            ->recordActions([
-                ActionGroup::make([
-                    Action::make('Edit')
-                        ->label('Edit Picture')
-                        ->color('info')
-                        ->icon(Heroicon::PencilSquare)
-                        ->hidden(fn ($record) => empty($record->delivery_picture))
-                        ->fillForm(fn (Model $record): array => [
-
-                            'delivery_picture' => $record->delivery_picture,
-                        ])
-                        ->schema([
-                            FileUpload::make('delivery_picture')
-                                ->label('Delivery Picture')
-                                ->multiple()
-                                ->panelLayout('grid')
-                                ->uploadingMessage('Uploading attachment...')
-                                ->image()
-                                ->openable()
-                                ->disk('public')
-                                ->directory(function (Model $record) {
-                                    return \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $record->invoice);
-                                })
-                                ->visibility('private')
-                                ->required()
-                                ->removeUploadedFileButtonPosition('right'),
-                        ])
-                        ->action(function (array $data, Model $record): void {
-                            Tripinvoice::where('id', $record->id)
-                                ->update([
-                                    'delivery_picture' => $data['delivery_picture'],
-                                ]);
-                        }),
-                    Action::make('Picture')
-                        ->label('Add Picture')
-                        ->color('danger')
-                        ->icon(Heroicon::Camera)
-                        ->hidden(fn ($record) => ! empty($record->delivery_picture))
-                        ->schema([
-                            FileUpload::make('delivery_picture')
-                                ->label('Delivery Picture')
-                                ->multiple()
-                                ->panelLayout('grid')
-                                ->uploadingMessage('Uploading ...')
-                                ->image()
-                                ->openable()
-                                ->disk('public')
-                                ->directory(function (Model $record) {
-                                    return \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $record->invoice);
-                                })
-                                ->visibility('private')
-                                ->required()
-                                ->removeUploadedFileButtonPosition('right'),
-                            // ->minFiles(6),
-                        ])
-                        ->action(function (array $data, Model $record): void {
-
-                            Tripinvoice::where('id', $record->id)
-                                ->update([
-                                    'delivery_picture' => $data['delivery_picture'],
-                                    'is_delivered' => true,
-                                ]);
-                        }),
-                ]),
-            ])
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    DeleteBulkAction::make(),
-                ]),
-            ]);
-    }
-}
-DISPATCH_FILE_END_1
-
-# ---------------------------------------------------------------- app/Filament/Company/Resources/DriverResource.php
-mkdir -p 'app/Filament/Company/Resources'
-cat > 'app/Filament/Company/Resources/DriverResource.php' <<'DISPATCH_FILE_END_2'
-<?php
-
-namespace App\Filament\Company\Resources;
-
-use App\Filament\Company\Resources\DriverResource\Pages\CreateDriver;
-use App\Filament\Company\Resources\DriverResource\Pages\EditDriver;
-use App\Filament\Company\Resources\DriverResource\Pages\ListDrivers;
-use App\Filament\Resources\UserResource\Pages\EditUser;
-use App\Models\Driver;
-use App\Models\User;
-use App\Models\Workposition;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Actions\EditAction;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
-use Filament\Resources\Resource;
-use Filament\Schemas\Components\Group;
-use Filament\Schemas\Components\Section;
-use Filament\Schemas\Components\Utilities\Get;
-use Filament\Schemas\Schema;
-use Filament\Tables\Columns\IconColumn;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Table;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
-
-class DriverResource extends Resource
-{
-    protected static ?string $model = Driver::class;
-
-    /** Replaced by the Crew page (board 60); the old pages still open from old links. */
-    protected static bool $shouldRegisterNavigation = false;
-
-    protected static ?string $navigationLabel = 'Company Crew';
-
-    public static ?string $label = 'Company Crews';
-
-    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-rectangle-stack';
-
-    public static function form(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                Group::make()
-                    ->schema([
-                        Section::make('Personal Information')
-                            ->schema([
-                                TextInput::make('first_name')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('middle_name')
-                                    ->maxLength(255),
-                                TextInput::make('last_name')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('address')
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->columnSpanFull(),
-                                TextInput::make('mobile_number')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('email')
-                                    ->email()
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->unique(ignoreRecord: true),
-                                // Select::make('panelcategory_id')
-                                //     ->label('Panel Category')
-                                //     ->relationship(name: 'panelcategory', titleAttribute: 'description')
-                                //      ->required(),
-                                // Select::make('logistichub_id')
-                                // ->label('Logistic Hub/Location')
-                                // ->options(Logistichub::query()->pluck('hub_name', 'id'))
-                                // ->required(),
-                                Select::make('workposition_id')
-                                    ->label('Work Position')
-                                    ->options(Workposition::query()
-                                        ->where('is_crew', true)
-                                        ->pluck('position_description', 'id'))
-                                    ->required(),
-
-                                Toggle::make('is_active')
-                                    ->label('Active')
-                                    ->required(),
-
-                            ])->columns(3),
-
-                    ])->columnSpan(['lg' => 2]),
-                Group::make()
-                    ->schema([
-                        Section::make()
-                            ->schema([
-                                FileUpload::make('profile_picture')
-                                    ->image()
-                                    ->avatar()
-                                    ->imageEditor()
-                                    ->circleCropper()
-                                    // ->panelLayout('grid')
-                                    ->uploadingMessage('Uploading attachment...')
-                                    ->openable()
-                                    ->getUploadedFileNameForStorageUsing(function ($file, Get $get) {
-                                        return Str::slug($get('last_name') ?: 'user').'-'.Str::random(8).'.'.$file->getClientOriginalExtension();
-                                    })
-                                    ->maxSize(1024)
-                                    ->disk('public')
-                                    ->directory('people')
-                                    ->visibility('private')
-                                    ->removeUploadedFileButtonPosition('right')
-                                    ->label('Profile Picture'),
-                                TextInput::make('password')
-                                    ->password()
-                                    ->required()
-                                    ->dehydrateStateUsing(fn ($state) => Hash::make($state))
-                                    ->dehydrated(fn ($state) => filled($state))
-                                    ->maxLength(255)
-                                    ->hiddenOn(EditUser::class)
-                                    ->maxLength(255),
-                            ]),
-                    ])->columnSpan(['lg' => 1]),
-
-            ])->columns(3);
-    }
-
-    public static function table(Table $table): Table
-    {
-        return $table
-            ->query(User::query()->where('logistichub_id', Auth::user()->logistichub_id))
-            ->columns([
-                TextColumn::make('first_name')
-                    ->searchable(),
-                TextColumn::make('middle_name')
-                    ->searchable(),
-                TextColumn::make('last_name')
-                    ->searchable(),
-                TextColumn::make('mobile_number')
-                    ->searchable(),
-                IconColumn::make('is_active')
-                    ->boolean(),
-                TextColumn::make('address')
-                    ->searchable(),
-                TextColumn::make('email')
-                    ->searchable(),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-            ])
-            ->filters([
-                //
-            ])
-            ->recordActions([
-                EditAction::make(),
-            ])
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    DeleteBulkAction::make(),
-                ]),
-            ]);
-    }
-
-    public static function getRelations(): array
-    {
-        return [
-            //
-        ];
-    }
-
-    public static function getPages(): array
-    {
-        return [
-            'index' => ListDrivers::route('/'),
-            'create' => CreateDriver::route('/create'),
-            'edit' => EditDriver::route('/{record}/edit'),
-        ];
-    }
-}
-DISPATCH_FILE_END_2
-
-# ---------------------------------------------------------------- app/Filament/Company/Resources/Trucks/Schemas/TruckForm.php
-mkdir -p 'app/Filament/Company/Resources/Trucks/Schemas'
-cat > 'app/Filament/Company/Resources/Trucks/Schemas/TruckForm.php' <<'DISPATCH_FILE_END_3'
-<?php
-
-namespace App\Filament\Company\Resources\Trucks\Schemas;
-
-use Filament\Forms\Components\DatePicker;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\MarkdownEditor;
-use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
-use Filament\Schemas\Components\Group;
-use Filament\Schemas\Components\Section;
-use Filament\Schemas\Schema;
-
-class TruckForm
-{
-    public static function configure(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                Group::make()
-                    ->schema([
-                        \App\Filament\Shared\Trucks\OwnershipSection::make(),
-                        Section::make('vehicles Information')
-                            ->schema([
-                                TextInput::make('category')
-                                    ->hint('Ex. Ten Wheeler, Truck, Mini Truck or Van')
-                                    ->hintColor('warning')
-                                    ->hintIcon('heroicon-m-truck')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('description')
-                                    ->hint('Ex Brand, Color, Model')
-                                    ->hintColor('warning')
-                                    ->hintIcon('heroicon-m-truck')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('registration_no')
-                                    ->label('Registration Number')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('plate_no')
-                                    ->label('Plate Number')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('capacity')
-                                    ->label(fn () => \App\Support\BoxSizes::on() ? 'Capacity (space, in normal boxes)' : 'Capacity (boxes)')
-                                    ->numeric()
-                                    ->minValue(1)
-                                    ->placeholder('60')
-                                    ->helperText(fn () => \App\Support\BoxSizes::on()
-                                        ? 'How many of your normal box fit. Bigger boxes take more space: Settings → Box sizes. Empty means 50.'
-                                        : 'About how many boxes fit. Used to plan trips; empty means 50.'),
-                                MarkdownEditor::make('Note')
-                                    ->columnSpanFull(),
-                            ]),
-
-                    ]),
-                Group::make()
-                    ->schema([
-                        Section::make('Other Information')
-                            ->schema([
-                                FileUpload::make('truck_picture')
-                                    ->image()
-                                    ->avatar()
-                                    ->imageEditor()
-                                    ->circleCropper()
-                                    ->uploadingMessage('Uploading attachment...')
-                                    ->openable()
-                                    ->maxSize(1024)
-                                    ->disk('public')
-                                    ->directory('trucks')
-                                    ->visibility('private')
-                                    ->removeUploadedFileButtonPosition('right')
-                                    ->label('Vehicles Picture')
-                                    ->columnSpanFull(),
-                                DatePicker::make('date_registered')
-                                    ->native(false)
-                                    ->closeOnDateSelection(true)
-                                    ->label('Date Register')
-                                    ->required(),
-                                DatePicker::make('date_expired')
-                                    ->label('Registration Expiration Date')
-                                    ->native(false)
-                                    ->closeOnDateSelection(true)
-                                    ->required()
-                                    ->rules(['after_or_equal:today']),
-                                Toggle::make('is_active')
-                                    ->default(true)
-                                    ->required(),
-                            ]),
-
-                    ]),
-
-            ]);
-    }
-}
-DISPATCH_FILE_END_3
-
-# ---------------------------------------------------------------- app/Filament/Delivery/Pages/AtPort.php
-mkdir -p 'app/Filament/Delivery/Pages'
-cat > 'app/Filament/Delivery/Pages/AtPort.php' <<'DISPATCH_FILE_END_4'
-<?php
-
-namespace App\Filament\Delivery\Pages;
-
-use App\Models\Tripinvoice;
-use App\Support\DriverTrip;
-use App\Support\Photos\PhotoShrinker;
-use App\Support\Shipping\Shipments;
-use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
-use Livewire\Attributes\Locked;
-use Livewire\WithFileUploads;
-
-/**
- * Driver app › At the port: on a sea shipment trip (Count only), the driver types how many
- * boxes the forwarder counted and takes a photo of the receipt. It goes straight to the shipment.
- */
-class AtPort extends Page
-{
-    use WithFileUploads;
-
-    protected string $view = 'filament.delivery.pages.at-port';
-
-    protected static bool $shouldRegisterNavigation = false;
-
-    protected static ?string $slug = 'at-port';
-
-    /** intro, count, photo, done */
-    #[Locked]
-    public string $step = 'intro';
-
-    public string $count = '';
-
-    public $upload = null;
-
-    #[Locked]
-    public ?string $receiptPath = null;
-
-    #[Locked]
-    public ?float $lat = null;
-
-    #[Locked]
-    public ?float $lng = null;
-
-    public static function canAccess(): bool
-    {
-        return Shipments::ready() && Auth::check();
-    }
-
-    public function getTitle(): string|Htmlable
-    {
-        return $this->shipment()?->mode === 'lcl' ? 'At the forwarder' : 'At the port';
-    }
-
-    public function getHeading(): string|Htmlable
-    {
-        return '';
-    }
-
-    protected function shipment()
-    {
-        return Shipments::forDriverPort(DriverTrip::currentTrip(Auth::user()));
-    }
-
-    protected function left(): int
-    {
-        $s = $this->shipment();
-
-        return $s ? Tripinvoice::whereIn('deliverylog_id', \App\Support\Shipping\Shipments::tripIds($s))->where('is_loaded', true)->count() : 0;
-    }
-
-    public function mount(): void
-    {
-        $s = $this->shipment();
-        if ($s && $s->port_count !== null) {
-            $this->count = (string) $s->port_count;
-        }
-    }
-
-    public function setPlace(mixed $lat, mixed $lng): void
-    {
-        $this->lat = is_numeric($lat) && abs((float) $lat) <= 90 ? (float) $lat : null;
-        $this->lng = is_numeric($lng) && abs((float) $lng) <= 180 ? (float) $lng : null;
-    }
-
-    public function start(): void
-    {
-        if ($this->shipment()) {
-            $this->count = $this->count !== '' ? $this->count : (string) $this->left();
-            $this->step = 'count';
-        }
-    }
-
-    public function bump(int $by): void
-    {
-        $this->count = (string) max(0, min(9999, (int) $this->count + $by));
-    }
-
-    public function toPhoto(): void
-    {
-        $this->validate(['count' => 'required|integer|min:0|max:9999'], ['count.required' => 'Type the number of boxes.']);
-        $this->step = 'photo';
-    }
-
-    /** Called by the phone after the (shrunk) receipt photo is uploaded. */
-    public function savePhoto(): void
-    {
-        $this->validate(['upload' => 'required|image|max:12288'], ['upload.image' => 'That file is not a photo.']);
-        $path = $this->upload->store(\App\Support\Photos\Storage\PhotoFolders::dir('shipments', $this->shipment()?->code), 'public');
-        PhotoShrinker::file('public', $path);
-        if ($this->receiptPath) {
-            Storage::disk('public')->delete($this->receiptPath);
-        }
-        $this->receiptPath = $path;
-        $this->reset('upload');
-        $this->save();
-    }
-
-    /** Without a photo (for example the forwarder gives none). */
-    public function save(): void
-    {
-        $s = $this->shipment();
-        if (! $s) {
-            return;
-        }
-        $this->validate(['count' => 'required|integer|min:0|max:9999']);
-        Shipments::driverPort($s, (int) $this->count, $this->receiptPath, $this->lat, $this->lng);
-        $this->step = 'done';
-    }
-
-    protected function getViewData(): array
-    {
-        $s = $this->shipment();
-        $left = $this->left();
-
-        return [
-            's' => $s, 'left' => $left, 'n' => (int) $this->count,
-            'short' => $this->count !== '' && (int) $this->count < $left ? $left - (int) $this->count : 0,
-            'receiptUrl' => $this->receiptPath ? Storage::disk('public')->url($this->receiptPath) : null,
-        ];
-    }
-}
-DISPATCH_FILE_END_4
+echo "▶ Writing 30 files"
 
 # ---------------------------------------------------------------- app/Filament/Delivery/Pages/Dashboard.php
 mkdir -p 'app/Filament/Delivery/Pages'
-cat > 'app/Filament/Delivery/Pages/Dashboard.php' <<'DISPATCH_FILE_END_5'
+cat > 'app/Filament/Delivery/Pages/Dashboard.php' <<'DISPATCH_FILE_END_0'
 <?php
 
 namespace App\Filament\Delivery\Pages;
@@ -883,6 +87,40 @@ class Dashboard extends BaseDashboard
     /** The scanned number while asking Which one? */
     public ?string $whichCode = null;
 
+    /** Board 68: another box was read while a delivery was open; the open sheet stays. */
+    public ?string $otherCode = null;
+
+    // Part 44 (boards 69, 70, 70b): box condition, and the receipt signed on the phone
+    public string $condition = 'good';
+
+    public array $damage = [];
+
+    public string $damageNote = '';
+
+    /** paper = the receiver signs the paper receipt (like today) · phone = signs on this phone */
+    public string $receipt = 'paper';
+
+    public ?string $paperWhy = null;
+
+    public string $signName = '';
+
+    public ?string $signRel = null;
+
+    /** The signature pad as a PNG data URL. */
+    public ?string $signature = null;
+
+    public bool $cantSign = false;
+
+    public ?float $signLat = null;
+
+    public ?float $signLng = null;
+
+    /** Can't deliver · asked for another day: the day the receiver picked. */
+    public ?string $nextOn = null;
+
+    /** The signed receipt of the box just delivered (its link code). */
+    public ?string $justReceipt = null;
+
     /** Photos already uploaded for the open sheet (paths on the public disk). */
     #[Locked]
     public array $photos = [];
@@ -945,7 +183,45 @@ class Dashboard extends BaseDashboard
     public function closeSheet(): void
     {
         $this->deleteUnusedPhotos();
-        $this->reset('boxId', 'sheet', 'wrongText', 'photos', 'upload', 'reason', 'note', 'whichIds', 'whichCode');
+        $this->reset('boxId', 'sheet', 'wrongText', 'photos', 'upload', 'reason', 'note', 'whichIds', 'whichCode', 'otherCode');
+        $this->resetProof();
+    }
+
+    protected function resetProof(): void
+    {
+        $this->reset('condition', 'damage', 'damageNote', 'receipt', 'paperWhy', 'signName', 'signRel', 'signature', 'cantSign', 'signLat', 'signLng', 'nextOn');
+    }
+
+    public function setCondition(string $c): void
+    {
+        $this->condition = $c === 'damaged' ? 'damaged' : 'good';
+        if ($this->condition === 'damaged') {
+            $this->receipt = 'phone'; // the receiver signs that they saw the damage
+        }
+    }
+
+    public function toggleDamage(string $d): void
+    {
+        if (! isset(\App\Models\DeliverySignature::DAMAGE[$d])) {
+            return;
+        }
+        $this->damage = in_array($d, $this->damage, true) ? array_values(array_diff($this->damage, [$d])) : [...$this->damage, $d];
+    }
+
+    public function setReceipt(string $r): void
+    {
+        $this->receipt = $this->condition === 'damaged' || $r === 'phone' ? 'phone' : 'paper';
+    }
+
+    /** Board 68: the driver chose to leave the open delivery and open the other box that was read. */
+    public function openOther(): void
+    {
+        $code = $this->otherCode;
+        $this->otherCode = null;
+        if ($code) {
+            $this->closeSheet();
+            $this->scan($code);
+        }
     }
 
     /** Board 62: the RoRo driver pressed the next step (Leaving for the port, On the ship, Off the ship, Arrived at a hub). */
@@ -983,6 +259,18 @@ class Dashboard extends BaseDashboard
     {
         $code = trim(preg_replace('/[\x00-\x1F\x7F]+/u', '', $code));
         if ($code === '') {
+            return;
+        }
+
+        // Board 68: a box read by accident never closes a delivery that is being done.
+        if (in_array($this->sheet, ['deliver', 'miss'], true) && ($open = $this->box())) {
+            $same = strcasecmp($code, (string) $open->invoice) === 0
+                || strcasecmp($code, (string) $open->invdata?->invoice) === 0;
+            if (! $same) {
+                $this->otherCode = $code;
+                $this->dispatch('driver-app-buzz', ok: false);
+            }
+
             return;
         }
 
@@ -1054,6 +342,8 @@ class Dashboard extends BaseDashboard
         if ($this->box() && ! $this->box()->is_delivered) {
             $this->sheet = 'deliver';
             $this->photos = [];
+            $this->resetProof();
+            $this->signName = Str::title((string) $this->box()->invdata?->receiver_name);
         }
     }
 
@@ -1063,6 +353,7 @@ class Dashboard extends BaseDashboard
             $this->sheet = 'miss';
             $this->photos = [];
             $this->reason = FailedDeliveryReason::NoOneHome->value;
+            $this->nextOn = null;
         }
     }
 
@@ -1149,14 +440,46 @@ class Dashboard extends BaseDashboard
 
             return;
         }
+        $damaged = $this->condition === 'damaged';
+        if ($damaged && count($this->photos) < 2) {
+            Notification::make()->title('Damaged: take 2 photos')->body('The whole box, and the damage up close.')->warning()->send();
+
+            return;
+        }
+        $sig = null;
+        if ($damaged || $this->receipt === 'phone') {
+            if (! $damaged && ! $this->paperWhy) {
+                Notification::make()->title('Why is there no paper receipt?')->warning()->send();
+
+                return;
+            }
+            try {
+                $sig = \App\Support\Deliveries\DeliveryProof::record($box, Auth::user(), [
+                    'why' => $damaged ? 'damaged' : 'no_paper', 'paper_reason' => $this->paperWhy,
+                    'recipient_name' => $this->signName, 'relationship' => $this->signRel,
+                    'damage' => $this->damage, 'damage_note' => $this->damageNote,
+                    'cant_sign' => $this->cantSign, 'signature' => $this->signature,
+                    'lat' => $this->signLat, 'lng' => $this->signLng,
+                ]);
+            } catch (\DomainException $e) {
+                Notification::make()->title($e->getMessage())->warning()->send();
+
+                return;
+            }
+        }
 
         // Delivering means the trip is on the road, even if nobody tapped "I take the trip".
         if ($this->driverTrip()->trip) {
             \App\Support\TripFlow::take($this->driverTrip()->trip, Auth::user());
         }
         app(TripAssignment::class)->markDelivered($box, $this->photos);
+        if ($sig) {
+            \App\Support\Deliveries\DeliveryProof::after($sig);
+        }
 
         $this->justDelivered = $box->id;
+        $this->justReceipt = $sig?->token;
+        $this->resetProof();
         $this->justPhotos = count($this->photos);
         $this->photos = []; // they belong to the box now
         $this->reset('boxId', 'sheet', 'reason', 'note', 'upload');
@@ -1196,7 +519,7 @@ class Dashboard extends BaseDashboard
         }
 
         try {
-            app(TripAssignment::class)->recordFailedAttempt($box, Auth::user(), $reason, $this->note ?: null, $this->photos);
+            $attempt = app(TripAssignment::class)->recordFailedAttempt($box, Auth::user(), $reason, $this->note ?: null, $this->photos, $this->nextOn);
         } catch (\DomainException $e) {
             Notification::make()->title($e->getMessage())->warning()->send();
 
@@ -1205,7 +528,8 @@ class Dashboard extends BaseDashboard
 
         $this->photos = [];
         $this->closeSheet();
-        Notification::make()->title("{$box->invoice} stays on your truck")->body('The office has been told.')->warning()->send();
+        $next = $attempt->needs_office ? 'The office decides the next try.' : ($attempt->next_try_on ? 'Next try: '.\Carbon\Carbon::parse($attempt->next_try_on)->format('D M j').'.' : '');
+        Notification::make()->title("{$box->invoice} stays on your truck")->body(trim('The office has been told. '.$next))->warning()->send();
     }
 
     protected static ?string $navigationLabel = 'Today';
@@ -1423,7 +747,15 @@ class Dashboard extends BaseDashboard
             'voiceOn' => Ai::enabled('voice'),
             'household' => $household,
             'reasons' => FailedDeliveryReason::cases(),
-            'reasonCase' => FailedDeliveryReason::tryFrom((string) $this->reason),
+            'reasonCase' => $reasonCase = FailedDeliveryReason::tryFrom((string) $this->reason),
+            'tryNo' => $tryNo = $box ? $box->deliveryAttempts()->count() + 1 : 1,
+            'lastTry' => $box && $tryNo > 1 ? $box->latestDeliveryAttempt()->with('user:id,full_name')->first() : null,
+            'nextPlan' => $box && $reasonCase && $this->sheet === 'miss' ? \App\Support\Deliveries\NextTry::plan($reasonCase, $tryNo, $this->nextOn) : null,
+            'nextChoices' => $this->sheet === 'miss' ? \App\Support\Deliveries\NextTry::choices() : [],
+            'damageList' => \App\Models\DeliverySignature::DAMAGE,
+            'paperList' => \App\Models\DeliverySignature::PAPER,
+            'relList' => \App\Models\DeliverySignature::RELATIONSHIP,
+            'justLink' => $this->justReceipt ? url('/r/'.$this->justReceipt) : null,
             'photoUrls' => array_map(fn ($p) => Storage::disk('public')->url($p), $this->photos),
             'just' => $this->justDelivered ? $trip->boxes()->find($this->justDelivered) : null,
             'greeting' => (int) now()->format('G') < 12 ? 'Good morning' : ((int) now()->format('G') < 18 ? 'Good afternoon' : 'Good evening'),
@@ -1432,7 +764,7 @@ class Dashboard extends BaseDashboard
 
     protected function listQuery()
     {
-        $q = $this->driverTrip()->boxes()->with('invdata', 'latestDeliveryAttempt');
+        $q = $this->driverTrip()->boxes()->with('invdata', 'latestDeliveryAttempt')->withCount('deliveryAttempts');
         $term = trim($this->search);
         if ($term !== '') {
             $q->where(fn ($w) => $w->where('invoice', 'like', "%{$term}%")->orWhereHas('invdata', fn ($i) => $i
@@ -1461,6994 +793,2797 @@ class Dashboard extends BaseDashboard
         return ['todo' => $p['left'], 'delivered' => $p['delivered'], 'missed' => $p['notDelivered']];
     }
 }
-DISPATCH_FILE_END_5
+DISPATCH_FILE_END_0
 
-# ---------------------------------------------------------------- app/Filament/Delivery/Pages/Deliveryinv.php
-mkdir -p 'app/Filament/Delivery/Pages'
-cat > 'app/Filament/Delivery/Pages/Deliveryinv.php' <<'DISPATCH_FILE_END_6'
-<?php
-
-namespace App\Filament\Delivery\Pages;
-
-use App\Enums\FailedDeliveryReason;
-use App\Enums\UndoDeliveryReason;
-use App\Models\Deliverylog;
-use App\Models\Tripinvoice;
-use App\Services\TripAssignment;
-use App\Support\DriverTrip;
-use BackedEnum;
-use Filament\Actions\Action;
-use Filament\Actions\Concerns\InteractsWithActions;
-use Filament\Actions\Contracts\HasActions;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\Radio;
-use Filament\Forms\Components\Textarea;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Filament\Schemas\Components\Utilities\Get;
-use Filament\Schemas\Concerns\InteractsWithSchemas;
-use Filament\Schemas\Contracts\HasSchemas;
-use Filament\Support\Enums\FontWeight;
-use Filament\Support\Enums\Size;
-use Filament\Support\Enums\TextSize;
-use Filament\Support\Icons\Heroicon;
-use Filament\Tables\Columns\Layout\Stack;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Concerns\InteractsWithTable;
-use Filament\Tables\Contracts\HasTable;
-use Filament\Tables\Enums\PaginationMode;
-use Filament\Tables\Filters\SelectFilter;
-use Filament\Tables\Filters\TernaryFilter;
-use Filament\Tables\Table;
-use Illuminate\Contracts\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
-use Livewire\Attributes\Locked;
-use Livewire\Attributes\On;
-
-class Deliveryinv extends Page implements HasActions, HasSchemas, HasTable
-{
-    use InteractsWithActions;
-    use InteractsWithSchemas;
-    use InteractsWithTable;
-
-    // Locked = cannot be changed from the browser
-    #[Locked]
-    public ?int $deliveryid = null;
-
-    #[Locked]
-    public ?string $tripNumber = null;
-
-    #[Locked]
-    public ?int $scannedId = null;
-
-    protected string $view = 'filament.delivery.pages.deliveryinv';
-
-    protected static ?string $navigationLabel = 'My deliveries';
-
-    protected static ?int $navigationSort = 2;
-
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedTruck;
-
-    /**
-     * The current trip the logged-in user is assigned to as crew
-     * (driver / leadman / helper). Works with multiple crew per trip.
-     */
-    protected static function currentDelivery(): ?Deliverylog
-    {
-        return once(fn () => Auth::user() ? DriverTrip::currentTrip(Auth::user()) : null);
-    }
-
-    public function mount(): void
-    {
-        $deliverylog = static::currentDelivery();
-        $this->deliveryid = $deliverylog?->id;
-        $this->tripNumber = $deliverylog?->trip_number;
-
-    }
-
-    public function getHeading(): string
-    {
-        return $this->tripNumber ? "Trip {$this->tripNumber}" : 'Deliveries';
-    }
-
-    public function getSubheading(): ?string
-    {
-        if (! $this->deliveryid) {
-            return 'You are not assigned to a trip right now.';
-        }
-
-        $left = $this->deliveryQuery()->count();
-
-        if ($left === 0) {
-            return 'All boxes on this trip are delivered.';
-        }
-
-        $attempted = $this->deliveryQuery()->has('deliveryAttempts')->count();
-
-        return trans_choice('{1} 1 box left to deliver|[2,*] :count boxes left to deliver', $left, ['count' => $left])
-            .($attempted ? " · {$attempted} not delivered yet" : '');
-    }
-
-    /**
-     * Invoices loaded on the user's current trip.
-     * Used by the table AND the scanner.
-     */
-    protected function deliveryQuery(): Builder
-    {
-        $trip = static::currentDelivery();
-
-        if (! $trip) {
-            return Tripinvoice::query()->whereRaw('1 = 0'); // no trip → no invoices
-        }
-
-        // Boxes on the driver's own trip, or handed over to it by a partner hub — and not yet delivered.
-        return Tripinvoice::query()
-            ->with(['invdata', 'latestDeliveryAttempt'])
-            ->withCount('deliveryAttempts')
-            ->where('is_delivered', false)
-            ->where(fn (Builder $query) => $query
-                ->where('deliverylog_id', $trip->id)
-                ->orWhere('deliveryloghub_id', $trip->id));
-    }
-
-    /**
-     * Called by <x-barcode-scanner method="scanInvoice" />
-     */
-    public function scanInvoice(string $code): void
-    {
-        $code = trim(preg_replace('/[\x00-\x1F\x7F]+/u', '', $code));
-
-        if ($code === '') {
-            return;
-        }
-
-        if (! $this->deliveryid) {
-            Notification::make()
-                ->title('No active delivery')
-                ->body('You are not assigned to any current delivery trip.')
-                ->warning()
-                ->send();
-
-            return;
-        }
-
-        $record = $this->deliveryQuery()
-            ->where(fn ($q) => $q
-                ->where('invoice', $code)
-                ->orWhereHas('invdata', fn ($r) => $r->where('invoice', $code)))
-            ->first();
-
-        if (! $record) {
-            Notification::make()
-                ->title('Invoice not found')
-                ->body("“{$code}” is not loaded on your current trip.")
-                ->danger()
-                ->send();
-
-            return;
-        }
-
-        $this->scannedId = $record->getKey();
-        $this->mountAction('deliverScanned');
-    }
-
-    // Always re-check the scanned invoice belongs to this user's trip
-    protected function scannedRecord(): ?Tripinvoice
-    {
-        if (! $this->scannedId) {
-            return null;
-        }
-
-        return $this->deliveryQuery()
-            ->with('invdata')
-            ->whereKey($this->scannedId)
-            ->first();
-    }
-
-    // Shared upload field (used by scan modal, Picture and Edit)
-    protected static function pictureUpload(callable $directory): FileUpload
-    {
-        return FileUpload::make('delivery_picture')
-            ->label('Delivery Picture')
-            ->multiple()
-            ->panelLayout('grid')
-            ->uploadingMessage('Uploading ...')
-            ->image()
-            ->openable()
-            ->disk('public')
-            ->directory($directory)
-            ->visibility('private')
-            ->required()
-            ->removeUploadedFileButtonPosition('right');
-    }
-
-    public function deliverScannedAction(): Action
-    {
-        return Action::make('deliverScanned')
-            ->modalIcon(Heroicon::Camera)
-            ->modalWidth('lg')
-            ->modalHeading(function () {
-                $record = $this->scannedRecord();
-                $invoice = ucwords((string) ($record?->invdata?->invoice ?? $record?->invoice));
-
-                return $record?->is_delivered
-                    ? "Invoice {$invoice} — already delivered"
-                    : "Deliver invoice {$invoice}";
-            })
-            ->modalDescription(function () {
-                $data = $this->scannedRecord()?->invdata;
-
-                return $data
-                    ? ucwords(trim(($data->receiver_name ?? '').' — '.($data->receiver_province ?? ''), ' —'))
-                    : null;
-            })
-            ->modalSubmitActionLabel(fn () => $this->scannedRecord()?->is_delivered ? 'Update pictures' : 'Mark as delivered')
-            ->extraModalFooterActions(fn () => $this->scannedRecord()?->is_delivered ? [] : [
-                Action::make('switchToCantDeliver')
-                    ->label("Can't deliver")
-                    ->color('danger')
-                    ->outlined()
-                    ->action(fn () => $this->replaceMountedAction('cantDeliverScanned')),
-            ])
-            ->fillForm(fn (): array => [
-                'delivery_picture' => $this->scannedRecord()?->delivery_picture,
-            ])
-            ->schema([
-                static::pictureUpload(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $this->scannedRecord()?->invoice)),
-            ])
-            ->action(function (array $data): void {
-                $record = $this->scannedRecord();
-
-                if (! $record) {
-                    Notification::make()->title('Invoice not found')->danger()->send();
-
-                    return;
-                }
-
-                $wasDelivered = (bool) $record->is_delivered;
-                app(TripAssignment::class)->markDelivered($record, (array) $data['delivery_picture']);
-
-                $notification = Notification::make()
-                    ->title('Invoice '.ucwords((string) ($record->invdata?->invoice ?? $record->invoice)).($wasDelivered ? ' photos updated' : ' delivered'))
-                    ->success();
-
-                // A short window to take back a delivery tapped by mistake.
-                if (! $wasDelivered) {
-                    $notification
-                        ->body('Wrong box? Tap Undo.')
-                        ->duration(15000)
-                        ->actions([
-                            Action::make('undo')
-                                ->label('Undo')
-                                ->button()
-                                ->color('warning')
-                                ->dispatch('undo-delivery', ['tripinvoiceId' => $record->getKey()])
-                                ->close(),
-                        ]);
-                }
-
-                $notification->send();
-
-                $this->scannedId = null;
-            });
-    }
-
-    /**
-     * Reason picker, note and photo for a box that could not be delivered.
-     * The note and the photo become required for the reasons that need them.
-     */
-    protected static function failedDeliverySchema(callable $directory): array
-    {
-        $reason = fn (Get $get): ?FailedDeliveryReason => $get('reason') instanceof FailedDeliveryReason
-            ? $get('reason')
-            : FailedDeliveryReason::tryFrom((string) $get('reason'));
-
-        return [
-            Radio::make('reason')
-                ->label('Why could you not deliver it?')
-                ->options(FailedDeliveryReason::class)
-                ->descriptions(collect(FailedDeliveryReason::cases())
-                    ->mapWithKeys(fn (FailedDeliveryReason $case) => [$case->value => $case->getDescription()])
-                    ->all())
-                ->required()
-                ->live(),
-            Textarea::make('note')
-                ->label(fn (Get $get) => $reason($get)?->notePrompt() ?? 'Note')
-                ->placeholder('Optional')
-                ->rows(2)
-                ->maxLength(500)
-                ->required(fn (Get $get) => (bool) $reason($get)?->requiresNote()),
-            FileUpload::make('photos')
-                ->label('Photo')
-                ->helperText(fn (Get $get) => $reason($get)?->requiresPhoto()
-                    ? 'Required: take a photo of the house, gate, road or damage.'
-                    : 'Optional')
-                ->multiple()
-                ->maxFiles(3)
-                ->image()
-                ->disk('public')
-                ->directory($directory)
-                ->visibility('private')
-                ->required(fn (Get $get) => (bool) $reason($get)?->requiresPhoto()),
-        ];
-    }
-
-    protected function recordFailure(?Tripinvoice $record, array $data): void
-    {
-        if (! $record) {
-            Notification::make()->title('Invoice not found on your trip')->danger()->send();
-
-            return;
-        }
-
-        try {
-            app(TripAssignment::class)->recordFailedAttempt(
-                $record,
-                Auth::user(),
-                $data['reason'] instanceof FailedDeliveryReason ? $data['reason'] : FailedDeliveryReason::from($data['reason']),
-                $data['note'] ?? null,
-                (array) ($data['photos'] ?? []),
-            );
-        } catch (\DomainException $exception) {
-            Notification::make()->title($exception->getMessage())->danger()->send();
-
-            return;
-        }
-
-        Notification::make()
-            ->title("{$record->invoice} marked as not delivered")
-            ->body('The box stays on your truck. The office has been told.')
-            ->warning()
-            ->send();
-    }
-
-    public function cantDeliverScannedAction(): Action
-    {
-        return Action::make('cantDeliverScanned')
-            ->modalHeading(fn () => "Can't deliver ".$this->scannedRecord()?->invoice)
-            ->modalDescription(fn () => Str::title((string) $this->scannedRecord()?->invdata?->receiver_name))
-            ->modalIcon(Heroicon::OutlinedNoSymbol)
-            ->modalIconColor('danger')
-            ->modalWidth('lg')
-            ->modalSubmitActionLabel('Save reason')
-            ->schema(static::failedDeliverySchema(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('not-delivered', $this->scannedRecord()?->invoice)))
-            ->action(function (array $data): void {
-                $this->recordFailure($this->scannedRecord(), $data);
-                $this->scannedId = null;
-            });
-    }
-
-    /** "Undo" on the toast shown right after delivering. */
-    #[On('undo-delivery')]
-    public function undoDelivery(int $tripinvoiceId): void
-    {
-        $trip = static::currentDelivery();
-
-        $record = $trip
-            ? Tripinvoice::query()
-                ->where(fn ($query) => $query->where('deliverylog_id', $trip->id)->orWhere('deliveryloghub_id', $trip->id))
-                ->find($tripinvoiceId)
-            : null;
-
-        if (! $record) {
-            Notification::make()->title('That box is not on your trip')->danger()->send();
-
-            return;
-        }
-
-        try {
-            app(TripAssignment::class)->undoDelivery($record, Auth::user(), UndoDeliveryReason::TappedByMistake);
-        } catch (\DomainException $exception) {
-            Notification::make()->title($exception->getMessage())->danger()->send();
-
-            return;
-        }
-
-        Notification::make()
-            ->title('Delivery undone')
-            ->body("{$record->invoice} is back on your list.")
-            ->success()
-            ->send();
-    }
-
-    public function table(Table $table): Table
-    {
-        return $table
-            ->emptyStateHeading('No Invoice Available')
-            ->emptyStateDescription(fn () => $this->deliveryid
-                ? 'No loaded invoices on this trip.'
-                : 'You are not assigned to any current delivery trip.')
-           // ->deferLoading()
-            ->paginationMode(PaginationMode::Simple)
-            ->query($this->deliveryQuery())
-            ->columns([
-                Stack::make([
-                    TextColumn::make('invdata.invoice')
-                        ->icon(Heroicon::OutlinedArchiveBox)
-                        ->iconColor('primary')
-                        ->size(TextSize::Large)
-                        ->weight(FontWeight::ExtraBold),
-                    TextColumn::make('invdata.receiver_name')
-                        ->formatStateUsing(fn ($state) => Str::title($state))
-                        ->weight(FontWeight::Bold),
-                    TextColumn::make('address')
-                        ->state(fn (Tripinvoice $record) => collect([
-                            $record->invdata?->receiver_address,
-                            $record->invdata?->receiver_barangay,
-                            $record->invdata?->receiver_city,
-                            $record->invdata?->receiver_province,
-                        ])->filter()->map(fn ($part) => Str::title($part))->join(', '))
-                        ->color('gray')
-                        ->wrap(),
-                    TextColumn::make('invdata.receiver_mobile_no')
-                        ->icon(Heroicon::OutlinedPhone)
-                        ->color('info')
-                        ->url(fn (Tripinvoice $record) => $record->invdata?->receiver_mobile_no
-                            ? 'tel:'.preg_replace('/[^0-9+]/', '', $record->invdata->receiver_mobile_no)
-                            : null),
-                    TextColumn::make('latestDeliveryAttempt.reason')
-                        ->badge()
-                        ->formatStateUsing(fn ($state, Tripinvoice $record) => 'Not delivered · '.$state->getLabel()
-                            .($record->delivery_attempts_count > 1 ? " ({$record->delivery_attempts_count} tries)" : ''))
-                        ->icon(fn ($state) => $state?->getIcon())
-                        ->color('danger'),
-                ])->space(1),
-            ])
-            ->filters([
-                // TernaryFilter::make('is_delivered')
-                //     ->label('Status')
-                //     ->trueLabel('Delivered')
-                //     ->falseLabel('Not delivered')
-                //     ->placeholder('All')
-                //     ->default(false),
-                // SelectFilter::make('routearea_id')
-                //     ->label('Route Area')
-                //     ->relationship('route', 'description')
-                //     ->preload()
-                //     ->searchable(),
-            ])
-            ->deferFilters(false)
-            ->recordActions([
-                Action::make('cantDeliver')
-                    ->label("Can't deliver")
-                    ->icon(Heroicon::OutlinedNoSymbol)
-                    ->color('danger')
-                    ->button()
-                    ->outlined()
-                    ->size(Size::Large)
-                    ->modalHeading(fn (Tripinvoice $record) => "Can't deliver {$record->invoice}")
-                    ->modalDescription(fn (Tripinvoice $record) => Str::title((string) $record->invdata?->receiver_name))
-                    ->modalIcon(Heroicon::OutlinedNoSymbol)
-                    ->modalIconColor('danger')
-                    ->modalWidth('lg')
-                    ->modalSubmitActionLabel('Save reason')
-                    ->schema(static::failedDeliverySchema(fn (Tripinvoice $record) => \App\Support\Photos\Storage\PhotoFolders::dir('not-delivered', $record->invoice)))
-                    ->action(fn (array $data, Tripinvoice $record) => $this->recordFailure(
-                        $this->deliveryQuery()->whereKey($record->getKey())->first(),
-                        $data,
-                    )),
-            ]);
-    }
-}
-DISPATCH_FILE_END_6
-
-# ---------------------------------------------------------------- app/Filament/Delivery/Pages/Fuel.php
-mkdir -p 'app/Filament/Delivery/Pages'
-cat > 'app/Filament/Delivery/Pages/Fuel.php' <<'DISPATCH_FILE_END_7'
-<?php
-
-namespace App\Filament\Delivery\Pages;
-
-use App\Support\DriverTrip;
-use App\Support\Fuel\Fuel as FuelData;
-use App\Support\Fuel\FuelReader;
-use App\Support\Photos\PhotoShrinker;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
-use Livewire\Attributes\Locked;
-use Livewire\WithFileUploads;
-
-/**
- * Driver app › ⛽ Add fuel: photo of the receipt (read by AI when on), check the numbers,
- * card or cash, photo of the odometer, save. The office sees it on the Fuel page.
- */
-class Fuel extends Page
-{
-    use WithFileUploads;
-
-    protected string $view = 'filament.delivery.pages.fuel';
-
-    protected static bool $shouldRegisterNavigation = false;
-
-    protected static ?string $slug = 'fuel';
-
-    /** receipt, check, odometer, done */
-    #[Locked]
-    public string $step = 'receipt';
-
-    public $upload = null;
-
-    #[Locked]
-    public ?string $receiptPath = null;
-
-    #[Locked]
-    public ?string $odometerPath = null;
-
-    public array $f = [];
-
-    #[Locked]
-    public bool $aiRead = false;
-
-    #[Locked]
-    public array $aiData = [];
-
-    #[Locked]
-    public ?float $lat = null;
-
-    #[Locked]
-    public ?float $lng = null;
-
-    #[Locked]
-    public ?int $savedId = null;
-
-    public static function canAccess(): bool
-    {
-        return FuelData::ready() && Auth::check();
-    }
-
-    public function mount(): void
-    {
-        $this->f = $this->blank();
-    }
-
-    protected function blank(): array
-    {
-        return ['station' => '', 'product' => '', 'fuel_type' => '', 'liters' => '', 'price_per_liter' => '', 'total' => '',
-            'vatable' => '', 'vat' => '', 'station_tin' => '', 'invoice_no' => '', 'buyer_tin_ok' => '', 'paid_with' => 'card',
-            'card_last4' => '', 'odometer' => '', 'filled_at' => now()->format('Y-m-d\TH:i')];
-    }
-
-    public function getTitle(): string|Htmlable
-    {
-        return 'Add fuel';
-    }
-
-    public function getHeading(): string|Htmlable
-    {
-        return '';
-    }
-
-    /** Phone location when the fill is added: compared with the truck GPS. */
-    public function setPlace(mixed $lat, mixed $lng): void
-    {
-        $this->lat = is_numeric($lat) && abs((float) $lat) <= 90 ? (float) $lat : null;
-        $this->lng = is_numeric($lng) && abs((float) $lng) <= 180 ? (float) $lng : null;
-    }
-
-    /** Called by the browser after a (shrunk) photo is uploaded. */
-    public function savePhoto(): void
-    {
-        $this->validate(['upload' => 'required|image|max:12288'], ['upload.image' => 'That file is not a photo.']);
-        $path = $this->upload->store(\App\Support\Photos\Storage\PhotoFolders::dir('fuel', rescue(fn () => FuelData::truckFor(Auth::user(), DriverTrip::currentTrip(Auth::user()))?->plate_no, null, false)), 'public');
-        PhotoShrinker::file('public', $path);
-        $this->reset('upload');
-
-        if ($this->step === 'odometer') {
-            if ($this->odometerPath) {
-                Storage::disk('public')->delete($this->odometerPath);
-            }
-            $this->odometerPath = $path;
-            if ($this->f['odometer'] === '' && ($km = FuelReader::odometer($path))) {
-                $this->f['odometer'] = (string) $km;
-            }
-
-            return;
-        }
-
-        if ($this->receiptPath) {
-            Storage::disk('public')->delete($this->receiptPath);
-        }
-        $this->receiptPath = $path;
-        $read = FuelReader::receipt($path);
-        $this->aiRead = $read !== [];
-        $this->aiData = $read;
-        foreach ($read as $k => $v) {
-            if (array_key_exists($k, $this->f)) {
-                $this->f[$k] = (string) $v;
-            }
-        }
-        if (isset($read['buyer_tin'])) {
-            $this->f['buyer_tin_ok'] = FuelData::buyerTinOk($read['buyer_tin'], (float) ($read['total'] ?? 0)) === false ? '0' : '1';
-        }
-        if (isset($read['filled_at'])) {
-            $this->f['filled_at'] = str_replace(' ', 'T', $read['filled_at']);
-        }
-        $this->step = 'check';
-    }
-
-    public function noReceiptPhoto(): void
-    {
-        $this->step = 'check';
-    }
-
-    public function toOdometer(): void
-    {
-        $this->validateFill();
-        $this->step = 'odometer';
-    }
-
-    public function back(): void
-    {
-        $this->step = match ($this->step) { 'odometer' => 'check', default => 'receipt' };
-    }
-
-    protected function validateFill(): void
-    {
-        foreach (['liters', 'total', 'price_per_liter', 'vat', 'vatable'] as $k) {
-            $this->f[$k] = str_replace([',', '₱', ' '], '', (string) $this->f[$k]);
-        }
-        $this->validate([
-            'f.liters' => 'required|numeric|min:1|max:1000',
-            'f.total' => 'required|numeric|min:1|max:200000',
-            'f.price_per_liter' => 'nullable|numeric|min:10|max:300',
-            'f.vat' => 'nullable|numeric|min:0',
-            'f.vatable' => 'nullable|numeric|min:0',
-            'f.fuel_type' => 'required|in:diesel,gasoline',
-            'f.paid_with' => 'required|in:card,cash',
-            'f.station' => 'nullable|string|max:120',
-            'f.product' => 'nullable|string|max:80',
-            'f.filled_at' => 'required|date',
-        ], [
-            'f.liters.required' => 'Type the liters on the receipt.',
-            'f.total.required' => 'Type the total amount.',
-            'f.fuel_type.required' => 'Diesel or gasoline?',
-        ]);
-    }
-
-    public function save(): void
-    {
-        $this->validateFill();
-        $this->validate(['f.odometer' => 'nullable|integer|min:1|max:9999999']);
-        $driver = Auth::user();
-        $trip = DriverTrip::currentTrip($driver);
-        $truck = FuelData::truckFor($driver, $trip);
-        if (! $truck) {
-            Notification::make()->title('No truck for you yet')->body('Ask the office to put you on a truck, then add the fill again.')->danger()->send();
-
-            return;
-        }
-        $at = \Illuminate\Support\Carbon::parse($this->f['filled_at']);
-        $fill = FuelData::save([
-            ...$this->f,
-            'filled_at' => $at->gt(now()) ? now() : $at,
-            'buyer_tin_ok' => $this->f['buyer_tin_ok'] === '' ? null : $this->f['buyer_tin_ok'] === '1',
-            'receipt_path' => $this->receiptPath, 'odometer_path' => $this->odometerPath,
-            'lat' => $this->lat, 'lng' => $this->lng, 'ai_read' => $this->aiRead, 'ai_data' => $this->aiData ?: null,
-        ], $truck, $driver, $trip);
-        $this->savedId = $fill->id;
-        $this->step = 'done';
-    }
-
-    public function another(): void
-    {
-        $this->reset(['receiptPath', 'odometerPath', 'aiRead', 'aiData', 'savedId']);
-        $this->f = $this->blank();
-        $this->step = 'receipt';
-    }
-
-    protected function getViewData(): array
-    {
-        $driver = Auth::user();
-        $trip = DriverTrip::currentTrip($driver);
-        $truck = FuelData::truckFor($driver, $trip);
-        $cash = FuelData::cashFor($trip);
-        $prev = $truck ? \App\Models\Fuel\FuelFill::where('truck_id', $truck->id)->whereNotNull('odometer')->latest('filled_at')->first() : null;
-        $odo = (int) $this->f['odometer'];
-        $kmSince = $prev && $odo > $prev->odometer && $odo - $prev->odometer < 5000 ? $odo - $prev->odometer : null;
-        $liters = (float) $this->f['liters'];
-
-        return [
-            'trip' => $trip, 'truck' => $truck, 'cash' => $cash,
-            'aiOn' => FuelReader::on(),
-            'wrongFuel' => $truck?->fuel_type && $this->f['fuel_type'] && $truck->fuel_type !== $this->f['fuel_type'],
-            'problems' => $this->step === 'check' ? FuelReader::problems($this->f) : [],
-            'receiptUrl' => $this->receiptPath ? Storage::disk('public')->url($this->receiptPath) : null,
-            'odometerUrl' => $this->odometerPath ? Storage::disk('public')->url($this->odometerPath) : null,
-            'prevOdo' => $prev?->odometer, 'kmSince' => $kmSince, 'kml' => $kmSince && $liters > 0 ? round($kmSince / $liters, 1) : null,
-            'needTin' => (float) $this->f['total'] >= 1000 && FuelData::companyTin() !== '',
-            'companyTin' => FuelData::companyTin(), 'companyName' => (string) FuelData::setting('company_name', ''),
-            'saved' => $this->savedId ? \App\Models\Fuel\FuelFill::find($this->savedId) : null,
-        ];
-    }
-}
-DISPATCH_FILE_END_7
-
-# ---------------------------------------------------------------- app/Filament/Delivery/Resources/Invoices/Pages/ListInvoices.php
-mkdir -p 'app/Filament/Delivery/Resources/Invoices/Pages'
-cat > 'app/Filament/Delivery/Resources/Invoices/Pages/ListInvoices.php' <<'DISPATCH_FILE_END_8'
-<?php
-
-namespace App\Filament\Delivery\Resources\Invoices\Pages;
-
-use App\Filament\Delivery\Resources\Invoices\InvoiceResource;
-use App\Filament\Delivery\Resources\Invoices\Tables\InvoicesTable;
-use App\Models\Tripinvoice;
-use App\Services\TripAssignment;
-use App\Support\InvoiceLookup;
-use Filament\Actions\Action;
-use Filament\Actions\CreateAction;
-use Filament\Forms\Components\FileUpload;
-use Filament\Notifications\Notification;
-use Filament\Resources\Pages\ListRecords;
-use Filament\Support\Icons\Heroicon;
-use Livewire\Attributes\Locked;
-
-class ListInvoices extends ListRecords
-{
-    protected static string $resource = InvoiceResource::class;
-
-    // The Tripinvoice found by the scanner
-    #[Locked]
-    public ?int $scannedTripId = null;
-
-    protected function getHeaderActions(): array
-    {
-        return [
-            Action::make('scanBarcode')
-                ->label('Scan barcode')
-                ->icon('heroicon-o-qr-code')
-                ->color('gray')
-                ->modalHeading('Scan box barcode')
-                ->modalWidth('lg')
-                ->modalContent(view('filament.modals.scan-invoice'))
-                ->modalSubmitAction(false)
-                ->modalCancelActionLabel('Close'),
-
-            //    CreateAction::make(),
-        ];
-    }
-
-    /**
-     * Called by the scanner in the "Scan barcode" modal.
-     */
-    public function openScannedInvoice(string $code): void
-    {
-        $deliveryId = InvoicesTable::currentDeliveryId();
-        $code = InvoiceLookup::normalize($code);
-
-        // Only boxes loaded on the driver's own current trip can be delivered from here.
-        $trip = $deliveryId
-            ? Tripinvoice::query()
-                ->where('invoice', $code)
-                ->whereIn('invoice', InvoicesTable::tripInvoiceNumbers($deliveryId))
-                ->where(fn ($query) => $query->where('deliverylog_id', $deliveryId)->orWhere('deliveryloghub_id', $deliveryId))
-                ->latest('id')
-                ->first()
-            : null;
-
-        if (! $trip) {
-            Notification::make()
-                ->title('No invoice found')
-                ->body('“'.$code.'” is not on your current trip.')
-                ->danger()
-                ->send();
-
-            return;
-        }
-
-        $this->scannedTripId = $trip->getKey();
-
-        // Close the scanner modal and open the upload picture modal
-        $this->replaceMountedAction('uploadPicture');
-    }
-
-    protected function scannedTrip(): ?Tripinvoice
-    {
-        $deliveryId = InvoicesTable::currentDeliveryId();
-
-        return $this->scannedTripId && $deliveryId
-            ? Tripinvoice::with('invdata')
-                ->where(fn ($query) => $query->where('deliverylog_id', $deliveryId)->orWhere('deliveryloghub_id', $deliveryId))
-                ->find($this->scannedTripId)
-            : null;
-    }
-
-    /**
-     * Upload delivery picture modal (opened after a successful scan).
-     */
-    public function uploadPictureAction(): Action
-    {
-        return Action::make('uploadPicture')
-            ->modalIcon(Heroicon::Camera)
-            ->modalWidth('lg')
-            ->modalHeading(function () {
-                $trip = $this->scannedTrip();
-                $number = ucwords((string) ($trip?->invdata?->invoice ?? $trip?->invoice));
-
-                return $trip?->is_delivered
-                    ? "Invoice {$number} — already delivered"
-                    : "Deliver invoice {$number}";
-            })
-            ->modalDescription(function () {
-                $data = $this->scannedTrip()?->invdata;
-
-                return $data
-                    ? ucwords(trim(($data->receiver_name ?? '').' — '.($data->receiver_province ?? ''), ' —'))
-                    : null;
-            })
-            ->modalSubmitActionLabel(fn () => $this->scannedTrip()?->is_delivered ? 'Update pictures' : 'Mark as delivered')
-            ->fillForm(fn (): array => [
-                'delivery_picture' => $this->scannedTrip()?->delivery_picture,
-            ])
-            ->schema([
-                FileUpload::make('delivery_picture')
-                    ->label('Delivery Picture')
-                    ->multiple()
-                    ->panelLayout('grid')
-                    ->uploadingMessage('Uploading ...')
-                    ->image()
-                    ->openable()
-                    ->disk('public')
-                    ->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $this->scannedTrip()?->invoice))
-                    ->visibility('private')
-                    ->required()
-                    ->removeUploadedFileButtonPosition('right'),
-            ])
-            ->action(function (array $data): void {
-                $trip = $this->scannedTrip();
-
-                if (! $trip) {
-                    Notification::make()->title('Invoice not found')->danger()->send();
-
-                    return;
-                }
-
-                app(TripAssignment::class)->markDelivered($trip, (array) $data['delivery_picture']);
-
-                Notification::make()
-                    ->title('Invoice '.ucwords((string) ($trip->invdata?->invoice ?? $trip->invoice)).' delivered')
-                    ->success()
-                    ->send();
-
-                $this->scannedTripId = null;
-            });
-    }
-}
-DISPATCH_FILE_END_8
-
-# ---------------------------------------------------------------- app/Filament/Pages/PhotoStorage.php
+# ---------------------------------------------------------------- app/Filament/Pages/Redelivery.php
 mkdir -p 'app/Filament/Pages'
-cat > 'app/Filament/Pages/PhotoStorage.php' <<'DISPATCH_FILE_END_9'
+cat > 'app/Filament/Pages/Redelivery.php' <<'DISPATCH_FILE_END_1'
+<?php
+
+namespace App\Filament\Pages;
+
+use App\Filament\Shared\Deliveries\RedeliveryPage;
+
+class Redelivery extends RedeliveryPage {}
+DISPATCH_FILE_END_1
+
+# ---------------------------------------------------------------- app/Filament/Pages/SmsSettings.php
+mkdir -p 'app/Filament/Pages'
+cat > 'app/Filament/Pages/SmsSettings.php' <<'DISPATCH_FILE_END_2'
 <?php
 
 namespace App\Filament\Pages;
 
 use App\Models\AppSetting;
-use App\Models\Photos\PhotoTask;
-use App\Models\Photos\PhotoTaskItem;
-use App\Support\Photos\Storage\OldSystem;
-use App\Support\Photos\Storage\PhotoStore;
-use App\Support\Photos\Storage\PhotoWork;
+use App\Models\Sms\SmsMessage;
+use App\Support\Ai\Ai;
+use App\Support\Ai\AiUnavailable;
+use App\Support\Sms\Phone;
+use App\Support\Sms\SmsEvents;
+use App\Support\Sms\SmsSender;
+use App\Support\Sms\SmsSettings as Sms;
+use App\Support\Sms\SmsWriter;
+use App\Support\Sms\Templates;
 use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
-use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Str;
-use Symfony\Component\HttpFoundation\StreamedResponse;
-
-/** Settings → Photo storage (board 66): buckets, moving photos, copying the old system's photos, workers. */
-class PhotoStorage extends Page
-{
-    protected string $view = 'filament.photos.storage';
-
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCloudArrowUp;
-
-    protected static ?string $title = 'Photo storage';
-
-    protected static ?string $slug = 'photo-storage';
-
-    public string $tab = 'old';
-
-    public int $step = 1;
-
-    public string $rt = 'wmsv2';
-
-    public string $search = '';
-
-    /** @var array<string, array<string, ?string>> */
-    public array $form = [];
-
-    /** @var array<string, bool> */
-    public array $editing = ['tmp' => false, 'real' => false];
-
-    public bool $autoOff = true;
-
-    public bool $runHere = false;
-
-    /** Move: put the photos in the new folders (board 67). */
-    public bool $tidyMove = true;
-
-    public bool $sureAgain = false;
-
-    public string $oldFolder = '';
-
-    /** @var array<string, string> */
-    public array $msg = [];
-
-    public static function canAccess(): bool
-    {
-        return PhotoStore::ready() && (bool) Auth::user()?->is_admin;
-    }
-
-    public function getHeading(): string|Htmlable
-    {
-        return '';
-    }
-
-    public function mount(): void
-    {
-        foreach (['tmp', 'real'] as $slot) {
-            $b = PhotoStore::bucket($slot);
-            $this->form[$slot] = ['provider' => $b->provider ?: 'r2', 'account_id' => $b->account_id, 'endpoint' => $b->endpoint, 'region' => $b->region,
-                'bucket' => $b->bucket, 'access_key' => $b->access_key, 'secret' => ''];
-            $this->editing[$slot] = ! $b->exists;
-        }
-        $this->oldFolder = (string) (OldSystem::folder() ?? dirname(base_path()).'/wms.icargoxpress.net');
-        $task = OldSystem::task();
-        $this->step = ! $task ? 1 : ($task->status === 'done' ? 6 : ($task->done || $task->status === 'running' ? 5 : 2));
-    }
-
-    public function setTab(string $tab): void
-    {
-        $this->tab = in_array($tab, ['old', 'bucket', 'work'], true) ? $tab : 'old';
-    }
-
-    public function setStep(int $n): void
-    {
-        $this->step = max(1, min(8, $n));
-    }
-
-    // ── Bucket tab ──────────────────────────────────────────────
-
-    public function setProvider(string $slot, string $p): void
-    {
-        if (isset(PhotoStore::PROVIDERS[$p]) && isset($this->form[$slot])) {
-            $this->form[$slot]['provider'] = $p;
-            $this->editing[$slot] = true;
-        }
-    }
-
-    public function editBucket(string $slot): void
-    {
-        $this->editing[$slot] = true;
-    }
-
-    public function saveBucket(string $slot): void
-    {
-        $f = array_map(fn ($v) => is_string($v) ? trim($v) : $v, $this->form[$slot] ?? []);
-        $b = PhotoStore::bucket($slot);
-        if ($b->exists && $slot === 'tmp' && PhotoStore::target() === 'tmp' && $b->bucket && $f['bucket'] !== $b->bucket && PhotoStore::countIn('tmp')) {
-            $this->msg[$slot] = 'Photos are in this bucket: switch to Real and move them before you change it.';
-
-            return;
-        }
-        $b->fill(['provider' => $f['provider'] ?? 'r2', 'account_id' => $f['account_id'] ?: null, 'endpoint' => $f['endpoint'] ?: null, 'region' => $f['region'] ?: null,
-            'bucket' => $f['bucket'] ?: null, 'access_key' => $f['access_key'] ?: null]);
-        if (filled($f['secret'] ?? null)) {
-            $b->secret = $f['secret'];
-        }
-        $b->forceFill(['test_ok' => false, 'test_message' => null]);
-        $b->slot = $slot;
-        $b->save();
-        PhotoStore::forgetMemo();
-        $this->form[$slot]['secret'] = '';
-        $this->editing[$slot] = false;
-        $this->testBucket($slot);
-    }
-
-    public function testBucket(string $slot): void
-    {
-        [$ok, $msg] = PhotoStore::test($slot);
-        PhotoStore::forgetMemo();
-        $this->msg[$slot] = ($ok ? '✓ ' : '✗ ').$msg;
-    }
-
-    public function setTarget(string $place): void
-    {
-        if (! isset(PhotoStore::PLACES[$place]) || ! PhotoStore::usable($place)) {
-            Notification::make()->title('Put and test that bucket first')->warning()->send();
-
-            return;
-        }
-        PhotoStore::setTarget($place);
-        Notification::make()->title('New photos go to: '.PhotoStore::PLACES[$place])->success()->send();
-    }
-
-    public function turnOff(string $slot): void
-    {
-        if ($slot !== 'tmp') {
-            return;
-        }
-        $b = PhotoStore::bucket('tmp');
-        if (PhotoStore::target() === 'tmp') {
-            $this->msg['tmp'] = 'Not yet: new photos still go here. Choose Real bucket first.';
-        } elseif (($n = PhotoStore::countIn('tmp')) > 0) {
-            $this->msg['tmp'] = 'Not yet: '.number_format($n).' photos are still here. Move Temporary → Real first.';
-        } else {
-            $b->update(['is_off' => true]);
-            $this->msg['tmp'] = 'Turned off: nothing is saved or read here. The files stay in Cloudflare as a backup.';
-        }
-        PhotoStore::forgetMemo();
-    }
-
-    public function turnOn(string $slot): void
-    {
-        PhotoStore::bucket($slot)->update(['is_off' => false]);
-        $this->msg[$slot] = '';
-        PhotoStore::forgetMemo();
-    }
-
-    public function startMove(): void
-    {
-        $to = PhotoStore::target();
-        if ($to === 'server' || PhotoWork::active()) {
-            Notification::make()->title($to === 'server' ? 'Choose a bucket for new photos first' : 'Another move is running')->warning()->send();
-
-            return;
-        }
-        $t = PhotoWork::startMove($to, $this->tidyMove);
-        Cache::forget('photos.server.count');
-        Notification::make()->title(number_format($t->total).' photos will move to the '.strtolower(PhotoStore::PLACES[$to]))->success()->send();
-    }
-
-    public function startSwitch(): void
-    {
-        if (! PhotoStore::usable('real') || PhotoWork::active()) {
-            Notification::make()->title(PhotoWork::active() ? 'Another move is running' : 'Put and test the real bucket first')->warning()->send();
-
-            return;
-        }
-        PhotoWork::startSwitch($this->autoOff);
-        Notification::make()->title('Switching to the real bucket')->success()->send();
-    }
-
-    public function pause(int $id): void
-    {
-        PhotoTask::whereKey($id)->whereIn('status', ['running', 'checking'])->update(['status' => 'paused']);
-    }
-
-    public function resume(int $id): void
-    {
-        PhotoTask::whereKey($id)->where('status', 'paused')->update(['status' => 'running']);
-        PhotoWork::kick();
-    }
-
-    // ── Workers tab ─────────────────────────────────────────────
-
-    public function toggleRunHere(): void
-    {
-        $this->runHere = ! $this->runHere;
-    }
-
-    /** "Run here": the page itself goes on while it is open (wire:poll). */
-    public function tick(): void
-    {
-        if ($this->runHere) {
-            PhotoWork::work(8);
-            PhotoStore::forgetMemo();
-        }
-    }
-
-    // ── Copy from the old system ────────────────────────────────
-
-    public function saveFolder(): void
-    {
-        $dir = rtrim(trim($this->oldFolder), '/');
-        AppSetting::put('photos.old_folder', $dir ?: null);
-        Cache::forget('photos.old.columns');
-        $f = OldSystem::find();
-        Notification::make()->title($f['found'] ? 'Found the old system' : 'No folder there')->{$f['found'] ? 'success' : 'warning'}()->send();
-    }
-
-    public function scan(): void
-    {
-        $task = OldSystem::scan();
-        $task->forceFill(['options' => array_merge($task->options ?? [], ['folders' => OldSystem::folders(OldSystem::find())])])->save();
-        Cache::forget('photos.old.columns');
-        $this->step = 2;
-        Notification::make()->title('Scanned: '.number_format($task->items()->count()).' photo paths')->success()->send();
-    }
-
-    public function setOpt(string $key): void
-    {
-        $task = OldSystem::task();
-        if ($task && in_array($key, ['small', 'keep', 'tidy'], true)) {
-            $task->update(['options' => array_merge($task->options ?? [], [$key => ! $task->opt($key, $key !== 'keep')])]);
-        }
-    }
-
-    public function tryFifty(): void
-    {
-        $task = OldSystem::task();
-        if (! $task) {
-            return;
-        }
-        if (! PhotoStore::usable(PhotoStore::target() !== 'server' ? PhotoStore::target() : 'tmp')) {
-            Notification::make()->title('Put and test the bucket first (Bucket tab)')->warning()->send();
-
-            return;
-        }
-        $n = OldSystem::tryFifty($task)->count();
-        Notification::make()->title($n.' photos tried')->success()->send();
-    }
-
-    public function copyNew(): void
-    {
-        $task = OldSystem::task();
-        if (! $task) {
-            return;
-        }
-        $task->update(['status' => 'running', 'started_at' => $task->started_at ?? now(), 'options' => array_merge($task->options ?? [], ['again' => false])]);
-        $task->items()->where('status', 'failed')->update(['status' => 'pending']);
-        PhotoWork::kick();
-        $this->sureAgain = false;
-    }
-
-    public function checkBucket(): void
-    {
-        $task = OldSystem::task();
-        if ($task) {
-            $task->items()->where('status', 'done')->update(['checked' => false]);
-            $task->update(['status' => 'checking']);
-            PhotoWork::kick();
-        }
-    }
-
-    public function copyAgain(): void
-    {
-        if (! $this->sureAgain) {
-            $this->sureAgain = true;
-
-            return;
-        }
-        $task = OldSystem::task();
-        if ($task) {
-            $task->items()->whereIn('status', ['done', 'skipped', 'failed'])->update(['status' => 'pending', 'checked' => false]);
-            $task->update(['status' => 'running', 'options' => array_merge($task->options ?? [], ['again' => true])]);
-            PhotoWork::kick();
-        }
-        $this->sureAgain = false;
-    }
-
-    public function pick(int $id): void
-    {
-        $item = PhotoTaskItem::find($id);
-        $item && OldSystem::pick($item);
-    }
-
-    public function markBackup(): void
-    {
-        AppSetting::put('photos.old_backup', AppSetting::get('photos.old_backup') ? null : now()->toDateString());
-    }
-
-    public function csv(string $kind): StreamedResponse
-    {
-        $task = OldSystem::task();
-        $find = OldSystem::find();
-        if ($kind === 'list') {
-            AppSetting::put('photos.old_csv', now()->toDateString());
-        }
-
-        return response()->streamDownload(function () use ($task, $kind, $find) {
-            $out = fopen('php://output', 'w');
-            fputcsv($out, $kind === 'list' ? ['old link', 'new path in the bucket', 'status', 'size before', 'size after', 'found in', 'database'] : ['path', 'found in', 'status', 'file', 'database', 'note']);
-            $task?->items()->orderBy('id')->chunk(1000, function ($items) use ($out, $kind, $find) {
-                foreach ($items as $i) {
-                    fputcsv($out, $kind === 'list'
-                        ? [OldSystem::oldLink($i, $find), $i->path, $i->status, $i->size_before, $i->size_after, $i->found, $i->ref]
-                        : [$i->path, $i->found, $i->status, $i->source, $i->ref, $i->note]);
-                }
-            });
-            fclose($out);
-        }, ($kind === 'list' ? 'old-to-new-links' : 'photo-scan-report').'-'.now()->format('Ymd-Hi').'.csv', ['Content-Type' => 'text/csv']);
-    }
-
-    protected function getViewData(): array
-    {
-        $target = PhotoStore::target();
-        $tmp = PhotoStore::bucket('tmp');
-        $real = PhotoStore::bucket('real');
-        $task = OldSystem::task();
-        $find = $this->tab === 'old' ? OldSystem::find() : ['found' => (bool) OldSystem::folder()];
-        $active = PhotoWork::active();
-        $serverCount = $this->tab === 'bucket' ? Cache::remember('photos.server.count', 600, function () {
-            $n = 0;
-            foreach (['public', 'box'] as $d) {
-                foreach (rescue(fn () => $d === 'box' ? PhotoStore::server($d)->allFiles('box-photos') : PhotoStore::server($d)->allFiles(), [], false) as $p) {
-                    $n += PhotoStore::skip($d, $p) || str_starts_with(basename($p), '.') ? 0 : 1;
-                }
-            }
-
-            return $n;
-        }) : 0;
-
-        $items = fn () => $task ? $task->items() : PhotoTaskItem::whereRaw('1 = 0');
-        $groups = $task ? $task->items()->selectRaw('found, count(*) as n')->groupBy('found')->pluck('n', 'found') : collect();
-
-        return [
-            'target' => $target, 'tmp' => $tmp, 'real' => $real, 'stats' => PhotoStore::stats(), 'driver' => PhotoStore::driverReady(),
-            'usable' => ['server' => true, 'tmp' => PhotoStore::usable('tmp'), 'real' => PhotoStore::usable('real')],
-            'inTmp' => PhotoStore::countIn('tmp'), 'serverCount' => $serverCount,
-            'moves' => PhotoTask::whereIn('kind', ['move', 'switch'])->latest('id')->limit(3)->get(),
-            'active' => $active, 'switch' => PhotoTask::where('kind', 'switch')->latest('id')->first(),
-            'worker' => PhotoStore::workerOn(), 'scheduler' => PhotoStore::schedulerOn(), 'queueSeen' => PhotoStore::queueSeen(), 'scheduleSeen' => PhotoStore::scheduleSeen(),
-            'find' => $find, 'task' => $task,
-            'columns' => $this->tab === 'old' && $this->step === 1 && ($find['found'] ?? false) ? Cache::remember('photos.old.columns', 600, fn () => OldSystem::columns()->all()) : [],
-            'groups' => $groups,
-            'rows' => $this->tab === 'old' && $this->step === 3 ? $items()->where('found', $this->rt)
-                ->when($this->search !== '', fn ($q) => $q->where(fn ($w) => $w->where('path', 'like', '%'.$this->search.'%')->orWhere('ref', 'like', '%'.$this->search.'%')))
-                ->orderBy('id')->limit(40)->get() : collect(),
-            'tried' => $this->step === 4 ? $items()->where('tried', true)->whereIn('status', ['done', 'skipped'])->orderByDesc('size_before')->limit(6)->get() : collect(),
-            'triedSum' => $task ? $task->items()->where('tried', true)->where('status', 'done')->selectRaw('count(*) n, sum(size_before) b, sum(size_after) a')->first() : null,
-            'last' => $this->step === 5 && $task ? $task->items()->whereIn('status', ['done', 'skipped', 'failed'])->latest('updated_at')->limit(6)->get() : collect(),
-            'checkedN' => $task ? $task->items()->where('checked', true)->count() : 0,
-            'missingN' => (int) ($groups['missing'] ?? 0),
-            'maxKb' => \App\Support\Photos\Storage\PhotoFolders::maxKb(), 'folderMap' => \App\Support\Photos\Storage\PhotoFolders::MAP,
-            'backup' => AppSetting::get('photos.old_backup'), 'csvAt' => AppSetting::get('photos.old_csv'),
-            'mb' => fn ($b) => $b >= 1073741824 ? number_format($b / 1073741824, 1).' GB' : ($b >= 1048576 ? number_format($b / 1048576, 1).' MB' : number_format($b / 1024).' KB'),
-            'openUrl' => fn (PhotoTaskItem $i) => route('photo-storage.open', $i->id),
-            'oldUrl' => fn (PhotoTaskItem $i) => OldSystem::oldLink($i, $find),
-        ];
-    }
-}
-DISPATCH_FILE_END_9
-
-# ---------------------------------------------------------------- app/Filament/Resources/CompanyResource.php
-mkdir -p 'app/Filament/Resources'
-cat > 'app/Filament/Resources/CompanyResource.php' <<'DISPATCH_FILE_END_10'
-<?php
-
-namespace App\Filament\Resources;
-
-use UnitEnum;
-use BackedEnum;
-use Filament\Forms;
-use Filament\Tables;
-use App\Models\Company;
-use Filament\Tables\Table;
-use Filament\Schemas\Schema;
-use Filament\Actions\EditAction;
-use Filament\Resources\Resource;
-use Filament\Actions\BulkActionGroup;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\Toggle;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Schemas\Components\Group;
-use Filament\Tables\Columns\IconColumn;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Forms\Components\TextInput;
-use Filament\Schemas\Components\Section;
-use Filament\Forms\Components\FileUpload;
-use Illuminate\Database\Eloquent\Builder;
-use App\Filament\Resources\CompanyResource\Pages;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
-use App\Filament\Resources\CompanyResource\RelationManagers;
-use App\Filament\Resources\CompanyResource\Pages\EditCompany;
-use App\Filament\Resources\CompanyResource\Pages\CreateCompany;
-use App\Filament\Resources\CompanyResource\Pages\ListCompanies;
-use App\Models\Logistichub;
-
-class CompanyResource extends Resource
-{
-    protected static ?string $model = Company::class;
-    protected static ?string $navigationLabel = 'Company/Agent';
-    public static ?string $label = 'Company/Agent';
-    protected static string | UnitEnum | null $navigationGroup = 'Settings';
-  //  protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-building-office-2';
-
-    public static function form(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                Group::make()
-                ->schema([
-                    Section::make('Company Information')
-                    ->schema([
-                      
-                        TextInput::make('company_name')
-                    ->label('Name')
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('company_email')
-                    ->label('Email')
-                    ->email()
-                    ->unique(ignoreRecord: true)
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('company_mobileno')
-                    ->label('Mobile Phone')
-                    ->unique(ignoreRecord: true)
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('company_phone')
-                    ->label('Office Phone')
-                    ->unique(ignoreRecord: true)
-                    ->maxLength(255),
-                TextInput::make('company_address')
-                    ->label('Address')
-                    ->required()
-                    ->maxLength(255),
-                    TextInput::make('company_owner')
-                    ->label('Owner Name')
-                    ->required()
-                    ->maxLength(255),
-
-                Select::make('logistichub_id')
-    ->label('Hub')
-    ->options(Logistichub::query()
-    ->pluck('hub_name', 'id')),
-    
-                    ])->columns(2)
-                ])->columnSpan(['lg' => 2]),
-                Group::make()
-                ->schema([
-                Section::make('Other Information')
-                ->schema([
-                    FileUpload::make('company_picture')
-                    ->image()
-                    ->avatar()
-                    ->imageEditor()
-                    ->circleCropper()
-                    // ->panelLayout('grid')
-                    ->uploadingMessage('Uploading attachment...')
-                    ->openable()
-                    ->maxSize(1024)
-                    ->disk('public')
-                    ->directory('papers/companies')
-                    ->visibility('private')
-                    ->removeUploadedFileButtonPosition('right')
-                    ->label('Logo')
-                    ->columnSpanFull(),
-                FileUpload::make('company_document')
-                    ->label('Document')
-                    ->multiple()
-                    // ->panelLayout('grid')
-                    ->uploadingMessage('Uploading attachment...')
-                    ->openable()
-                    ->disk('public')
-                    ->directory('papers/companies')
-                    ->visibility('private')
-                    ->removeUploadedFileButtonPosition('right')
-                    ->columnSpanFull(),
-                Toggle::make('is_active')
-                    ->label('Active')
-                    ->required(),
-                ])
-                
-                ])->columnSpan(['lg' => 1])
-                
-                    
-            ])->columns(3);
-    }
-
-    public static function table(Table $table): Table
-    {
-        return $table
-            ->columns([
-                TextColumn::make('company_name')
-                    ->label('Name')
-                    ->searchable(),
-                TextColumn::make('company_email')
-                    ->label('Email')
-                    ->searchable(),
-                TextColumn::make('company_mobileno')
-                    ->label('Mobile No.')
-                    ->searchable(),
-                TextColumn::make('company_phone')
-                    ->label('Office No.')
-                    ->searchable(),
-                TextColumn::make('company_address')
-                    ->label('Address')
-                    ->searchable(),
-                TextColumn::make('company_owner')
-                    ->label('Owner')
-                    ->searchable(),
-                IconColumn::make('is_active')
-                    ->label('Active')
-                    ->boolean(),
-                TextColumn::make('user.full_name')
-                    ->label('Created By')
-                    ->sortable(),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-            ])
-            ->filters([
-                //
-            ])
-            ->recordActions([
-                EditAction::make(),
-            ])
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    DeleteBulkAction::make(),
-                ]),
-            ]);
-    }
-
-    public static function getRelations(): array
-    {
-        return [
-            //
-        ];
-    }
-
-    public static function getPages(): array
-    {
-        return [
-            'index' => ListCompanies::route('/'),
-            'create' => CreateCompany::route('/create'),
-            'edit' => EditCompany::route('/{record}/edit'),
-        ];
-    }
-}
-DISPATCH_FILE_END_10
-
-# ---------------------------------------------------------------- app/Filament/Resources/ConsolidatorResource.php
-mkdir -p 'app/Filament/Resources'
-cat > 'app/Filament/Resources/ConsolidatorResource.php' <<'DISPATCH_FILE_END_11'
-<?php
-
-namespace App\Filament\Resources;
-
-use Filament\Schemas\Schema;
-use Filament\Schemas\Components\Group;
-use Filament\Schemas\Components\Section;
-use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Actions\DeleteAction;
-use Filament\Actions\EditAction;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
-use App\Filament\Resources\ConsolidatorResource\Pages\ListConsolidators;
-use App\Filament\Resources\ConsolidatorResource\Pages\CreateConsolidator;
-use App\Filament\Resources\ConsolidatorResource\Pages\EditConsolidator;
-use Filament\Forms;
-use Filament\Tables;
-use Filament\Tables\Table;
-use App\Models\Consolidator;
-use Filament\Resources\Resource;
-use Illuminate\Support\Facades\Auth;
-use Filament\Forms\Components\Hidden;
-use Filament\Forms\Components\FileUpload;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
-use App\Filament\Resources\ConsolidatorResource\Pages;
-use App\Filament\Resources\ConsolidatorResource\RelationManagers;
-use UnitEnum;
-class ConsolidatorResource extends Resource
-{
-    protected static ?string $model = Consolidator::class;
-protected static string | UnitEnum | null $navigationGroup = 'Settings';
-  //  protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-squares-plus';
-
-    public static function form(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                Group::make()
-                ->schema([
-                    Section::make('Consolidator Information')
-                        ->columnSpanFull()
-                ->schema([
-                    TextInput::make('company_name')
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('code')
-                    ->maxLength(255),
-                TextInput::make('address')
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('mobile_no')
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('office_no')
-                    ->maxLength(255),
-                    
-                TextInput::make('website')
-                    ->maxLength(255),
-                 TextInput::make('email')
-                    ->maxLength(255)
-                ]),
-            ]),
-            Group::make()
-            ->schema([
-                Section::make('Other Information')
-                ->schema([
-                    FileUpload::make('logo')
-                    ->image()
-                    ->imageEditor()
-                    // ->panelLayout('grid')
-                    ->uploadingMessage('Uploading attachment...')
-                    ->openable()
-                    ->maxSize(1024)
-                    ->disk('public')
-                    ->directory('consolidatorlogo')
-                    ->visibility('private')
-                    ->removeUploadedFileButtonPosition('right')
-                    ->label('Logo')
-                    ->columnSpanFull(),
-                    FileUpload::make('company_document')
-                    ->label('Document')
-                    ->multiple()
-                    ->panelLayout('grid')
-                    ->uploadingMessage('Uploading attachment...')
-                    ->openable()
-                    ->disk('public')
-                    ->directory('papers/consolidators')
-                    ->visibility('private')
-                    ->removeUploadedFileButtonPosition('right'),
-                    Toggle::make('is_active')
-                    ->label('Active')
-                    ->required()
-                    ->default(true),
-                    Toggle::make('is_download')
-                    ->label('Download')
-                    ->required()
-                    ->default(true),
-                    Toggle::make('is_upload')
-                    ->label('Upload')
-                    ->required()
-                    ->default(true),
-                 
-                ])
-                ])->columns(3)
-                
-                ]);
-    }
-
-    public static function table(Table $table): Table
-    {
-        return $table
-            ->defaultSort('created_at','desc')
-            ->columns([
-                TextColumn::make('company_name')
-                    ->searchable(),
-                TextColumn::make('code')
-                    ->searchable(),
-                TextColumn::make('address')
-                    ->searchable(),
-                TextColumn::make('mobile_no')
-                    ->searchable(),
-                TextColumn::make('office_no')
-                    ->searchable(),
-                TextColumn::make('user.full_name')
-                ->label('Created By'),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-            ])
-            ->filters([
-                //
-            ])
-            ->recordActions([
-                DeleteAction::make(),
-                EditAction::make(),
-            ])
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    DeleteBulkAction::make(),
-                ]),
-            ]);
-    }
-
-    public static function getRelations(): array
-    {
-        return [
-            //
-        ];
-    }
-
-    public static function getPages(): array
-    {
-        return [
-            'index' => ListConsolidators::route('/'),
-            'create' => CreateConsolidator::route('/create'),
-            'edit' => EditConsolidator::route('/{record}/edit'),
-        ];
-    }
-}
-DISPATCH_FILE_END_11
-
-# ---------------------------------------------------------------- app/Filament/Resources/ContainerResource.php
-mkdir -p 'app/Filament/Resources'
-cat > 'app/Filament/Resources/ContainerResource.php' <<'DISPATCH_FILE_END_12'
-<?php
-
-namespace App\Filament\Resources;
-
-use Filament\Forms;
-use Filament\Tables;
-use App\Models\Container;
-use Filament\Tables\Table;
-use Filament\Schemas\Schema;
-use Filament\Actions\EditAction;
-use Filament\Resources\Resource;
-use Filament\Tables\Filters\Filter;
-use Filament\Actions\BulkActionGroup;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\Toggle;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Forms\Components\TextInput;
-use Filament\Schemas\Components\Section;
-use Filament\Forms\Components\DatePicker;
-use Filament\Forms\Components\FileUpload;
-use Filament\Tables\Columns\ToggleColumn;
-use Filament\Tables\Filters\SelectFilter;
-use Illuminate\Database\Eloquent\Builder;
-use Filament\Forms\Components\ToggleButtons;
-use Filament\Forms\Components\MarkdownEditor;
-use Symfony\Component\HttpFoundation\File\File;
-use App\Filament\Resources\ContainerResource\Pages;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
-use App\Filament\Resources\ContainerResource\RelationManagers;
-use App\Filament\Resources\ContainerResource\Pages\EditContainer;
-use App\Filament\Resources\ContainerResource\Pages\ListContainers;
-use App\Filament\Resources\ContainerResource\Pages\CreateContainer;
-use App\Filament\Resources\ContainerResource\RelationManagers\InvoicesRelationManager;
-use App\Filament\Resources\ContainerResource\RelationManagers\ContainerRelationManager;
-use App\Filament\Resources\ContainerResource\RelationManagers\ContainerinvoicesRelationManager;
-use Filament\Actions\ActionGroup;
-
-class ContainerResource extends Resource
-{
-    protected static ?string $model = Container::class;
-
-    protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-inbox-stack';
-
-    public static function form(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                Section::make('Container Information')
-                ->columnSpanFull()
-                ->schema([
-                    Select::make('consolidator_id')
-                    ->relationship('consolidator', 'company_name')
-                    ->label('Consolidator')
-                    ->required(),
-                TextInput::make('booking_no')
-                    ->label('Booking Number')
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('container_no')
-                    ->label('Container Number')
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('batch_no')
-                    ->label('Batch Number')
-                    ->required(),
-                    TextInput::make('batch_year')
-                    ->label('Batch Year')
-                    ->required()
-                   ->default(now()->year),
-                TextInput::make('seal_number')
-                    ->label('Seal Number')
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('size')
-                    ->label('Container Size')
-                    ->required()
-                    ->maxLength(255),
-                TextInput::make('type')
-                    ->label('Container Type')
-                    ->required()
-                    ->maxLength(255),
-
-                TextInput::make('total_boxes')
-                    ->label('Total Boxes')
-                    ->required()
-                    ->numeric(),
-                    FileUpload::make('container_picture')
-                    ->label('Container picture')
-                    ->multiple()
-                    ->panelLayout('grid')
-                    ->uploadingMessage('Uploading attachment...')
-                    ->openable()
-                    ->disk('public')
-                    ->directory('papers/containers')
-                    ->visibility('private')
-                    ->removeUploadedFileButtonPosition('right')
-                    ->columnSpanFull(),
-                Select::make('warehouse_id')
-                    ->searchable()
-                    ->preload()
-                    ->label('Warehouse')
-                    ->relationship('warehouse', 'name')
-                    ->required(),
-                Toggle::make('is_unloaded')
-                    ->label('Is Unloaded'),
-                MarkdownEditor::make('note')->columnSpanFull()
-                    ->maxLength(255),
-                ])->columns(3),
-
-            ]);
-    }
-
-    public static function table(Table $table): Table
-    {
-        return $table
-            ->columns([
-                TextColumn::make('consolidator.company_name')
-                    ->sortable(),
-                TextColumn::make('container_no')
-                    ->searchable(),
-                TextColumn::make('warehouse.name')
-                    ->sortable()
-                    ->searchable(),
-                TextColumn::make('booking_no')
-                     ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable(),
-                 TextColumn::make('batch_no')
-                    ->searchable(),
-                TextColumn::make('batch_year')
-                     ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable(),
-                TextColumn::make('seal_number')
-                     ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable(),
-                TextColumn::make('size')
-                     ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable(),
-                TextColumn::make('type')
-                     ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable(),
-                TextColumn::make('total_boxes')
-                    ->numeric()
-                    ->sortable(),
-                  TextColumn::make('Total Imported')
-                    ->badge()
-                    ->color('info')
-                    ->numeric()
-                    ->getStateUsing(function ($record) {
-                        return $record->invoices()->count();
-                    }),
-                  TextColumn::make('Total Unloaded')
-                    ->badge()
-                    ->color('success')
-                    ->numeric()
-                    ->getStateUsing(function ($record) {
-                        return $record->invoices()->where('is_verified', 1)->count();
-                    }),
-                TextColumn::make('note')
-                     ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable(),
-                ToggleColumn::make('is_unloaded')
-                    ->label('Is Unloaded')
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                 TextColumn::make('user.full_name')
-                     ->toggleable(isToggledHiddenByDefault: true)
-                    ->sortable(),
-                TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                 ToggleColumn::make('is_active')
-                    ->label('Active')
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-            ])
-            ->filters([
-
-                SelectFilter::make('is_unloaded')
-                    ->label('Is Unloaded')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ])->default(0),
-                SelectFilter::make('consolidator_id')
-                    ->label('Consolidator')
-                    ->searchable()
-                    ->preload()
-                    ->multiple()
-                    ->relationship('consolidator', 'company_name'),
-            ])->deferFilters(false)
-            ->persistFiltersInSession()
-            ->recordActions([
-               ActionGroup::make([
-                EditAction::make(),
-               ])
-            ])
-            ->toolbarActions([
-                BulkActionGroup::make([
-              //      DeleteBulkAction::make(),
-                ]),
-            ]);
-    }
-
-    public static function getRelations(): array
-    {
-        return [
-            InvoicesRelationManager::class,
-        //    ContainerinvoicesRelationManager::class,
-
-        ];
-    }
-
-    public static function getPages(): array
-    {
-        return [
-            'index' => ListContainers::route('/'),
-            'create' => CreateContainer::route('/create'),
-            'edit' => EditContainer::route('/{record}/edit'),
-        ];
-    }
-}
-DISPATCH_FILE_END_12
-
-# ---------------------------------------------------------------- app/Filament/Resources/Deliveryinvs/Tables/DeliveryinvsTable.php
-mkdir -p 'app/Filament/Resources/Deliveryinvs/Tables'
-cat > 'app/Filament/Resources/Deliveryinvs/Tables/DeliveryinvsTable.php' <<'DISPATCH_FILE_END_13'
-<?php
-
-namespace App\Filament\Resources\Deliveryinvs\Tables;
-
-use App\Filament\Exports\DeliveryinvExporter;
-use App\Filament\Resources\Deliverylogs\DeliverylogResource;
-use App\Models\Consolidator;
-use App\Models\Deliveryinv;
-use App\Models\Invoice;
-use App\Models\Routearea;
-use App\Models\Tripinvoice;
-use Filament\Actions\Action;
-use Filament\Actions\ActionGroup;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Actions\ExportAction;
-use Filament\Actions\Exports\Enums\ExportFormat;
-use Filament\Actions\Exports\Models\Export;
-use Filament\Actions\ViewAction;
-use Filament\Forms\Components\FileUpload;
-use Filament\Notifications\Notification;
-use Filament\Support\Icons\Heroicon;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Filters\SelectFilter;
-use Filament\Tables\Table;
-use Illuminate\Contracts\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Http;
-
-class DeliveryinvsTable
-{
-    public static function configure(Table $table): Table
-    {
-        return $table
-            ->query(Deliveryinv::Unloadedinv())
-            ->columns([
-                TextColumn::make('deliverylog.trip_number')
-                    ->searchable()
-                    ->label('Trip Number')
-                    ->color('primary')
-                    ->url(fn (Model $record) => DeliverylogResource::getUrl('edit', ['record' => $record->deliverylog_id])),
-                TextColumn::make('company')
-                    ->label('Company')
-                    ->getStateUsing(function (Model $record) {
-                        // $companyname = Consolidator::where('code', $records->location_code)->first();
-                        $locationcode = Invoice::where('id', $record->invoice_id)->value('location_code');
-
-                        return $companyname = Consolidator::nameForCode($locationcode);
-                    }),
-                TextColumn::make('invoice')
-                    ->searchable()
-                    ->label('Invoice'),
-                TextColumn::make('invdata.container.batch_no')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable()
-                    ->label('Batch No'),
-                TextColumn::make('invdata.container.batch_year')
-                    ->searchable()
-                    ->label('Batch Year'),
-                TextColumn::make('invdata.container.container_no')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable()
-                    ->label('Container No'),
-                TextColumn::make('invdata.sender_name')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Sender'),
-                TextColumn::make('invdata.receiver_name')
-                    ->label('Receiver'),
-                TextColumn::make('invdata.receiver_address')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Address'),
-                TextColumn::make('is_delivered')
-                    ->label('Status')
-                    ->formatStateUsing(function (Model $record) {
-                        return $record->is_delivered ? 'Delivered' : 'In Transit';
-                    })
-                    ->color(function ($record) {
-                        return $record->is_delivered ? 'success' : 'danger';
-                    }),
-
-                TextColumn::make('invdata.receiver_province')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Province'),
-                TextColumn::make('invdata.receiver_city')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('City'),
-                TextColumn::make('invdata.receiver_barangay')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Barangay'),
-                TextColumn::make('invdata.boxtype')
-                    ->label('Box Type'),
-                TextColumn::make('invdata.routearea.description')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Route Area'),
-            ])
-            ->filters([
-                SelectFilter::make('is_delivered')
-                    ->label('Is Delivered')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ])->default(0),
-                // SelectFilter::make('routearea_id')
-                //     ->label('Route')
-                //     ->relationship('invoice.routearea', 'description'),
-                SelectFilter::make('deliverylog_id')
-                    ->label('Trip Number')
-                    ->searchable()
-                    ->preload()
-                    ->relationship('deliverylog', 'trip_number', fn (Builder $query) => $query->where('logistichub_id', Auth::user()->logistichub_id)),
-
-                SelectFilter::make('container_id')
-                    ->label('Batch / Container')
-                    ->relationship(
-                        name: 'invoice.container',
-                        titleAttribute: 'container_no'
-
-                    )
-                    ->searchable(['container_no', 'batch_no', 'batch_year'])
-                    ->preload()
-                    ->getOptionLabelFromRecordUsing(function (Model $record) {
-                        return "{$record->container_no} {$record->batch_no} {$record->batch_year}";
-                    }),
-
-                SelectFilter::make('province')
-                    ->label('Province')
-                    ->multiple()
-                    ->searchable()
-                    ->options(
-                        Invoice::query()
-                            ->select('receiver_province')
-                            ->distinct()
-                            ->orderBy('receiver_province')
-                            ->pluck('receiver_province', 'receiver_province')
-                            ->toArray()
-                    )
-                    ->query(function (Builder $query, array $data) {
-                        if (! empty($data['values'])) {
-                            $query->whereHas('invoice', function (Builder $q) use ($data) {
-                                $q->whereIn('receiver_province', $data['values']);
-                            });
-                        }
-                    }),
-            ])->deferFilters(false)
-            ->headerActions([
-                ExportAction::make()
-                    ->label('Export')
-                    ->icon(Heroicon::ArrowUturnDown)
-                    ->Color('primary')
-                    ->exporter(DeliveryinvExporter::class)
-                    ->formats([
-                        ExportFormat::Xlsx,
-                    ])
-                    ->fileName(fn (Export $export): string => 'Delivery Invoices Export - '.now()->format('Y-m-d_H-i-s').'.xlsx'),
-            ])
-            ->recordActions([
-                ActionGroup::make([
-
-                    Action::make('MarkDelivered')
-                        ->label('Mark Delivered')
-                        ->icon('heroicon-o-check-circle')
-                        ->color('success')
-                        ->requiresConfirmation()
-                        ->visible(fn ($record) => $record->status !== 'delivered')
-                        ->action(function ($record) {
-                            $locationCode = Invoice::where('id', $record->invoice_id)->value('location_code');
-                            $server = config("services.locations.{$locationCode}");
-                            if (! $server || blank($server['url']) || blank($server['token'])) {
-                                Notification::make()
-                                    ->title('No API configured for location code: '.($locationCode ?: 'empty'))
-                                    ->danger()
-                                    ->send();
-
-                                return;
-                            }
-
-                            $response = Http::withToken($server['token'])
-                                ->acceptJson()
-                                ->timeout(15)
-                                ->post($server['url'].'/status', [
-                                    'invoice' => $record->invoice,
-                                    'status' => 'Delivered',
-                                ]);
-
-                            if ($response->successful()) {
-
-                                Notification::make()
-                                    ->title('Invoice marked as delivered')
-                                    ->success()
-                                    ->send();
-                            } elseif ($response->status() === 404) {
-                                Notification::make()
-                                    ->title('Invoice not found')
-                                    ->danger()
-                                    ->send();
-                            } else {
-                                Notification::make()
-                                    ->title('API error')
-                                    ->body($response->json('message') ?? $response->body())
-                                    ->danger()
-                                    ->send();
-                            }
-                        }),
-                    // ViewAction::make()
-                    //     ->slideOver()
-                    //     ->modal()
-                    //     ->label('View')
-                    //     ->color('primary')
-                    //     ->icon(Heroicon::Eye)
-                    //     ->hidden(fn($record) => empty($record->delivery_picture)),
-
-                    Action::make('Edit')
-                        ->label('Edit Picture')
-                        ->color('info')
-                        ->icon(Heroicon::PencilSquare)
-                        ->hidden(fn ($record) => empty($record->delivery_picture))
-                        ->fillForm(fn (Model $record): array => [
-
-                            'delivery_picture' => $record->delivery_picture,
-                        ])
-                        ->schema([
-                            FileUpload::make('delivery_picture')
-                                ->label('Delivery Picture')
-                                ->multiple()
-                                ->panelLayout('grid')
-                                ->uploadingMessage('Uploading attachment...')
-                                ->image()
-                                ->openable()
-                                ->disk('public')
-                                ->directory(function (Model $record) {
-                                    return \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $record->invoice);
-                                })
-                                ->downloadable()
-                                ->visibility('private')
-                                ->required()
-                                ->removeUploadedFileButtonPosition('right'),
-                        ])
-                        ->action(function (array $data, Model $record): void {
-                            if (! auth()->user()->hasRole('cscanada')) {
-                                Tripinvoice::where('id', $record->id)
-                                    ->update([
-                                        'delivery_picture' => $data['delivery_picture'],
-                                    ]);
-                                Notification::make()
-                                    ->title('Delivery Picture Updated')
-                                    ->success()
-                                    ->send();
-                            } else {
-                                Notification::make()
-                                    ->title('Edit Denied')
-                                    ->warning()
-                                    ->send();
-                            }
-
-                        }),
-                    Action::make('Picture')
-                        ->label('Add Picture')
-                        ->color('danger')
-                        ->icon(Heroicon::Camera)
-                        ->hidden(fn ($record) => ! empty($record->delivery_picture))
-                        ->schema([
-                            FileUpload::make('delivery_picture')
-                                ->label('Delivery Picture')
-                                ->multiple()
-                                ->panelLayout('grid')
-                                ->uploadingMessage('Uploading ...')
-                                ->acceptedFileTypes([
-                                    'image/*',
-                                    'application/pdf',
-                                ])
-                                ->openable()
-                                ->disk('public')
-                                ->directory(function (Model $record) {
-                                    return \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $record->invoice);
-                                })
-                                ->visibility('private')
-                                ->required()
-                                ->removeUploadedFileButtonPosition('right'),
-                            // ->minFiles(6),
-                        ])
-                        ->action(function (array $data, Model $record): void {
-                            if (! auth()->user()->hasRole('cscanada')) {
-                                Tripinvoice::where('id', $record->id)
-                                    ->update([
-                                        'delivery_picture' => $data['delivery_picture'],
-                                        'is_delivered' => true,
-                                    ]);
-                                Notification::make()
-                                    ->title('Picture Added and Status Updated to Delivered')
-                                    ->success()
-                                    ->send();
-                            } else {
-                                Notification::make()
-                                    ->title('Add Picture Denied')
-                                    ->warning()
-                                    ->send();
-                            }
-
-                        }),
-                    Action::make('Delete Picture')
-                        ->requiresConfirmation()
-                        ->label('Delete Picture')
-                        ->color('danger')
-                        ->icon(Heroicon::Trash)
-                        ->hidden(fn ($record) => empty($record->delivery_picture))
-                        ->action(function (array $data, Model $record): void {
-                            if (! auth()->user()->hasRole('cscanada')) {
-                                Tripinvoice::where('id', $record->id)
-                                    ->update([
-                                        'delivery_picture' => null,
-                                        'is_delivered' => false,
-                                    ]);
-                                Notification::make()
-                                    ->title('Picture Deleted ')
-                                    ->success()
-                                    ->send();
-                            } else {
-                                Notification::make()
-                                    ->title('Delete Denied')
-                                    ->warning()
-                                    ->send();
-                            }
-
-                        }),
-                ]),
-            ])
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    //    DeleteBulkAction::make(),
-                ]),
-            ]);
-    }
-}
-DISPATCH_FILE_END_13
-
-# ---------------------------------------------------------------- app/Filament/Resources/Trucks/Schemas/TruckForm.php
-mkdir -p 'app/Filament/Resources/Trucks/Schemas'
-cat > 'app/Filament/Resources/Trucks/Schemas/TruckForm.php' <<'DISPATCH_FILE_END_14'
-<?php
-
-namespace App\Filament\Resources\Trucks\Schemas;
-
-use App\Models\Logistichub;
-use Filament\Forms\Components\DatePicker;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\MarkdownEditor;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
-use Filament\Schemas\Components\Group;
-use Filament\Schemas\Components\Section;
-use Filament\Schemas\Schema;
-
-class TruckForm
-{
-    public static function configure(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                Group::make()
-                    ->schema([
-                        \App\Filament\Shared\Trucks\OwnershipSection::make(),
-                        Section::make('vehicles Information')
-                            ->schema([
-                                TextInput::make('category')
-                                    ->hint('Ex. Ten Wheeler, Truck, Mini Truck or Van')
-                                    ->hintColor('warning')
-                                    ->hintIcon('heroicon-m-truck')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('description')
-                                    ->hint('Ex Brand, Color, Model')
-                                    ->hintColor('warning')
-                                    ->hintIcon('heroicon-m-truck')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('registration_no')
-                                    ->label('Registration Number')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('plate_no')
-                                    ->label('Plate Number')
-                                    ->unique()
-                                    ->required()
-                                    ->maxLength(255),
-                                // Select::make('logistichub_id')
-                                // ->label('Logistic Hub/Location')
-                                // ->options(Logistichub::query()->pluck('hub_name', 'id'))
-                                // ->required(),
-                                TextInput::make('capacity')
-                                    ->label(fn () => \App\Support\BoxSizes::on() ? 'Capacity (space, in normal boxes)' : 'Capacity (boxes)')
-                                    ->numeric()
-                                    ->minValue(1)
-                                    ->placeholder('60')
-                                    ->helperText(fn () => \App\Support\BoxSizes::on()
-                                        ? 'How many of your normal box fit. Bigger boxes take more space: Settings → Box sizes. Empty means 50.'
-                                        : 'About how many boxes fit. Used to plan trips; empty means 50.'),
-                                MarkdownEditor::make('Note')
-                                    ->columnSpanFull(),
-                            ]),
-
-                    ]),
-                Group::make()
-                    ->schema([
-                        Section::make('Other Information')
-                            ->schema([
-                                FileUpload::make('truck_picture')
-                                    ->image()
-                                    ->avatar()
-                                    ->imageEditor()
-                                    ->circleCropper()
-                                    ->uploadingMessage('Uploading attachment...')
-                                    ->openable()
-                                    ->maxSize(1024)
-                                    ->disk('public')
-                                    ->directory('trucks')
-                                    ->visibility('private')
-                                    ->removeUploadedFileButtonPosition('right')
-                                    ->label('Vehicles Picture')
-                                    ->columnSpanFull(),
-                                DatePicker::make('date_registered')
-                                    ->native(false)
-                                    ->closeOnDateSelection(true)
-                                    ->label('Date Register')
-                                    ->required(),
-                                DatePicker::make('date_expired')
-                                    ->label('Registration Expiration Date')
-                                    ->native(false)
-                                    ->closeOnDateSelection(true)
-                                    ->required()
-                                    ->rules(['after_or_equal:today']),
-                                Toggle::make('is_active')
-                                    ->default(true)
-                                    ->required(),
-                            ]),
-
-                    ]),
-
-            ]);
-    }
-}
-DISPATCH_FILE_END_14
-
-# ---------------------------------------------------------------- app/Filament/Resources/Truckteams/Schemas/TruckteamForm.php
-mkdir -p 'app/Filament/Resources/Truckteams/Schemas'
-cat > 'app/Filament/Resources/Truckteams/Schemas/TruckteamForm.php' <<'DISPATCH_FILE_END_15'
-<?php
-
-namespace App\Filament\Resources\Truckteams\Schemas;
-
-use App\Filament\Resources\UserResource\Pages\EditUser;
-use App\Models\Logistichub;
-use App\Models\Workposition;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
-use Filament\Schemas\Components\Group;
-use Filament\Schemas\Components\Section;
-use Filament\Schemas\Components\Utilities\Get;
-use Filament\Schemas\Schema;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
-
-class TruckteamForm
-{
-    public static function configure(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                Group::make()
-                    ->schema([
-                        Section::make('Personal Information')
-                            ->schema([
-                                TextInput::make('first_name')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('middle_name')
-                                    ->maxLength(255),
-                                TextInput::make('last_name')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('address')
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->columnSpanFull(),
-                                TextInput::make('mobile_number')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('email')
-                                    ->email()
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->unique(ignoreRecord: true),
-                                // Select::make('panelcategory_id')
-                                //     ->label('Panel Category')
-                                //     ->relationship(name: 'panelcategory', titleAttribute: 'description')
-                                //      ->required(),
-                                // Select::make('logistichub_id')
-                                // ->label('Logistic Hub/Location')
-                                // ->options(Logistichub::query()->pluck('hub_name', 'id'))
-                                // ->required(),
-                                Select::make('workposition_id')
-                                    ->label('Work Position')
-                                    ->options(Workposition::query()
-                                        ->where('is_crew', true)
-                                        ->pluck('position_description', 'id'))
-                                    ->required(),
-
-                                Toggle::make('is_active')
-                                    ->label('Active')
-                                    ->required(),
-                                // Toggle::make('is_crew')
-                                //     ->label('Crew')
-                                //     ->required(),
-
-                                //         Select::make('roles')
-                                // ->multiple()
-                                // ->relationship('roles', 'name')
-                                // ->preload(),
-
-                            ])->columns(3),
-
-                    ])->columnSpan(['lg' => 2]),
-                Group::make()
-                    ->schema([
-                        Section::make()
-                            ->schema([
-                                FileUpload::make('profile_picture')
-                                    ->image()
-                                    ->avatar()
-                                    ->imageEditor()
-                                    ->circleCropper()
-                                    // ->panelLayout('grid')
-                                    ->uploadingMessage('Uploading attachment...')
-                                    ->openable()
-                                    ->getUploadedFileNameForStorageUsing(function ($file, Get $get) {
-                                        return Str::slug($get('last_name') ?: 'user').'-'.Str::random(8).'.'.$file->getClientOriginalExtension();
-                                    })
-                                    ->maxSize(1024)
-                                    ->disk('public')
-                                    ->directory('people')
-                                    ->visibility('private')
-                                    ->removeUploadedFileButtonPosition('right')
-                                    ->label('Profile Picture'),
-                                TextInput::make('password')
-                                    ->password()
-                                    ->required()
-                                    ->dehydrateStateUsing(fn ($state) => Hash::make($state))
-                                    ->dehydrated(fn ($state) => filled($state))
-                                    ->maxLength(255)
-                                    ->hiddenOn(EditUser::class)
-                                    ->maxLength(255),
-                            ]),
-                    ])->columnSpan(['lg' => 1]),
-            ])->columns(3);
-    }
-}
-DISPATCH_FILE_END_15
-
-# ---------------------------------------------------------------- app/Filament/Resources/Unmanifesteds/Pages/ListUnmanifesteds.php
-mkdir -p 'app/Filament/Resources/Unmanifesteds/Pages'
-cat > 'app/Filament/Resources/Unmanifesteds/Pages/ListUnmanifesteds.php' <<'DISPATCH_FILE_END_16'
-<?php
-
-namespace App\Filament\Resources\Unmanifesteds\Pages;
-
-use App\Filament\Resources\Unmanifesteds\UnmanifestedResource;
-use App\Models\Container;
-use Filament\Actions\CreateAction;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\MarkdownEditor;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
-use Filament\Resources\Pages\ListRecords;
-use Filament\Schemas\Components\Section;
-
-class ListUnmanifesteds extends ListRecords
-{
-    protected static string $resource = UnmanifestedResource::class;
-
-    protected function getHeaderActions(): array
-    {
-        return [
-            CreateAction::make()
-            ->createAnother(false)
-            ->slideOver()
-           // ->successNotification(fn() => 'Unmanifested created successfully!')
-            ->label('Create Unmanifested')
-            ->schema([
-
-                Section::make('Unmanifested Details')
-                ->schema([
-                Select::make('container_id')
-                        ->label('Container')
-                        ->options(function () {
-                            return Container::where('is_active', true)
-                                ->pluck('container_no', 'id');
-                        })
-                        ->searchable()
-                        ->required(),
-                TextInput::make('invoice')
-                ->label('Invoice Number')
-                ->numeric()
-                ->required(),
-                MarkdownEditor::make('remarks')
-                ->label('Remarks'),
-                FileUpload::make('attachment_pic')
-                ->label('Attachment')
-                ->uploadingMessage('Uploading attachment...')
-                ->image()
-                ->disk('public')
-                ->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('unmanifested'))
-                ->visibility('private')
-                ->required()
-                ->maxSize(5120), // 5MB
-
-                ])
-            ]),
-        ];
-    }
-}
-DISPATCH_FILE_END_16
-
-# ---------------------------------------------------------------- app/Filament/Resources/Unmanifesteds/Schemas/UnmanifestedForm.php
-mkdir -p 'app/Filament/Resources/Unmanifesteds/Schemas'
-cat > 'app/Filament/Resources/Unmanifesteds/Schemas/UnmanifestedForm.php' <<'DISPATCH_FILE_END_17'
-<?php
-
-namespace App\Filament\Resources\Unmanifesteds\Schemas;
-
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\MarkdownEditor;
-use Filament\Forms\Components\RichEditor;
-use Filament\Forms\Components\Textarea;
-use Filament\Forms\Components\TextInput;
-use Filament\Schemas\Components\Section;
-use Filament\Schemas\Schema;
-
-class UnmanifestedForm
-{
-    public static function configure(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                Section::make('Unmanifested Details')
-                ->schema([
-                    MarkdownEditor::make('remarks'),
-                 FileUpload::make('attachment_pic')
-                ->label('Attachment')
-                ->uploadingMessage('Uploading attachment...')
-                ->image()
-                ->disk('public')
-                ->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('unmanifested'))
-                ->visibility('private')
-                ->required()
-                ->maxSize(5120), // 5MB
-                ])->columnSpanFull()
-
-            ]);
-    }
-}
-DISPATCH_FILE_END_17
-
-# ---------------------------------------------------------------- app/Filament/Resources/UserResource.php
-mkdir -p 'app/Filament/Resources'
-cat > 'app/Filament/Resources/UserResource.php' <<'DISPATCH_FILE_END_18'
-<?php
-
-namespace App\Filament\Resources;
-
-use App\Filament\Resources\UserResource\Pages\ListUsers;
-use App\Models\Company;
-use App\Models\Logistichub;
-use App\Models\User;
-use App\Models\Warehouse;
-use App\Support\People\People;
-use Filament\Actions\Action;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Actions\EditAction;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
-use Filament\Forms\Components\ToggleButtons;
-use Filament\Notifications\Notification;
-use Filament\Resources\Resource;
-use Filament\Schemas\Components\Grid;
-use Filament\Schemas\Components\Section;
-use Filament\Schemas\Components\Text;
-use Filament\Schemas\Components\Utilities\Get;
-use Filament\Schemas\Components\Utilities\Set;
-use Filament\Schemas\Schema;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Columns\ViewColumn;
-use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\HtmlString;
-use Illuminate\Support\Str;
+use Throwable;
 use UnitEnum;
 
-/**
- * Users (board 59): a list with a tab per panel, and New user / Edit user in a panel on the right.
- * Panels and work positions come from Settings (Panel categories, Work positions): nothing is fixed here.
- */
-class UserResource extends Resource
+/** Admin → Settings → SMS: provider and key, which texts go out, the texts themselves (with the AI writer). */
+class SmsSettings extends Page
 {
-    protected static ?string $model = User::class;
+    protected string $view = 'filament.sms.settings';
 
     protected static string|UnitEnum|null $navigationGroup = 'Settings';
 
-    public static function form(Schema $schema): Schema
-    {
-        return $schema->columns(1)->components([
-            Section::make('Personal')->compact()->schema([
-                FileUpload::make('profile_picture')
-                    ->hiddenLabel()->image()->avatar()->imageEditor()->circleCropper()
-                    ->getUploadedFileNameForStorageUsing(fn ($file, Get $get) => Str::slug($get('last_name') ?: 'user').'-'.Str::random(8).'.'.$file->getClientOriginalExtension())
-                    ->maxSize(1024)->disk('public')->directory('people')->visibility('private')
-                    ->extraAttributes(['class' => 'ds-us__photo']),
-                Grid::make(3)->schema([
-                    TextInput::make('first_name')->required()->maxLength(255),
-                    TextInput::make('middle_name')->maxLength(255)->placeholder('Optional'),
-                    TextInput::make('last_name')->required()->maxLength(255),
-                ]),
-                Grid::make(2)->schema([
-                    TextInput::make('mobile_number')->label('Mobile')->tel()->maxLength(255),
-                    TextInput::make('email')->label('Email · used to sign in')->email()->required()->maxLength(255)->unique(ignoreRecord: true),
-                ]),
-                TextInput::make('address')->required()->maxLength(255),
-            ]),
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedChatBubbleLeftRight;
 
-            Section::make('Works in')->description('Which app they open · from Settings → Panel categories')->compact()->schema([
-                ToggleButtons::make('panelcategory_id')->hiddenLabel()->required()->inline()->live()
-                    ->options(fn () => People::panels()->mapWithKeys(fn ($p) => [$p->id => People::look($p)['label']])->all())
-                    ->icons(fn () => People::panels()->mapWithKeys(fn ($p) => [$p->id => People::look($p)['icon']])->all())
-                    ->afterStateUpdated(function (Set $set, Get $get, $state) {
-                        // a position of another panel does not fit any more
-                        if ($get('workposition_id') && ! array_key_exists((int) $get('workposition_id'), People::positions((int) $state))) {
-                            $set('workposition_id', null);
-                        }
-                        if (People::panelCode((int) $state) === 'drv') {
-                            $set('is_crew', true);
-                            $set('is_admin', false);
-                        }
-                    })
-                    ->extraAttributes(['class' => 'ds-us__panels']),
-                Text::make(fn (Get $get) => new HtmlString('<span class="ds-us__noapp">⚠ This panel has no app yet: they can be saved, but cannot sign in anywhere.</span>'))
-                    ->visible(fn (Get $get) => $get('panelcategory_id') && ! in_array(People::panelCode((int) $get('panelcategory_id')), People::WITH_APP, true)),
-                Grid::make(2)->schema([
-                    Select::make('logistichub_id')->label('Hub / location')->required()->searchable()
-                        ->options(fn () => Logistichub::query()->orderBy('hub_name')->pluck('hub_name', 'id')->all())
-                        ->helperText(fn (Get $get) => People::panelCode((int) $get('panelcategory_id')) === 'co' ? 'The partner hub: they only see its boxes and trips.' : 'Where they work. Drivers: the hub their truck goes out from.'),
-                    Select::make('warehouse_id')->label('Warehouse')->searchable()
-                        ->options(fn () => Warehouse::query()->orderBy('name')->pluck('name', 'id')->all())
-                        ->visible(fn (Get $get) => People::panelCode((int) $get('panelcategory_id')) !== 'co'),
-                    Select::make('company_id')->label('Company')->required()->searchable()
-                        ->options(fn () => Company::query()->where('is_active', true)->orderBy('company_name')->pluck('company_name', 'id')->all())
-                        ->default(fn () => Auth::user()?->company_id),
-                ]),
-                ToggleButtons::make('workposition_id')->label('Work position')->required()->inline()
-                    ->hint('From Settings → Work positions')
-                    // the panel's positions; a position they already have stays in the list (older data)
-                    ->options(fn (Get $get, ?User $record) => People::positions($get('panelcategory_id') ? (int) $get('panelcategory_id') : null)
-                        + ($record?->workposition ? [$record->workposition->id => $record->workposition->position_description] : []))
-                    ->hintAction(static::newPositionAction())
-                    ->extraAttributes(['class' => 'ds-us__chips']),
-                Toggle::make('is_crew')->label('Truck crew')->helperText('Can be put on a truck as driver or helper')->default(false),
-            ]),
+    protected static ?string $navigationLabel = 'SMS';
 
-            Section::make('Access')->compact()->schema([
-                Toggle::make('is_active')->label('Active')->helperText('Can sign in. Off: cannot sign in, history is kept')->default(true),
-                Toggle::make('is_admin')->label('Admin')
-                    ->helperText(fn (Get $get) => match (People::panelCode((int) $get('panelcategory_id'))) {
-                        'adm' => 'Opens the Admin app. Off: Scan app only.',
-                        'drv' => 'Drivers cannot be admin: the Driver app opens only for non-admins.',
-                        default => 'Full access to settings and other users',
-                    })
-                    ->disabled(fn (Get $get) => People::panelCode((int) $get('panelcategory_id')) === 'drv')
-                    ->default(false),
-                Select::make('roles')->label('Roles')->multiple()->relationship('roles', 'name')->preload(),
-            ]),
+    protected static ?string $title = 'Settings · SMS to receivers';
 
-            Section::make('Password')->compact()->schema([
-                TextInput::make('password')
-                    ->label(fn (string $operation) => $operation === 'create' ? 'Password' : 'New password · leave empty to keep it')
-                    ->password()->revealable()
-                    ->required(fn (string $operation) => $operation === 'create')
-                    ->minLength(8)->maxLength(255)
-                    ->dehydrateStateUsing(fn ($state) => Hash::make($state))
-                    ->dehydrated(fn ($state) => filled($state))
-                    ->hintAction(Action::make('makePassword')->label('Make one')->icon('heroicon-m-sparkles')
-                        ->action(function (Set $set) {
-                            $pw = People::randomPassword();
-                            $set('password', $pw);
-                            Notification::make()->title('Password made: '.$pw)->body('Give it to them, then press Save. Click the eye to see it.')->success()->persistent()->send();
-                        })),
-            ]),
-        ]);
-    }
+    protected static ?string $slug = 'sms-settings';
 
-    /** ＋ New position (admin): saved in Settings → Work positions for the chosen panel. */
-    protected static function newPositionAction(): Action
-    {
-        return Action::make('newPosition')->label('＋ New position')->link()
-            ->visible(fn () => (bool) Auth::user()?->is_admin)
-            ->modalHeading('New work position')->modalWidth('md')->modalSubmitActionLabel('Add')
-            ->schema([
-                TextInput::make('name')->label('Position')->required()->maxLength(60)->placeholder('Forklift operator'),
-                Toggle::make('crew')->label('Truck crew')->helperText('Shows in Crew, can be put on a truck'),
-            ])
-            ->action(function (array $data, Get $get, Set $set) {
-                $panel = $get('panelcategory_id') ? (int) $get('panelcategory_id') : null;
-                $w = People::addPosition($data['name'], $panel, (bool) ($data['crew'] ?? false), (int) Auth::id());
-                $set('workposition_id', $w->id);
-                Notification::make()->title($w->position_description.' added to Work positions')->success()->send();
-            });
-    }
+    protected static ?int $navigationSort = 92;
 
-    public static function table(Table $table): Table
-    {
-        return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['panelcategory', 'workposition', 'logistichub:id,hub_name', 'warehouse:id,name', 'company:id,company_name']))
-            ->defaultSort('first_name')
-            ->recordClasses(fn (User $r) => $r->is_active ? null : 'ds-us__off')
-            ->recordAction('edit')
-            ->columns([
-                ViewColumn::make('person')->label('Person')->view('filament.people.user-cell')
-                    ->searchable(query: fn (Builder $query, string $search) => $query->where(fn ($q) => $q
-                        ->where('first_name', 'like', "%{$search}%")->orWhere('last_name', 'like', "%{$search}%")
-                        ->orWhere('email', 'like', "%{$search}%")->orWhere('mobile_number', 'like', '%'.preg_replace('/\D/', '', $search).'%')))
-                    ->sortable(query: fn (Builder $query, string $direction) => $query->orderBy('first_name', $direction)->orderBy('last_name', $direction)),
-                ViewColumn::make('works')->label('Works as')->view('filament.people.works-cell'),
-                TextColumn::make('where')->label('Where')->color('gray')
-                    ->state(fn (User $r) => collect([$r->logistichub?->hub_name, $r->panelcategory?->code === 'co' ? $r->company?->company_name : $r->warehouse?->name])->filter()->unique()->join(' · ') ?: '—'),
-                TextColumn::make('mobile_number')->label('Mobile')->color('gray'),
-                ViewColumn::make('status')->label('Status')->view('filament.people.status-cell'),
-                TextColumn::make('seen')->label('Last active')->color('gray')->size('sm')
-                    ->state(fn (User $r, $livewire) => People::ago($livewire->lastActive()[$r->id] ?? null)),
-            ])
-            ->recordActions([
-                EditAction::make()->iconButton()->slideOver()->modalWidth('2xl')
-                    ->modalHeading(fn (User $r) => People::name($r))
-                    ->modalDescription(fn (User $r) => 'Added '.$r->created_at?->format('M j, Y').($r->updated_at ? ' · changed '.$r->updated_at->diffForHumans() : ''))
-                    ->modalSubmitActionLabel('Save changes'),
-            ])
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    DeleteBulkAction::make(),
-                ]),
-            ]);
-    }
+    public string $provider = 'semaphore';
 
-    public static function getRelations(): array
-    {
-        return [];
-    }
+    public string $key = '';
 
-    public static function getPages(): array
-    {
-        // New user and Edit user open on the right of the list (board 59), not on their own page
-        return [
-            'index' => ListUsers::route('/'),
-        ];
-    }
-}
-DISPATCH_FILE_END_18
+    public string $sender = '';
 
-# ---------------------------------------------------------------- app/Filament/Scan/Pages/ScanApp.php
-mkdir -p 'app/Filament/Scan/Pages'
-cat > 'app/Filament/Scan/Pages/ScanApp.php' <<'DISPATCH_FILE_END_19'
-<?php
+    public string $limit = '3000';
 
-namespace App\Filament\Scan\Pages;
+    public string $officePhone = '';
 
-use App\Models\Ai\AiPhotoCheck;
-use App\Models\Boxes\SetSplit;
-use App\Models\BoxPhoto;
-use App\Models\Deliverylog;
-use App\Models\Invoice;
-use App\Models\PhotoSetting;
-use App\Models\Unmanifested;
-use App\Models\Whdeliverylog;
-use App\Services\TripAssignment;
-use App\Support\Ai\Ai;
-use App\Support\Ai\PhotoCheck;
-use App\Support\BoxSizes;
-use App\Support\Photos\BoxPhotos;
-use App\Support\ScanModes;
-use App\Support\Trips\TripRules;
-use App\Support\TruckSpace;
-use Filament\Actions\Action;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\Textarea;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Filament\Panel;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Auth;
-use Livewire\Attributes\Locked;
-use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+    public string $language = 'auto';
 
-/**
- * The Scan app. One phone screen with four steps: start → pick → scan → done.
- * Scanning is done by the existing scan pages (Unload Container, Load Truck, …):
- * this page only picks the right one for the signed-in person and shows the result.
- */
-class ScanApp extends Page
-{
-    protected string $view = 'filament.scan.app';
+    public string $testNumber = '';
 
-    protected static ?string $title = 'Scan';
+    public ?string $testResult = null;
 
-    #[Locked]
-    public string $screen = 'home';
+    public bool $testOk = false;
 
-    #[Locked]
-    public ?string $mode = null;
+    /** kind => on/off */
+    public array $enabled = [];
 
-    #[Locked]
-    public ?int $choice = null;
+    public string $kind = 'out_for_delivery';
 
-    /** Result of the last scan, from the scan page that handled it. */
-    #[Locked]
-    public ?string $status = null;
+    public string $lang = 'en';
 
-    #[Locked]
-    public ?string $message = null;
+    public string $text = '';
 
-    #[Locked]
-    public ?int $invoiceId = null;
+    public ?string $aiNote = null;
 
-    /** Box not on the container's manifest (Unload container only). */
-    #[Locked]
-    public ?string $missing = null;
+    public ?string $aiError = null;
 
-    /** Boxes returned on this screen (Return boxes counts them as it goes). */
-    #[Locked]
-    public int $returned = 0;
-
-    #[Locked]
-    public int $sessionScans = 0;
-
-    /** Load truck: the box was too early (its spot is nearer the door than what is loaded now). */
-    #[Locked]
-    public ?array $early = null;
-
-    /** Load truck: where the box just loaded goes. */
-    #[Locked]
-    public ?array $spot = null;
-
-    /** Unload: the section (or waiting truck) of the box just scanned. */
-    #[Locked]
-    public ?array $route = null;
-
-    /** The box's set: "2 of 3 · 1 more still in this container". */
-    #[Locked]
-    public ?array $setInfo = null;
-
-    /** Partner hub unload: the hub trip the box went on (board 45d). */
-    public ?array $hubTrip = null;
-
-    /** Load truck: the box is for another hub. */
-    #[Locked]
-    public ?array $wrongHub = null;
-
-    /** Show the finished and closed ones on the pick list too (greyed out). */
-    public bool $showFinished = false;
-
-    /** The chosen trip or container as shown in the bar (kept, so it is not looked up on every tap). */
-    public ?array $targetInfo = null;
-
-    /** Start screen: the tiles show at once, the counts and Continue a moment later (board 54). */
-    public bool $homeReady = false;
-
-    /** Load next, space, "Room for more": loaded right after the scan screen shows (board 51). */
-    public bool $extrasReady = false;
-
-    /** Pick boxes: a number per scan, so the same message twice still shows again. */
-    public int $pickSeq = 0;
-
-    /** Pick boxes: the last result (title, why, tone, undo). */
-    public ?array $pickResult = null;
-
-    public ?string $condition = null;
-
-    public string $note = '';
-
-    /** @var TemporaryUploadedFile|null */
-    public $boxPhoto = null;
-
-    public static function getRoutePath(Panel $panel): string
-    {
-        return '/';
-    }
-
-    public function getTitle(): string|Htmlable
-    {
-        return 'Scan';
-    }
-
-    public function getHeading(): string
-    {
-        return '';
-    }
-
-    protected function modes(): array
-    {
-        return ScanModes::for(Auth::user());
-    }
-
-    protected function mode(): ?array
-    {
-        return $this->mode ? ($this->modes()[$this->mode] ?? null) : null;
-    }
-
-    /** The existing scan page for this mode, set to the chosen container or trip. */
-    protected function station(?int $choice = null, ?string $modeKey = null): ?object
-    {
-        $mode = $modeKey ? ($this->modes()[$modeKey] ?? null) : $this->mode();
-        if (! $mode) {
-            return null;
-        }
-
-        $station = app($mode['class']);
-        $station->data = [$mode['field'] => $choice ?? $this->choice];
-        if (property_exists($station, 'returnedCount')) {
-            $station->returnedCount = $this->returned;
-        }
-
-        return $station;
-    }
-
-    // ------------------------------------------------------------------ steps
-
-    public function open(string $mode): void
-    {
-        if (! isset($this->modes()[$mode])) {
-            return;
-        }
-        $this->mode = $mode;
-        $this->choice = null;
-        $this->showFinished = false;
-        $this->screen = 'pick';
-        $this->clearResult();
-        // Pick boxes: one trip given to you opens by itself.
-        if ($mode === 'pick' && ($mine = $this->station()?->appChoices()->where('mine', true)) && $mine->count() === 1) {
-            $this->pick($mine->first()['id']);
-        }
-    }
-
-    /** Pick boxes: take a trip that has no picker yet. */
-    public function takeTrip(int $id): void
-    {
-        $trip = $this->mode === 'pick' ? $this->station()?->appChoices()->firstWhere('id', $id) : null;
-        $model = $trip ? Deliverylog::find($id) : null;
-        if (! $model || ! \App\Support\Trips\Picking::take($model, Auth::user())) {
-            Notification::make()->title('Someone else took that trip.')->warning()->send();
-
-            return;
-        }
-        $this->pick($id);
-    }
-
-    /** Pick boxes: all picked, go on with Load truck for the same trip. */
-    public function goLoad(): void
-    {
-        $trip = $this->choice;
-        $key = collect(['load', 'hub_load'])->first(fn ($k) => isset($this->modes()[$k]));
-        if (! $key) {
-            return;
-        }
-        $this->open($key);
-        if ($trip && $this->station()?->appChoices()->contains('id', $trip)) {
-            $this->pick($trip);
-        }
-    }
-
-    /** Pick boxes: picked by mistake. */
-    public function undoPick(int $rowId): void
-    {
-        $trip = $this->mode === 'pick' && $this->choice ? Deliverylog::find($this->choice) : null;
-        if ($trip && \App\Support\Trips\Picking::isPicker($trip, Auth::user()) && \App\Support\Trips\Picking::undo($trip, $rowId, Auth::user())) {
-            $this->pickResult = ['title' => '↶ Undone · back on the list', 'why' => 'Put the box back where it was.', 'tone' => 'warn', 'undo' => null, 'code' => $this->pickResult['code'] ?? ''];
-            $this->status = 'warning';
-        }
-    }
-
-    /** Pick boxes: the box is not in its section. */
-    public function notFound(int $rowId): void
-    {
-        $trip = $this->mode === 'pick' && $this->choice ? Deliverylog::find($this->choice) : null;
-        if ($trip && \App\Support\Trips\Picking::isPicker($trip, Auth::user()) && \App\Support\Trips\Picking::notFound($trip, $rowId, Auth::user())) {
-            $this->pickResult = ['title' => 'Marked not found', 'why' => 'The office sees it on Picking. Keep picking the rest.', 'tone' => 'warn', 'undo' => null, 'code' => ''];
-            $this->status = 'warning';
-        }
-    }
-
-    public function pick(int $id): void
-    {
-        $station = $this->station();
-        $target = $station?->appChoices()->firstWhere('id', $id);
-        if (! $target) {
-            Notification::make()->title('That one is not open for you any more.')->warning()->send();
-
-            return;
-        }
-        $this->targetInfo = ['id' => $id, 'name' => $target['name'] ?? '', 'sub' => $target['sub'] ?? null];
-        // for Continue on the start screen
-        cache()->put('scan-app.last.'.Auth::id(), ['mode' => $this->mode, 'choice' => $id, 'name' => $target['name'] ?? ''], now()->addHours(16));
-        $this->extrasReady = false;
-        $this->choice = $id;
-        $this->returned = 0;
-        $this->screen = 'scan';
-        $this->clearResult();
-    }
-
-    /** Called by the start screen once it shows. */
-    public function loadHome(): void
-    {
-        $this->homeReady = true;
-    }
-
-    /** Continue: back to the job left unfinished. */
-    public function continueLast(): void
-    {
-        $last = cache()->get('scan-app.last.'.Auth::id());
-        if (! $last || ! isset($this->modes()[$last['mode']])) {
-            return;
-        }
-        $this->open($last['mode']);
-        if ($this->screen === 'pick') {
-            $this->pick((int) $last['choice']);
-        }
-    }
-
-    /** The unfinished job of this person for the Continue card, or null. */
-    protected function resume(): ?array
-    {
-        $last = cache()->get('scan-app.last.'.Auth::id());
-        $mode = $last ? ($this->modes()[$last['mode']] ?? null) : null;
-        if (! $mode) {
-            return null;
-        }
-        try {
-            $p = $this->station((int) $last['choice'], $last['mode'])->progress();
-        } catch (\Throwable) {
-            return null;
-        }
-        $total = (int) ($p['total'] ?? 0);
-        $done = (int) ($p['loaded'] ?? 0);
-        if ($total <= 0 || $done >= $total) {
-            return null;
-        }
-
-        return ['label' => $mode['label'], 'name' => $last['name'], 'done' => $done, 'total' => $total, 'pct' => (int) round($done / $total * 100)];
-    }
-
-    /** Called by the scan screen once it shows. */
-    public function loadExtras(): void
-    {
-        $this->extrasReady = true;
-    }
-
-    public function toggleFinished(): void
-    {
-        $this->showFinished = ! $this->showFinished;
-    }
-
-    /**
-     * Containers or trips for a scan, with progress. Started ones first, then not started;
-     * finished (100%) and closed ones are marked so the list can hide them.
-     */
-    public function choiceList(string $modeKey): Collection
-    {
-        $station = $this->station(null, $modeKey);
-        if (! $station) {
-            return collect();
-        }
-
-        $choices = $station->appChoices()->values();
-        // one database question for all of them when the scan can do that
-        $many = method_exists($station, 'progressMany') ? $station->progressMany($choices->pluck('id')->all()) : null;
-
-        return $choices->map(function (array $c, int $i) use ($modeKey, $many) {
-            $p = $many !== null ? ($many[$c['id']] ?? ['loaded' => 0, 'total' => 0]) : $this->station($c['id'], $modeKey)->progress();
-            $done = (int) ($p['loaded'] ?? 0);
-            $total = (int) ($p['total'] ?? 0);
-
-            return $c + [
-                'done' => $done, 'total' => $total, 'order' => $i,
-                'finished' => ! ($c['active'] ?? true) || ($total > 0 && $done >= $total),
-            ];
-        })->sortBy(fn ($c) => [$c['finished'] ? 2 : ($c['done'] > 0 ? 0 : 1), $c['order']])->values();
-    }
-
-    /** "2 waiting" for each scan on the start screen (kept for a minute). */
-    protected function waitingCounts(): array
-    {
-        $user = Auth::user();
-
-        return cache()->remember('scan-app.waiting.'.$user?->id, 60, fn () => collect(array_keys($this->modes()))
-            ->mapWithKeys(fn ($key) => [$key => $this->choiceList($key)->where('finished', false)->count()])->all());
-    }
-
-    public function home(): void
-    {
-        cache()->forget('scan-app.waiting.'.Auth::id());
-        $this->reset('mode', 'choice', 'returned');
-        $this->homeReady = false;
-        $this->screen = 'home';
-        $this->clearResult();
-    }
-
-    public function back(): void
-    {
-        $this->screen = 'pick';
-        $this->choice = null;
-        $this->clearResult();
-    }
-
-    public function finish(): void
-    {
-        $this->screen = 'done';
-        $this->clearResult();
-    }
-
-    public function dismiss(): void
-    {
-        $this->clearResult();
-    }
-
-    protected function clearResult(): void
-    {
-        $this->reset('status', 'message', 'invoiceId', 'missing', 'condition', 'note', 'boxPhoto', 'early', 'spot', 'route', 'setInfo', 'wrongHub', 'bypass', 'hubTrip', 'pickResult', 'which');
-    }
-
-    /** Board 58: two boxes with the scanned number still to do: ['code' => …, 'options' => [id, name, place, sender]]. */
-    public ?array $which = null;
-
-    /** Which one? → the receiver was tapped: scan that exact box. */
-    public function chooseBox(int $id): void
-    {
-        $w = $this->which;
-        if (! $w || ! collect($w['options'] ?? [])->contains('id', $id)) {
-            return;
-        }
-        $this->runScan($w['code'], false, $id);
-    }
-
-    /** Which one? → Not this box. */
-    public function skipBox(): void
-    {
-        $this->clearResult();
-    }
-
-    /** The box on the result card, when it has this number (two boxes can share one). */
-    protected function boxShown(string $code): ?int
-    {
-        return $this->invoiceId && Invoice::whereKey($this->invoiceId)->value('invoice') === $code ? $this->invoiceId : null;
-    }
-
-    /** Called by the camera or the typed box number. */
-    public function scan(string $code): void
-    {
-        $this->runScan($code);
-    }
-
-    /** Trip rules: the reason buttons (or "Ask the office") after "load it anyway". */
-    public ?array $bypass = null;
-
-    /** A city top-up the crew said no to (trip id => true). */
-    public array $topUpSkipped = [];
-
-    protected function bypassCtx(string $code): array
-    {
-        $kind = in_array($this->mode, ['wh_load'], true) ? 'transfer' : 'delivery';
-        $model = $kind === 'transfer' ? Whdeliverylog::class : Deliverylog::class;
-
-        return ['kind' => $kind, 'trip_id' => $this->choice, 'trip_number' => $this->choice ? $model::whereKey($this->choice)->value('trip_number') : null,
-            'invoice_id' => $this->boxShown($code) ?? \App\Support\Boxes\SameNumber::best($code)?->id, 'box' => $code];
-    }
-
-    /** After "too early", "wrong hub", "other city" or "truck full": load that box anyway (with a reason, or ask the office). */
-    public function loadAnyway(): void
-    {
-        $code = $this->early['code'] ?? $this->wrongHub['code'] ?? null;
-        if (! $code) {
-            return;
-        }
-        $rule = TripRules::ruleOf($this->early, $this->wrongHub);
-        $ctx = $this->bypassCtx($code);
-        $need = TripRules::need($rule, Auth::user(), $ctx['trip_id'], $ctx['invoice_id']);
-        if ($need === 'free') {
-            $this->runScan($code, true);
-
-            return;
-        }
-        $this->bypass = ['rule' => $rule, 'code' => $code, 'need' => $need, 'title' => TripRules::RULES[$rule][0]];
-    }
-
-    public function bypassWith(string $reason): void
-    {
-        if (! $this->bypass || $this->bypass['need'] !== 'reason' || ! in_array($reason, TripRules::reasons(), true)) {
-            return;
-        }
-        $b = $this->bypass;
-        TripRules::record($b['rule'], Auth::user(), $reason, $this->bypassCtx($b['code']));
-        $this->bypass = null;
-        $this->runScan($b['code'], true);
-    }
-
-    public function askOffice(): void
-    {
-        if (! $this->bypass) {
-            return;
-        }
-        $b = $this->bypass;
-        TripRules::ask($b['rule'], Auth::user(), null, $this->bypassCtx($b['code']));
-        $this->clearResult();
-        $this->status = 'warning';
-        $this->message = "Asked the office about {$b['code']}. Keep it aside: when they approve, scan it again.";
-    }
-
-    public function cancelBypass(): void
-    {
-        $this->bypass = null;
-    }
-
-    /** City top-up at loading: add the suggested city to the trip. */
-    public function cityTopUpAdd(string $key): void
-    {
-        $station = $this->station();
-        if ($this->mode === 'load' && $station && method_exists($station, 'addTopUpCity')) {
-            $station->data['deliverylog_id'] = $this->choice;
-            $station->addTopUpCity($key);
-        }
-    }
-
-    public function cityTopUpSkip(): void
-    {
-        $this->topUpSkipped[(int) $this->choice] = true;
-    }
-
-    // ------------------------------------------------------------------ sections, truck waiting, sets
-
-    /** Partner hub unload: Add anyway to the full trip (space is an estimate). */
-    public function hubAnyway(): void
-    {
-        $station = $this->station();
-        if (! $this->hubTrip || ! $station || ! method_exists($station, 'hubAnyway')) {
-            return;
-        }
-        $station->hubTrip = $this->hubTrip;
-        $station->hubAnyway();
-        $this->hubTrip = $station->hubTrip;
-    }
-
-    /** Unload: take the box off the waiting truck and keep it in its section. */
-    public function putInSection(): void
-    {
-        $station = $this->station();
-        if ($this->mode !== 'unload' || ! $this->invoiceId || ! $station || ! method_exists($station, 'putInSection') || ! $station->putInSection($this->invoiceId)) {
-            return;
-        }
-        $this->route = $station->route;
-        $this->message = $station->lastMessage;
-    }
-
-    /** Unload: put the box on a spot of its section, or Skip (spots are optional, board 50). */
-    public function setSpot(?int $spotId = null): void
-    {
-        $station = $this->station();
-        if ($this->mode !== 'unload' || ! $this->invoiceId || ! $station || ! method_exists($station, 'setSpot') || ! $station->setSpot($this->invoiceId, $spotId)) {
-            return;
-        }
-        $this->route = $station->route;
-        $this->message = $station->lastMessage;
-    }
-
-    /** Unload, TRUCK screen: bring another box of the customer from its section onto the truck too. */
-    public function addSetBox(int $boxId): void
-    {
-        $station = $this->station();
-        if ($this->mode !== 'unload' || ! $this->invoiceId || ! $station || ! method_exists($station, 'addSetBox')) {
-            return;
-        }
-        $code = $station->addSetBox($this->invoiceId, $boxId);
-        if (! $code) {
-            Notification::make()->title('That box cannot go on the truck now (it is on another trip or not in this warehouse).')->warning()->send();
-
-            return;
-        }
-        $this->setInfo = $station->setInfo;
-        Notification::make()->title($code.' added to the truck: bring it and scan it at the truck door (Load transfer truck).')->success()->send();
-    }
-
-    /** Load truck, Done screen: room left on the truck, add a waiting box to this trip. */
-    public function topUpAdd(int $invoiceId): void
-    {
-        $station = $this->station();
-        if ($this->mode !== 'load' || ! $station || ! $station->appChoices()->contains('id', $this->choice)) {
-            return;
-        }
-        $trip = Deliverylog::with('truck')->find($this->choice);
-        if (! $trip || ! TruckSpace::topUp($trip)['boxes']->contains('id', $invoiceId)) {
-            Notification::make()->title('That box does not fit or is not free any more.')->warning()->send();
-
-            return;
-        }
-        try {
-            app(TripAssignment::class)->addToDeliveryTrip($trip, Invoice::whereKey($invoiceId)->get());
-        } catch (\DomainException $e) {
-            Notification::make()->title($e->getMessage())->warning()->send();
-
-            return;
-        }
-        Notification::make()->title(Invoice::whereKey($invoiceId)->value('invoice').' added to trip '.$trip->trip_number.': scan it onto the truck')->success()->send();
-        $this->pick($this->choice);
-    }
-
-    /** Count a section, Done screen: close the count. */
-    public function closeCount(): void
-    {
-        $station = $this->station();
-        if ($this->mode === 'count' && $station && method_exists($station, 'closeCount') && ($r = $station->closeCount())) {
-            Notification::make()->title('Count closed: '.$r['found'].' found, '.count($r['missing']).' missing'.($r['moved'] ? ', '.$r['moved'].' moved in' : ''))->success()->send();
-            $this->home();
-        }
-    }
-
-    /** Receive truck / Receive container, Done screen: boxes not scanned get a Missing box issue. */
-    public function finishReceiving(): void
-    {
-        $station = $this->station();
-        if (! $station || ! method_exists($station, 'finishReceiving')) {
-            return;
-        }
-        $made = $station->finishReceiving();
-        if ($made === null) {
-            return;
-        }
-        cache()->forget('scan-app.waiting.'.Auth::id());
-        Notification::make()->title('Received')->body($made ? $made.' missing '.str('box')->plural($made).': a Missing box issue was opened for each.' : 'Every box arrived.')->success()->send();
-        $this->home();
-    }
-
-    /** Load truck, Done screen: why a box of a customer's set stays behind. */
-    public function splitReason(int $invoiceId, string $reason): void
-    {
-        $station = $this->station();
-        if ($station && method_exists($station, 'recordSplit')) {
-            $station->recordSplit($invoiceId, $reason);
-        }
-    }
-
-    protected function runScan(string $code, bool $force = false, ?int $pin = null): void
-    {
-        $station = $this->station();
-        if (! $station || ! $this->choice || $this->screen !== 'scan') {
-            return;
-        }
-        // load anyway after a pick: the same box again, not a new Which one?
-        $pin ??= $force ? $this->boxShown(\App\Support\InvoiceLookup::normalize($code)) : null;
-
-        if ($force && property_exists($station, 'forceLoad')) {
-            $station->forceLoad = true;
-        }
-        $pin ? $station->scanPinned($code, $pin) : $station->scan($code);
-        session()->forget('filament.notifications'); // this screen shows its own result
-
-        $this->clearResult();
-        $this->status = $station->lastStatus;
-        $this->message = $station->lastMessage;
-        $this->invoiceId = $station->lastInvoiceId;
-        $this->missing = property_exists($station, 'missingCode') ? $station->missingCode : null;
-        if (property_exists($station, 'returnedCount')) {
-            $this->returned = $station->returnedCount;
-        }
-        $this->early = property_exists($station, 'early') ? $station->early : null;
-        $this->spot = property_exists($station, 'spot') ? $station->spot : null;
-        $this->route = property_exists($station, 'route') ? $station->route : null;
-        $this->setInfo = property_exists($station, 'setInfo') ? $station->setInfo : null;
-        $this->wrongHub = property_exists($station, 'wrongHub') ? $station->wrongHub : null;
-        $this->hubTrip = property_exists($station, 'hubTrip') ? $station->hubTrip : null;
-        $this->pickResult = property_exists($station, 'pick') ? $station->pick : null;
-        $this->which = $station->which ?? null;
-        if ($this->which) {
-            $this->status = 'which';
-            $this->dispatch('scan-app-result', status: 'which');
-
-            return;
-        }
-        if ($this->mode === 'pick') {
-            $this->pickSeq++;
-        }
-
-        if ($this->status === 'success') {
-            if ($this->invoiceId && $this->photosOn()) {
-                // photos of this box may be sent in the back (ScanPhotoController) for a while
-                $ok = collect(session('scan-app.photo-ok', []))->filter(fn ($v) => ($v['at'] ?? 0) > now()->subHours(2)->timestamp)->take(-40)->all();
-                $ok[$this->invoiceId] = ['mode' => $this->mode, 'choice' => $this->choice, 'at' => now()->timestamp];
-                session(['scan-app.photo-ok' => $ok]);
-            }
-            $this->sessionScans++;
-            $key = 'scan-app.today.'.now()->toDateString();
-            session([$key => session($key, 0) + 1]);
-        }
-
-        $this->dispatch('scan-app-result', status: $this->status);
-    }
-
-    // ------------------------------------------------------------------ photos
-
-    protected function photoStep(): ?string
-    {
-        return $this->station()?->photoStep();
-    }
-
-    public function photosOn(): bool
-    {
-        $step = $this->photoStep();
-
-        return $step !== null && PhotoSetting::current()->allows($step);
-    }
-
-    public function setCondition(?string $condition): void
-    {
-        $this->condition = array_key_exists((string) $condition, BoxPhoto::CONDITIONS) ? $condition : null;
-    }
-
-    public function saveBoxPhoto(): void
-    {
-        $invoice = $this->status === 'success' && $this->invoiceId ? Invoice::find($this->invoiceId) : null;
-        if (! $invoice || ! $this->photosOn()) {
-            $this->reset('boxPhoto');
-
-            return;
-        }
-
-        $this->validate(['boxPhoto' => 'required|image|max:12288'], ['boxPhoto.image' => 'That file is not a photo.']);
-
-        $station = $this->station();
-        BoxPhotos::store($this->boxPhoto, $station->photoStep(), $invoice, $station->photoContext(), Auth::user(), $this->condition, $this->note ?: null);
-        $this->reset('boxPhoto');
-    }
-
-    /** Photos of the last box at this step. */
-    public function shots(): Collection
-    {
-        $step = $this->photoStep();
-
-        return $this->invoiceId && $step
-            ? BoxPhoto::where('invoice_id', $this->invoiceId)->where('step', $step)->orderBy('id')->get()
-            : collect();
-    }
-
-    // ------------------------------------------------------------------ wrong box
-
-    public function unmanifestedAction(): Action
-    {
-        return Action::make('unmanifested')
-            ->label('Record as unmanifested')
-            ->modalHeading(fn () => "Unmanifested box {$this->missing}")
-            ->modalDescription('This box is in the container but not on its manifest. Take a photo and add a note.')
-            ->schema([
-                FileUpload::make('attachment_pic')->label('Photo')->image()->disk('public')->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('unmanifested'))->visibility('private')->required(),
-                Textarea::make('remarks')->label('Notes')->rows(3),
-            ])
-            ->visible(fn () => filled($this->missing) && $this->mode === 'unload')
-            ->action(function (array $data): void {
-                Unmanifested::create([
-                    'invoice' => $this->missing,
-                    'container_id' => $this->choice,
-                    'attachment_pic' => $data['attachment_pic'] ?? null,
-                    'remarks' => $data['remarks'] ?? null,
-                ]);
-                Notification::make()->title("Unmanifested box {$this->missing} recorded")->success()->send();
-                $this->clearResult();
-            });
-    }
-
-    // ------------------------------------------------------------------ view
-
-    protected function getViewData(): array
-    {
-        $user = Auth::user();
-        $modes = $this->modes();
-        $mode = $this->mode();
-
-        $choices = collect();
-        $finishedCount = 0;
-        if ($this->screen === 'pick' && $mode) {
-            $all = $this->choiceList($this->mode);
-            $finishedCount = $all->where('finished', true)->count();
-            $choices = $this->showFinished ? $all : $all->where('finished', false)->values();
-        }
-
-        $progress = ['loaded' => 0, 'total' => 0];
-        $target = null;
-        $loadNext = null;
-        $team = [];
-        $trucks = [];
-        $openSets = [];
-        $countResult = null;
-        $receiveResult = null;
-        $topUp = null;
-        if (in_array($this->screen, ['scan', 'done'], true) && $mode && $this->choice) {
-            $station = $this->station();
-            $progress = $station->progress();
-            $target = ($this->targetInfo['id'] ?? null) === $this->choice ? $this->targetInfo : $station->appChoices()->firstWhere('id', $this->choice);
-            $extras = $this->extrasReady || $this->screen === 'done';
-            $loadNext = $extras && $this->screen === 'scan' && method_exists($station, 'loadNext') ? $station->loadNext() : null;
-            $team = $extras && method_exists($station, 'team') ? $station->team() : [];
-            $hubCounts = $this->mode === 'load' && method_exists($station, 'hubCounts') ? $station->hubCounts() : null;
-            $pickGroups = $this->mode === 'pick' && $this->screen === 'scan' ? $station->groups() : [];
-            $trucks = $extras && $this->mode === 'unload' && method_exists($station, 'truckStatus') ? $station->truckStatus() : [];
-            $openSets = $this->screen === 'done' && method_exists($station, 'openSets') ? $station->openSets() : [];
-            $countResult = $this->screen === 'done' && method_exists($station, 'countResult') ? $station->countResult() : null;
-            $receiveResult = $this->screen === 'done' && method_exists($station, 'receiveResult') ? $station->receiveResult() : null;
-            // Box sizes: space on the truck while loading (a big box takes more).
-            if ($extras && in_array($this->mode, ['load', 'hub_load'], true) && BoxSizes::on() && ($trip = Deliverylog::with('truck')->find($this->choice))) {
-                $space = BoxSizes::tripSpace($trip, $this->mode === 'hub_load');
-                if ($this->screen === 'done' && $this->mode === 'load' && ($progress['total'] ?? 0) > 0 && ($progress['loaded'] ?? 0) >= $progress['total']) {
-                    $topUp = TruckSpace::topUp($trip);
-                }
-            }
-        }
-
-        $todayPhotos = BoxPhoto::where('user_id', $user?->id)->whereDate('taken_at', today());
-
-        return [
-            'modes' => $modes,
-            'def' => $mode,
-            'place' => ScanModes::place($user),
-            'firstName' => $user?->first_name ?: 'there',
-            'initials' => mb_strtoupper(mb_substr($user?->first_name ?? '', 0, 1).mb_substr($user?->last_name ?? '', 0, 1)) ?: '·',
-            'greeting' => now()->hour < 12 ? 'Good morning' : (now()->hour < 18 ? 'Good afternoon' : 'Good evening'),
-            'today' => [
-                'scans' => (int) session('scan-app.today.'.now()->toDateString(), 0),
-                'photos' => (clone $todayPhotos)->count(),
-                'problems' => (clone $todayPhotos)->whereIn('condition', ['damaged', 'wet', 'open'])->distinct()->count('invoice_id'),
-            ],
-            'choices' => $choices,
-            'finishedCount' => $finishedCount,
-            'waiting' => $this->screen === 'home' && $this->homeReady ? $this->waitingCounts() : [],
-            'resume' => $this->screen === 'home' && $this->homeReady ? $this->resume() : null,
-            'homeReady' => $this->homeReady,
-            'progress' => $progress,
-            'target' => $target,
-            'loadNext' => $loadNext,
-            'team' => $team,
-            'hubCounts' => $hubCounts ?? null,
-            'trucks' => $trucks,
-            'openSets' => $openSets,
-            'countResult' => $countResult,
-            'receiveResult' => $receiveResult,
-            'topUp' => $topUp,
-            'extrasReady' => $this->extrasReady || $this->screen !== 'scan',
-            'paused' => $this->screen === 'scan' && $this->mode !== 'pick' && (($this->status !== null && ($this->status !== 'success' || $this->photosOn())) || $this->bypass !== null),
-            'cityTopUp' => $this->extrasReady && $this->mode === 'load' && $this->choice && empty($this->topUpSkipped[(int) $this->choice]) && ($st = $this->station()) && method_exists($st, 'cityTopUp')
-                ? (function () use ($st) {
-                    $st->data['deliverylog_id'] = $this->choice;
-
-                    return $st->cityTopUp();
-                })() : null,
-            'bypassReasons' => TripRules::reasons(),
-            'noReason' => collect($openSets)->filter(fn ($o) => collect($o['missing'])->contains(fn ($m) => ! $m['reason']))->count(),
-            'splitReasons' => SetSplit::REASONS,
-            'box' => $box = ($this->invoiceId ? Invoice::find($this->invoiceId) : null),
-            'space' => $space ?? null,
-            'pickGroups' => $pickGroups ?? [],
-            'boxSize' => $box && BoxSizes::on() ? ['name' => BoxSizes::nameOfType($box->boxtype), 'space' => BoxSizes::spaceOf($box->boxtype)] : null,
-            'conditions' => BoxPhoto::CONDITIONS,
-            'shots' => $this->status === 'success' ? $this->shots() : collect(),
-            ...$this->aiPhotoFlag(),
-        ];
-    }
-
-    /** AI photo check: the newest photo of this person that the AI thinks looks damaged while they marked it Good. */
-    protected function aiPhotoFlag(): array
-    {
-        if ($this->screen !== 'scan' || ! Ai::switchedOn('photo_check')) {
-            return ['aiFlag' => null, 'aiPending' => false];
-        }
-        $mine = AiPhotoCheck::where('source', 'scan')
-            ->whereIn('box_photo_id', BoxPhoto::where('user_id', Auth::id())->where('taken_at', '>=', now()->subMinutes(20))->select('id'));
-
-        return [
-            'aiFlag' => (clone $mine)->where('flagged', true)->whereNull('decision')
-                ->where(fn ($q) => $q->whereNull('worker_said')->orWhere('worker_said', 'good'))->latest('id')->first(),
-            'aiPending' => (clone $mine)->whereNull('checked_at')->where('created_at', '>=', now()->subMinutes(3))->exists(),
-        ];
-    }
-
-    public function aiFlagAnswer(int $id, bool $damaged): void
-    {
-        $check = AiPhotoCheck::whereIn('box_photo_id', BoxPhoto::where('user_id', Auth::id())->select('id'))->find($id);
-        if (! $check || $check->decision) {
-            return;
-        }
-        if ($damaged) {
-            BoxPhoto::whereKey($check->box_photo_id)->update(['condition' => $check->verdict === 'wet' ? 'wet' : ($check->verdict === 'open' ? 'open' : 'damaged')]);
-            PhotoCheck::confirm($check, Auth::user());
-        } else {
-            PhotoCheck::dismiss($check, Auth::user());
-        }
-    }
-}
-DISPATCH_FILE_END_19
-
-# ---------------------------------------------------------------- app/Filament/Shared/Shipping/SeaShipmentPage.php
-mkdir -p 'app/Filament/Shared/Shipping'
-cat > 'app/Filament/Shared/Shipping/SeaShipmentPage.php' <<'DISPATCH_FILE_END_20'
-<?php
-
-namespace App\Filament\Shared\Shipping;
-
-use App\Models\Shipping\SeaShipment;
-use App\Models\Shipping\WrongHubBox;
-use App\Support\Boxes\BoxSets;
-use App\Support\Photos\PhotoShrinker;
-use App\Support\Shipping\Shipments;
-use App\Support\Tracking\Tracker;
-use Filament\Facades\Filament;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Facades\Auth;
-use Livewire\Attributes\Locked;
-use Livewire\Attributes\Url;
-use Livewire\WithFileUploads;
-
-/** One sea shipment: its steps, details, port check, cost, and receiving at the partner hub. */
-abstract class SeaShipmentPage extends Page
-{
-    use WithFileUploads;
-
-    protected string $view = 'filament.shipping.detail';
-
-    protected static bool $shouldRegisterNavigation = false;
-
-    protected static ?string $slug = 'sea-shipment';
-
-    /** Partner hub panel: may only press Arrived, Picked up and finish receiving. */
-    protected static bool $hubSide = false;
-
-    #[Url(as: 'shipment')]
-    #[Locked]
-    public int $shipmentId = 0;
-
-    public array $f = [];
-
-    public $sealPhoto = null;
-
-    public $receipt = null;
-
-    /** The "Change trip" list is open. */
-    public bool $changing = false;
-
-    public string $changeSearch = '';
+    public ?string $before = null;
 
     public static function canAccess(): bool
     {
-        return Shipments::ready() && parent::canAccess();
+        return (bool) Auth::user()?->hasRole('super_admin');
     }
 
     public function mount(): void
     {
-        $this->shipmentId = (int) request()->query('shipment', $this->shipmentId);
-        $s = $this->shipment();
-        abort_unless($s, 404);
-        $this->fillForm($s);
-    }
-
-    protected function shipment(): ?SeaShipment
-    {
-        $hub = Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId());
-        $mine = (int) Auth::user()?->logistichub_id;
-        $q = Shipments::visible($hub)->when(static::$hubSide, fn ($q) => $q->where(fn ($q) => $q->where('logistichub_id', $mine)
-            ->when(Shipments::stopsReady(), fn ($q) => $q->orWhereIn('id', \App\Models\Shipping\SeaShipmentStop::where('logistichub_id', $mine)->select('sea_shipment_id')))));
-
-        return $q->find($this->shipmentId);
-    }
-
-    protected function fillForm(SeaShipment $s): void
-    {
-        $lcl = \App\Support\Shipping\SeaTrucks::ready() ? ['forwarder', 'waybill_no', 'charge_basis', 'charge_rate', 'hand_over_at', 'pick_up_at'] : [];
-        if (\Illuminate\Support\Facades\Schema::hasColumn('sea_shipments', 'forwarder_id')) {
-            $lcl = array_merge($lcl, ['forwarder_id', 'hand_over_branch_id', 'pick_up_branch_id']);
+        $this->provider = Sms::provider();
+        $this->sender = Sms::sender();
+        $this->limit = (string) Sms::limit();
+        $this->officePhone = Sms::officePhone();
+        $this->language = Sms::language();
+        foreach (array_keys(Sms::KINDS) as $k) {
+            $this->enabled[$k] = Sms::on($k);
         }
-        foreach (array_merge(['mode', 'van_no', 'van_size', 'seal_no', 'shipping_line', 'vessel', 'voyage', 'bl_no', 'port_from', 'port_to', 'port_check', 'port_count', 'port_reason', 'cost_freight', 'cost_trucking', 'cost_port', 'cost_other', 'note'], $lcl) as $k) {
-            $this->f[$k] = (string) ($s->{$k} ?? '');
-        }
-        $this->truckCost = \App\Support\Shipping\SeaTrucks::ready()
-            ? \App\Support\Shipping\SeaTrucks::trucks($s)->mapWithKeys(fn ($t) => [$t['tripId'] => $t['cost'] !== null ? (string) $t['cost'] : ''])->all() : [];
-        $this->f['etd'] = $s->etd?->toDateString() ?? '';
-        $this->f['eta'] = $s->eta?->toDateString() ?? '';
+        $this->loadText();
     }
 
-    public function getTitle(): string|Htmlable
+    protected function loadText(): void
     {
-        $s = $this->shipment();
-
-        return $s ? $s->code.' → '.($s->hub?->hub_name ?? '') : 'Sea shipment';
+        $this->text = Templates::get($this->kind, $this->lang);
+        $this->reset('aiNote', 'aiError', 'before');
     }
 
-    public function save(): void
+    public function pick(string $provider): void
     {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        abort_unless($s, 404);
-        foreach (['cost_freight', 'cost_trucking', 'cost_port', 'cost_other', 'charge_rate'] as $k) {
-            if (array_key_exists($k, $this->f)) {
-                $this->f[$k] = str_replace([',', '₱', ' '], '', (string) $this->f[$k]);
-            }
+        if (isset(Sms::PROVIDERS[$provider])) {
+            $this->provider = $provider;
+            AppSetting::put('sms.provider', $provider);
+            $this->reset('key', 'testResult');
         }
+    }
+
+    public function saveSetup(): void
+    {
         $this->validate([
-            'f.mode' => 'required|in:'.implode(',', array_keys(Shipments::MODES)),
-            'f.port_check' => 'required|in:'.implode(',', array_keys(Shipments::PORT_CHECKS)),
-            'f.van_no' => 'nullable|string|max:20', 'f.van_size' => 'nullable|string|max:10', 'f.seal_no' => 'nullable|string|max:30',
-            'f.shipping_line' => 'nullable|string|max:80', 'f.vessel' => 'nullable|string|max:80', 'f.voyage' => 'nullable|string|max:30', 'f.bl_no' => 'nullable|string|max:40',
-            'f.port_from' => 'nullable|string|max:80', 'f.port_to' => 'nullable|string|max:80', 'f.etd' => 'nullable|date', 'f.eta' => 'nullable|date',
-            'f.port_count' => 'nullable|integer|min:0|max:100000', 'f.port_reason' => 'nullable|string|max:200',
-            'f.cost_freight' => 'nullable|numeric|min:0', 'f.cost_trucking' => 'nullable|numeric|min:0', 'f.cost_port' => 'nullable|numeric|min:0', 'f.cost_other' => 'nullable|numeric|min:0',
-            'f.note' => 'nullable|string|max:500',
-            'f.forwarder' => 'nullable|string|max:80', 'f.waybill_no' => 'nullable|string|max:40', 'f.charge_basis' => 'nullable|in:'.implode(',', array_keys(Shipments::CHARGES)),
-            'f.charge_rate' => 'nullable|numeric|min:0', 'f.hand_over_at' => 'nullable|string|max:160', 'f.pick_up_at' => 'nullable|string|max:160',
-            'f.forwarder_id' => 'nullable|integer', 'f.hand_over_branch_id' => 'nullable|integer', 'f.pick_up_branch_id' => 'nullable|integer',
-            'sealPhoto' => 'nullable|image|max:12288', 'receipt' => 'nullable|image|max:12288',
-        ]);
-        $data = collect($this->f)->map(fn ($v) => $v === '' ? null : $v)->all();
-        // board 64: the forwarder and its branches come from Settings → Forwarders; the text follows them
-        if (! empty($data['forwarder_id']) && ($fw = \App\Models\Shipping\Forwarder::find($data['forwarder_id']))) {
-            $data['forwarder'] = $fw->name;
-            foreach (['hand_over_branch_id' => 'hand_over_at', 'pick_up_branch_id' => 'pick_up_at'] as $id => $text) {
-                $b = ! empty($data[$id]) ? \App\Models\Shipping\ForwarderBranch::where('forwarder_id', $fw->id)->find($data[$id]) : null;
-                $data[$id] = $b?->id;
-                if ($b) {
-                    $data[$text] = $b->line();
-                }
+            'key' => ['nullable', 'string', 'max:300', 'regex:/^\S+$/'],
+            'sender' => ['nullable', 'string', 'max:40'],
+            'limit' => ['required', 'integer', 'min:0', 'max:1000000'],
+            'officePhone' => ['nullable', 'string', 'max:40'],
+            'language' => ['required', 'in:auto,en,tl,ceb'],
+        ], ['key.regex' => 'The key has a space in it. Paste it again.']);
+        if (trim($this->key) !== '') {
+            Sms::putKey($this->provider, $this->key);
+            $this->key = '';
+        }
+        AppSetting::put('sms.sender', trim($this->sender));
+        AppSetting::put('sms.limit', (int) $this->limit);
+        AppSetting::put('sms.office_phone', trim($this->officePhone));
+        AppSetting::put('sms.language', $this->language);
+        Notification::make()->title('SMS settings saved')->success()->send();
+    }
+
+    public function removeKey(): void
+    {
+        Sms::putKey($this->provider, null);
+        Notification::make()->title('Key removed: no texts are sent')->send();
+    }
+
+    public function test(): void
+    {
+        $this->testOk = false;
+        if (! Phone::clean($this->testNumber)) {
+            $this->testResult = 'Type a mobile number like 0917 123 4567.';
+
+            return;
+        }
+        $row = SmsSender::send('test', $this->testNumber, Auth::user()->full_name, 'Test from the dispatch system: SMS is working.', ['user_id' => Auth::id()]);
+        $this->testOk = $row->status === 'sent';
+        $this->testResult = match ($row->status) {
+            'sent' => '✓ Sent to '.Phone::pretty($row->number).' · 1 text · check your phone',
+            'no_key' => Sms::PROVIDERS[$this->provider][2] ? 'Save the API key first.' : Sms::PROVIDERS[$this->provider][0].' is not connected yet.',
+            'opted_out' => 'This number replied STOP or was stopped in the SMS log.',
+            default => 'Did not send: '.str((string) $row->error)->limit(200),
+        };
+    }
+
+    public function toggle(string $kind): void
+    {
+        if (isset(Sms::KINDS[$kind])) {
+            $this->enabled[$kind] = ! ($this->enabled[$kind] ?? false);
+            AppSetting::put('sms.on.'.$kind, $this->enabled[$kind] ? 1 : 0);
+        }
+    }
+
+    public function edit(string $kind, ?string $lang = null): void
+    {
+        if (isset(Sms::KINDS[$kind])) {
+            $this->kind = $kind;
+            $this->lang = isset(Templates::LANGS[$lang ?? $this->lang]) ? ($lang ?? $this->lang) : 'en';
+            $this->loadText();
+        }
+    }
+
+    public function saveText(): void
+    {
+        $this->validate(['text' => ['required', 'string', 'max:600']]);
+        $unknown = array_diff(Templates::blanksIn($this->text), Templates::BLANKS);
+        if ($unknown) {
+            $this->addError('text', 'Unknown blank: '.implode(', ', $unknown).'. Use only the blanks listed.');
+
+            return;
+        }
+        Templates::put($this->kind, $this->lang, $this->text);
+        $this->reset('aiNote', 'before');
+        Notification::make()->title('Message saved')->success()->send();
+    }
+
+    public function resetText(): void
+    {
+        Templates::put($this->kind, $this->lang, null);
+        $this->loadText();
+    }
+
+    /** AI SMS writer: short, friendly, or translate (tl / ceb / en). */
+    public function ai(string $action): void
+    {
+        $this->reset('aiError');
+        if (! isset(SmsWriter::ACTIONS[$action])) {
+            return;
+        }
+        try {
+            $res = SmsWriter::rewrite($this->text, $action);
+            $this->before = $this->text;
+            if (in_array($action, ['tl', 'ceb', 'en'], true)) {
+                // a translation goes to that language's text
+                $this->lang = $action;
             }
-        }
-        if ($data['port_count'] !== null && (int) $data['port_count'] !== (int) $s->port_count) {
-            $data['port_by'] = Auth::id();
-            $data['port_at'] = now();
-        }
-        foreach (['sealPhoto' => 'seal_photo', 'receipt' => 'port_receipt'] as $prop => $col) {
-            if ($this->{$prop}) {
-                $path = $this->{$prop}->store(\App\Support\Photos\Storage\PhotoFolders::dir('shipments', $s->code ?? null), 'public');
-                PhotoShrinker::file('public', $path);
-                $data[$col] = $path;
-                $this->{$prop} = null;
-            }
-        }
-        $s->update($data);
-        Notification::make()->title('Saved')->success()->send();
-    }
-
-    public function advance(): void
-    {
-        $s = $this->shipment();
-        abort_unless($s, 404);
-        $to = Shipments::next($s);
-        if (! $to || ($to === 'received')) {
-            return;
-        }
-        if (static::$hubSide && ! in_array($to, ['arrived', 'picked_up'], true)) {
-            abort(403);
-        }
-        if (! Shipments::move($s, $to)) {
-            Notification::make()->title('Not yet')->body(implode(' ', Shipments::blockers($s, $to)))->warning()->send();
-
-            return;
-        }
-        Notification::make()->title(Shipments::label($s->fresh(), $to))->success()->send();
-    }
-
-    public function openChange(bool $open = true): void
-    {
-        $this->changing = $open && ! static::$hubSide;
-        $this->changeSearch = '';
-    }
-
-    public function changeTrip(int $tripId): void
-    {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        $trip = Shipments::tripsFor(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()), true)->firstWhere('id', $tripId);
-        if ($s && $trip && Shipments::changeTrip($s, $trip)) {
-            $this->changing = false;
-            Notification::make()->title($s->fresh()->code.' now uses trip '.$trip->trip_number)->success()->send();
+            $this->text = $res['text'];
+            $this->aiNote = $res['note'].' Press Save message to keep it.';
+        } catch (Throwable $e) {
+            $this->aiError = $e instanceof AiUnavailable ? $e->getMessage() : 'The AI could not do it: '.str($e->getMessage())->limit(160);
         }
     }
 
-    public function removeShipment(): void
+    public function undoAi(): void
     {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        if ($s && Shipments::remove($s)) {
-            Notification::make()->title($s->code.' removed')->body('Trip '.$s->trip?->trip_number.' and its boxes stay as they are.')->success()->send();
-            $this->redirect(str_replace('SeaShipment', 'SeaShipments', static::class)::getUrl());
+        if ($this->before !== null) {
+            $this->text = $this->before;
+            $this->reset('aiNote', 'before');
         }
-    }
-
-    public function finishReceiving(): void
-    {
-        $s = $this->shipment();
-        abort_unless($s && in_array($s->status, ['sailed', 'arrived', 'picked_up'], true), 404);
-        abort_unless(static::$hubSide || Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()) === null, 403);
-        $hubId = static::$hubSide ? (int) Auth::user()?->logistichub_id : null;
-        $stop = $hubId ? Shipments::stopFor($s, $hubId) : Shipments::currentStop($s);
-        abort_unless($stop && ! $stop->received_at && $this->isTurnOf($s, $stop), 403);
-        $made = Shipments::finishReceiving($s, null, (int) $stop->logistichub_id);
-        $next = Shipments::currentStop($s->fresh());
-        Notification::make()->title(($stop->hub?->hub_name ?? $s->code).' received'.($next ? ' · passed on to '.$next->hub?->hub_name : ''))
-            ->body($made ? "{$made} missing ".str('box')->plural($made).': an Invoice Issue was opened for each.' : 'Every box arrived.')->success()->send();
-    }
-
-    /** Every stop before this one is received (one container, more hubs). */
-    protected function isTurnOf(SeaShipment $s, \App\Models\Shipping\SeaShipmentStop $stop): bool
-    {
-        return Shipments::stops($s)->every(fn ($x) => $x->stop >= $stop->stop || $x->received_at);
-    }
-
-    /** While preparing: put another hub's trip in this container (it unloads after the others). */
-    public function addStop(int $tripId): void
-    {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        $trip = Shipments::tripsFor(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()), true)->firstWhere('id', $tripId);
-        if (! $s || ! $trip) {
-            return;
-        }
-        if ($clash = Shipments::portClash([$s->trip, $trip])) {
-            Notification::make()->title('Different ports: '.implode(' and ', $clash))->body('One container goes to one port. Make another sea shipment for that trip.')->warning()->send();
-
-            return;
-        }
-        if (Shipments::addStop($s, $trip)) {
-            $this->changing = false;
-            Notification::make()->title('Trip '.$trip->trip_number.' ('.$trip->destination?->hub_name.') is now in this container')->success()->send();
-        }
-    }
-
-    public function removeStop(int $tripId): void
-    {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        if ($s && Shipments::removeStop($s, $tripId)) {
-            Notification::make()->title('Trip taken out of this container')->body('The trip and its boxes stay as they are.')->success()->send();
-        }
-    }
-
-    public bool $adding = false;
-
-    /** Board 62: Container, RoRo or LCL, from the buttons at the top (until the truck leaves). */
-    public function setMode(string $mode): void
-    {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        if (! $s || ! array_key_exists($mode, Shipments::MODES) || ! in_array($s->status, ['preparing', 'sealed'], true)) {
-            return;
-        }
-        $s->update(match ($mode) {
-            'roro' => ['mode' => 'roro', 'port_check' => 'off', 'port_reason' => $s->port_reason ?: 'RoRo: the truck drives onto the ferry'],
-            'lcl' => ['mode' => 'lcl', 'port_check' => 'count'],
-            default => ['mode' => 'container', 'port_check' => $s->port_check === 'off' && $s->mode === 'roro' ? 'count' : $s->port_check],
-        });
-        $this->fillForm($s->fresh());
-    }
-
-    /** Board 64: pick the forwarder; its usual rate fills in. */
-    public function pickForwarder(int $id): void
-    {
-        abort_if(static::$hubSide, 403);
-        $fw = \App\Models\Shipping\Forwarder::find($id);
-        if (! $fw) {
-            return;
-        }
-        $this->f['forwarder_id'] = (string) $fw->id;
-        $this->f['forwarder'] = $fw->name;
-        $this->f['charge_basis'] = $this->f['charge_basis'] ?: (string) $fw->charge_basis;
-        $this->f['charge_rate'] = $this->f['charge_rate'] ?: (string) ($fw->charge_rate ?? '');
-        $mine = $fw->branches()->pluck('id')->map(fn ($i) => (string) $i)->all();
-        foreach (['hand_over_branch_id', 'pick_up_branch_id'] as $k) {
-            if (! in_array((string) ($this->f[$k] ?? ''), $mine, true)) {
-                $this->f[$k] = '';
-            }
-        }
-    }
-
-    /** Board 64: ＋ New branch for the chosen forwarder, right from the shipment. */
-    public function newBranchAction(): \Filament\Actions\Action
-    {
-        return \Filament\Actions\Action::make('newBranch')->modalWidth('lg')
-            ->modalHeading(fn () => 'New branch · '.(\App\Models\Shipping\Forwarder::find((int) ($this->f['forwarder_id'] ?? 0))?->name ?? ''))
-            ->schema([
-                \Filament\Forms\Components\Select::make('for')->label('Use it as')->options(['pick_up_branch_id' => 'Pick up at (the hub goes here)', 'hand_over_branch_id' => 'Hand over at (our truck goes here)'])->default('pick_up_branch_id')->required(),
-                \Filament\Forms\Components\TextInput::make('name')->label('Branch')->required()->maxLength(80)->placeholder('Cebu · Pier 3'),
-                \Filament\Forms\Components\TextInput::make('address')->maxLength(200),
-                \Filament\Forms\Components\TextInput::make('hours')->maxLength(60)->placeholder('8 AM–5 PM'),
-                \Filament\Forms\Components\TextInput::make('phone')->label('Contact no.')->maxLength(40),
-            ])
-            ->action(function (array $data) {
-                $fid = (int) ($this->f['forwarder_id'] ?? 0);
-                if (static::$hubSide || ! $fid) {
-                    return;
-                }
-                $b = \App\Models\Shipping\ForwarderBranch::create(['forwarder_id' => $fid] + collect($data)->only(['name', 'address', 'hours', 'phone'])->all());
-                $this->f[$data['for']] = (string) $b->id;
-                Notification::make()->title($b->name.' added to the forwarder')->body('Press Save to keep it on this shipment.')->success()->send();
-            });
-    }
-
-    /** "+ Add a second truck" list is open. */
-    public bool $second = false;
-
-    /** truck picked for a trip in that list */
-    public array $secondTruck = [];
-
-    public function useSecondTruck(int $tripId): void
-    {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        $truck = (int) ($this->secondTruck[$tripId] ?? 0) ?: null;
-        if ($s && \App\Support\Shipping\SeaTrucks::ownTruck($s, $tripId, $truck)) {
-            $this->second = false;
-            Notification::make()->title('Second truck added')->success()->send();
-        } else {
-            Notification::make()->title('Pick the truck for that trip first')->warning()->send();
-        }
-    }
-
-    /** Board 62: this trip goes with the main truck. */
-    public function goWithMain(int $tripId): void
-    {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        if ($s && \App\Support\Shipping\SeaTrucks::goWithMain($s, $tripId)) {
-            Notification::make()->title('It goes with the main truck now')->body('Load it on the main truck\'s trip in the Scan app.')->success()->send();
-        }
-    }
-
-    /** Board 62: this trip keeps its own truck (a second truck). */
-    public function ownTruck(int $tripId): void
-    {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        if ($s && \App\Support\Shipping\SeaTrucks::ownTruck($s, $tripId)) {
-            Notification::make()->title('Second truck: this trip uses its own truck')->success()->send();
-        } else {
-            Notification::make()->title('This trip has no truck of its own')->body('Give the trip a truck first (Delivery trips), then press this again.')->warning()->send();
-        }
-    }
-
-    /** @var array<int, string> trucking per truck trip */
-    public array $truckCost = [];
-
-    public function saveTruckCost(int $tripId): void
-    {
-        abort_if(static::$hubSide, 403);
-        $s = $this->shipment();
-        $v = str_replace([',', '₱', ' '], '', (string) ($this->truckCost[$tripId] ?? ''));
-        if (! $s || ($v !== '' && ! is_numeric($v))) {
-            return;
-        }
-        \App\Support\Shipping\SeaTrucks::setCost($s, $tripId, $v === '' ? null : (float) $v);
-        $this->fillForm($s->fresh());
-        Notification::make()->title('Trucking saved')->success()->send();
-    }
-
-    public function openAdd(bool $open = true): void
-    {
-        $this->adding = $open && ! static::$hubSide;
-        $this->changing = false;
-        $this->changeSearch = '';
     }
 
     protected function getViewData(): array
     {
-        $s = $this->shipment();
-        $to = Shipments::next($s);
+        $sample = ['name' => 'Liza', 'boxes' => '52211, 52212', 'box_count' => 2, 'truck' => 'ABC 1234', 'driver' => 'Dan', 'time' => '10:42 AM',
+            'minutes' => 20, 'reason' => 'nobody was home', 'next_day' => SmsEvents::nextDay(), 'hub' => 'Cebu Partner Hub', 'hub_phone' => $this->officePhone ?: '0917 555 0101',
+            'by' => 'Maria Dela Cruz', 'damage' => 'torn, crushed', 'receipt' => url('/r/7kq2m9xa1b')];
+        $preview = Templates::render($this->text, $sample);
+        $parts = Templates::parts($preview);
+        $month = SmsMessage::where('created_at', '>=', now()->startOfMonth())->get(['kind', 'status', 'parts']);
 
         return [
-            's' => $s,
-            'steps' => Shipments::steps($s),
-            'stepKeys' => array_keys(Shipments::steps($s)),
-            'next' => $to,
-            'nextLabel' => $to ? Shipments::label($s, $to) : null,
-            'blockers' => $to && $to !== 'received' ? Shipments::blockers($s, $to) : [],
-            'counts' => Shipments::counts($s),
-            'track' => Shipments::trackText($s),
-            'openSets' => \App\Models\Deliverylog::whereIn('id', Shipments::tripIds($s))->get()->flatMap(fn ($t) => BoxSets::openOnTrip($t))->all(),
-            'stops' => $stops = Shipments::stops($s),
-            'wrong' => WrongHubBox::with('invoice', 'correctHub')->where('sea_shipment_id', $s->id)->get(),
-            'modes' => Shipments::MODES,
-            'charges' => Shipments::CHARGES,
-            'forwarders' => \Illuminate\Support\Facades\Schema::hasTable('forwarders') ? \App\Models\Shipping\Forwarder::with('branches')->where(fn ($q) => $q->where('is_active', true)->orWhere('id', (int) ($this->f['forwarder_id'] ?? 0)))->orderBy('name')->get() : collect(),
-            'ports' => \Illuminate\Support\Facades\Schema::hasTable('ports') ? \App\Models\Shipping\Port::where('is_active', true)->orderBy('name')->pluck('name') : collect(),
-            'stopBoxes' => \App\Models\Tripinvoice::whereIn('deliverylog_id', Shipments::tripIds($s))->selectRaw('deliverylog_id, count(*) n')->groupBy('deliverylog_id')->pluck('n', 'deliverylog_id'),
-            'hubTrucks' => $this->second ? \App\Models\Truck::where('is_active', 1)->where('logistichub_id', $s->trip?->logistichub_id)->orderBy('plate_no')->pluck('plate_no', 'id') : collect(),
-            'trucks' => $trucks = \App\Support\Shipping\SeaTrucks::ready() ? \App\Support\Shipping\SeaTrucks::trucks($s) : collect(),
-            'canTruck' => ! static::$hubSide && \App\Support\Shipping\SeaTrucks::ready() && \App\Support\Shipping\SeaTrucks::canChange($s),
-            'carrierPlate' => fn ($st) => \App\Support\Shipping\SeaTrucks::ready() ? $trucks->first(fn ($t) => $t['stops']->contains('deliverylog_id', $st->deliverylog_id))['plate'] ?? null : null,
-            'rides' => fn ($st) => \App\Support\Shipping\SeaTrucks::ready() && $st->exists && \App\Support\Shipping\SeaTrucks::rides($s, $st),
-            'checks' => Shipments::PORT_CHECKS,
-            'hubSide' => static::$hubSide,
-            'canPress' => $to && $to !== 'received' && (! static::$hubSide || in_array($to, ['arrived', 'picked_up'], true)),
-            'receiveStop' => $rs = in_array($s->status, ['sailed', 'arrived', 'picked_up'], true) && (static::$hubSide || Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()) === null)
-                ? (static::$hubSide ? Shipments::stopFor($s, (int) Auth::user()?->logistichub_id) : Shipments::currentStop($s)) : null,
-            'canReceive' => $rs && ! $rs->received_at && $this->isTurnOf($s, $rs),
-            'nextAfter' => $rs ? $stops->first(fn ($x) => $x->stop > $rs->stop && ! $x->received_at)?->hub?->hub_name : null,
-            'addTrips' => $this->adding ? Shipments::tripsFor(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()))->filter(fn ($t) => ! Shipments::portClash([$s->trip, $t])) : collect(),
-            'whenOf' => fn ($st) => Shipments::when($s, $st),
-            'changeTrips' => $this->changing ? Shipments::tripsFor(Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()))
-                ->filter(fn ($t) => $this->changeSearch === '' || collect(preg_split('/\s+/', mb_strtolower(trim($this->changeSearch))))->filter()
-                    ->every(fn ($w) => str_contains(mb_strtolower($t->trip_number.' '.$t->destination?->hub_name.' '.$t->truck?->plate_no), $w)))->take(20) : collect(),
+            'providers' => Sms::PROVIDERS,
+            'masked' => Sms::masked($this->provider),
+            'ready' => Sms::ready(),
+            'used' => Sms::usedThisMonth(),
+            'kinds' => Sms::KINDS,
+            'counts' => $month->where('status', 'sent')->countBy('kind'),
+            'langs' => Templates::LANGS,
+            'blanks' => Templates::BLANKS,
+            'preview' => $preview,
+            'parts' => $parts,
+            'chars' => mb_strlen($preview),
+            'unknown' => array_diff(Templates::blanksIn($this->text), Templates::BLANKS),
+            'emoji' => (bool) preg_match('/[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]/u', $this->text),
+            'aiOn' => Ai::enabled('sms_writer'),
+            'aiSwitched' => Ai::switchedOn('sms_writer'),
+            'badNumbers' => SmsMessage::where('status', 'bad_number')->where('created_at', '>=', now()->subDays(7))->count(),
+            'others' => collect(Templates::LANGS)->keys()->reject(fn ($l) => $l === $this->lang)->mapWithKeys(fn ($l) => [$l => Templates::get($this->kind, $l)]),
         ];
     }
 }
-DISPATCH_FILE_END_20
+DISPATCH_FILE_END_2
 
-# ---------------------------------------------------------------- app/Filament/Shared/Trucks/TruckEditorPage.php
-mkdir -p 'app/Filament/Shared/Trucks'
-cat > 'app/Filament/Shared/Trucks/TruckEditorPage.php' <<'DISPATCH_FILE_END_21'
+# ---------------------------------------------------------------- app/Filament/Shared/Deliveries/RedeliveryPage.php
+mkdir -p 'app/Filament/Shared/Deliveries'
+cat > 'app/Filament/Shared/Deliveries/RedeliveryPage.php' <<'DISPATCH_FILE_END_3'
 <?php
 
-namespace App\Filament\Shared\Trucks;
+namespace App\Filament\Shared\Deliveries;
 
-use App\Models\Logistichub;
-use App\Models\RentalCompany;
-use App\Models\Truck;
-use App\Support\Photos\PhotoShrinker;
-use App\Support\Rentals;
-use App\Support\Tracking\Tracker;
-use App\Support\TruckDuplicates;
-use App\Support\TruckSpace;
-use Filament\Facades\Filament;
+use App\Models\DeliveryAttempt;
+use App\Support\Deliveries\NextTry;
+use Carbon\Carbon;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Carbon;
+use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
-use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Schema;
 use Livewire\Attributes\Url;
-use Livewire\WithFileUploads;
 
-/** Add or edit a truck on one page: live preview on the left, the form on the right. */
-class TruckEditorPage extends Page
+/**
+ * Part 44 (board 69): boxes that could not be delivered, so none is forgotten.
+ * Due today / Overdue / On hold (a later day) / Needs office (after 3 tries, or only the office can fix it).
+ */
+class RedeliveryPage extends Page
 {
-    use WithFileUploads;
+    protected string $view = 'filament.deliveries.redelivery';
 
-    protected string $view = 'filament.trucks.editor';
+    protected static ?string $slug = 'redelivery';
 
-    protected static ?string $slug = 'truck-edit';
+    protected static string|\BackedEnum|null $navigationIcon = Heroicon::OutlinedArrowPath;
 
-    protected static bool $shouldRegisterNavigation = false;
+    protected static ?string $title = 'Redelivery';
 
-    /** Kind tiles: label, hint, usual space, drawing length. */
-    public const KINDS = [
-        'van' => ['Van', 'up to 20', 20, 14],
-        '4w' => ['4-wheeler', 'about 30', 30, 20],
-        '6w' => ['6-wheeler', 'about 50', 50, 28],
-        '10w' => ['10-wheeler', 'about 80', 80, 38],
-        'other' => ['Other', 'type it', 50, 24],
-    ];
-
-    public const RATES = ['trip' => ['Per trip', 'a trip', 'Each trip costs this'], 'day' => ['Per day', 'a day', 'First trip of the day only'], 'km' => ['Per km', 'a km', 'Times the km the driver logs']];
-
-    #[Url(as: 'truck')]
-    public ?int $truckId = null;
-
-    public array $data = [];
-
-    public $photo = null;
-
-    public bool $removePhoto = false;
-
-    public bool $showSize = false;
+    #[Url]
+    public string $tab = 'today';
 
     public static function canAccess(): bool
     {
-        return Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId()) !== false;
+        return Schema::hasColumn('delivery_attempts', 'next_try_on') && (bool) Auth::user();
     }
 
-    protected function hub(): int|false|null
+    public static function getNavigationBadge(): ?string
     {
-        return Tracker::hubFor(Auth::user(), Filament::getCurrentPanel()?->getId());
-    }
-
-    public function truck(): ?Truck
-    {
-        $t = $this->truckId ? Truck::with('rentalCompany')->find($this->truckId) : null;
-
-        return $t && Tracker::canSeeTruck($this->hub(), $t) ? $t : null;
-    }
-
-    public static function kindOf(?string $category): string
-    {
-        $c = Str::lower((string) $category);
-
-        return match (true) {
-            $c === '' => '6w',
-            Str::contains($c, 'van') => 'van',
-            (bool) preg_match('/\b(10|ten)\b|10-?wheel|ten-?wheel/', $c) => '10w',
-            (bool) preg_match('/\b(6|six)\b|6-?wheel|six-?wheel/', $c) => '6w',
-            (bool) preg_match('/\b(4|four)\b|4-?wheel|four-?wheel/', $c) => '4w',
-            default => 'other',
-        };
-    }
-
-    public function mount(): void
-    {
-        $t = $this->truck();
-        abort_if($this->truckId && ! $t, 404);
-        $space = TruckSpace::ready();
-        $rate = $t ? collect(['trip' => $t->rate_trip, 'day' => $t->rate_day, 'km' => $t->rate_km])->filter(fn ($v) => $v > 0) : collect();
-        $kind = static::kindOf($t?->category);
-        $this->data = [
-            'plate_no' => $t?->plate_no ?? '', 'registration_no' => $t?->registration_no ?? '',
-            'logistichub_id' => $t?->logistichub_id ?? Auth::user()->logistichub_id,
-            'kind' => $kind, 'kindStart' => $t ? $kind : null, 'category' => $t?->category ?? '',
-            'make_model' => $t?->make_model ?? '', 'description' => $t?->description ?? '',
-            'ownership' => $t?->ownership === 'rental' ? 'rental' : 'own',
-            'rental_company_id' => $t?->rental_company_id, 'rental_driver' => $t?->rental_driver ?? '',
-            'rate_way' => $rate->keys()->first() ?? 'trip', 'rate' => $rate->first() !== null ? rtrim(rtrim(number_format((float) $rate->first(), 2, '.', ''), '0'), '.') : '',
-            'date_registered' => $t?->date_registered?->format('Y-m-d') ?? '', 'date_expired' => $t?->date_expired?->format('Y-m-d') ?? '',
-            'capacity' => $t?->capacity, 'note' => $t?->Note ?? '', 'is_active' => $t ? (bool) $t->is_active : true,
-            'cargo_length_cm' => $space ? $t?->cargo_length_cm : null, 'cargo_width_cm' => $space ? $t?->cargo_width_cm : null,
-            'cargo_height_cm' => $space ? $t?->cargo_height_cm : null, 'fill_pct' => $space ? $t?->fill_pct : null,
-            'newCompany' => '', 'newCompanyPhone' => '',
-        ];
-        $this->showSize = $space && $t && $t->cargo_length_cm;
-    }
-
-    public function getTitle(): string|Htmlable
-    {
-        return $this->truckId ? 'Edit '.$this->truck()?->plate_no : 'Add a truck';
-    }
-
-    public function getHeading(): string|Htmlable
-    {
-        return '';
-    }
-
-    public function pickKind(string $k): void
-    {
-        if (! isset(static::KINDS[$k])) {
-            return;
-        }
-        $this->data['kind'] = $k;
-        if ($k !== 'other') {
-            $this->data['capacity'] = static::KINDS[$k][2];
-        }
-    }
-
-    public function setOwnership(string $o): void
-    {
-        $this->data['ownership'] = $o === 'rental' ? 'rental' : 'own';
-    }
-
-    public function setRateWay(string $w): void
-    {
-        $this->data['rate_way'] = isset(static::RATES[$w]) ? $w : 'trip';
-    }
-
-    public function stepSpace(int $by): void
-    {
-        $now = (int) ($this->data['capacity'] ?: static::KINDS[$this->data['kind']][2]);
-        $this->data['capacity'] = max(5, $now + $by);
-    }
-
-    public function toggleActive(): void
-    {
-        $this->data['is_active'] = ! $this->data['is_active'];
-    }
-
-    public function addCompany(): void
-    {
-        $name = trim((string) $this->data['newCompany']);
-        if ($name === '') {
-            return;
-        }
-        $c = RentalCompany::create(['name' => $name, 'phone' => trim((string) $this->data['newCompanyPhone']) ?: null,
-            'logistichub_id' => is_int($this->hub()) ? $this->hub() : ($this->data['logistichub_id'] ?: null)]);
-        $this->data['rental_company_id'] = $c->id;
-        $this->data['newCompany'] = $this->data['newCompanyPhone'] = '';
-    }
-
-    /** The plate is already an inactive truck: switch that one back on instead of adding it again. */
-    public function reactivate(int $id): void
-    {
-        $t = Truck::find($id);
-        abort_unless($t && Tracker::canSeeTruck($this->hub(), $t), 404);
-        $t->update(['is_active' => true]);
-        Notification::make()->title($t->plate_no.' is active again')->success()->send();
-        $this->redirect($this->profileUrl($t) ?? $this->fleetUrl() ?? '/');
-    }
-
-    public function save(): void
-    {
-        $t = $this->truck();
-        $d = $this->data;
-        $rental = $d['ownership'] === 'rental';
-        $this->validate([
-            'data.plate_no' => ['required', 'string', 'max:255', Rule::unique('trucks', 'plate_no')->ignore($t?->id),
-                function ($attr, $value, $fail) use ($t) {
-                    if ($same = TruckDuplicates::existing($value, $t?->id)) {
-                        $fail('Another truck already has this plate ('.$same->plate_no.').');
-                    }
-                }],
-            'data.registration_no' => ['required', 'string', 'max:255'],
-            'data.category' => [$d['kind'] === 'other' ? 'required' : 'nullable', 'string', 'max:255'],
-            'data.logistichub_id' => ['required'],
-            'data.date_registered' => ['required', 'date'],
-            'data.date_expired' => ['required', 'date', 'after_or_equal:data.date_registered'],
-            'data.capacity' => ['nullable', 'integer', 'min:1', 'max:5000'],
-            'data.rental_company_id' => [$rental ? 'required' : 'nullable'],
-            'data.rate' => ['nullable', 'numeric', 'min:0'],
-            'photo' => ['nullable', 'image', 'max:8192'],
-        ], [
-            'data.plate_no.unique' => 'Another truck already has this plate.',
-            'data.rental_company_id.required' => 'Pick the rental company, or add a new one.',
-            'data.category.required' => 'Type what kind of truck it is.',
-            'data.date_expired.after_or_equal' => 'Expiry must be after the registration date.',
-        ], [
-            'data.plate_no' => 'plate number', 'data.registration_no' => 'registration no.', 'data.logistichub_id' => 'hub',
-            'data.date_registered' => 'registered date', 'data.date_expired' => 'expiry date',
-        ]);
-
-        $kindLabel = static::KINDS[$d['kind']][0];
-        $category = $d['kind'] === 'other' ? trim($d['category'])
-            : ($t && $d['kind'] === $d['kindStart'] && $t->category ? $t->category : $kindLabel);
-        $rate = $d['rate'] !== '' && $d['rate'] !== null ? (float) $d['rate'] : null;
-        $hub = is_int($this->hub()) ? $this->hub() : (int) $d['logistichub_id'];
-        $values = [
-            'plate_no' => TruckDuplicates::format($d['plate_no']), 'registration_no' => trim($d['registration_no']),
-            'category' => $category, 'description' => trim((string) $d['description']), 'make_model' => trim((string) $d['make_model']) ?: null,
-            'ownership' => $rental ? 'rental' : 'own',
-            'rental_company_id' => $rental ? $d['rental_company_id'] : null, 'rental_driver' => $rental ? (trim((string) $d['rental_driver']) ?: null) : null,
-            'rate_trip' => $rental && $d['rate_way'] === 'trip' ? $rate : null,
-            'rate_day' => $rental && $d['rate_way'] === 'day' ? $rate : null,
-            'rate_km' => $rental && $d['rate_way'] === 'km' ? $rate : null,
-            'date_registered' => $d['date_registered'], 'date_expired' => $d['date_expired'],
-            'capacity' => $d['capacity'] ? (int) $d['capacity'] : null, 'Note' => trim((string) $d['note']) ?: null,
-            'is_active' => (bool) $d['is_active'], 'logistichub_id' => $hub,
-        ];
-        if (TruckSpace::ready()) {
-            foreach (['cargo_length_cm', 'cargo_width_cm', 'cargo_height_cm', 'fill_pct'] as $k) {
-                $values[$k] = $d[$k] ? (int) $d[$k] : null;
-            }
-        }
-        if ($this->photo) {
-            $path = $this->photo->store('trucks', 'public');
-            PhotoShrinker::file('public', $path);
-            $values['truck_picture'] = $path;
-        } elseif ($this->removePhoto) {
-            $values['truck_picture'] = null;
-        }
-        if ($t) {
-            $t->update($values);
-        } else {
-            $t = Truck::create($values + ['user_id' => Auth::id()]);
-        }
-        Notification::make()->title($t->plate_no.($this->truckId ? ' saved' : ' added'))->success()->send();
-        $this->redirect($this->profileUrl($t) ?? $this->fleetUrl() ?? '/');
-    }
-
-    protected function profileUrl(?Truck $t): ?string
-    {
-        $p = str_replace('TruckEditor', 'TruckProfile', static::class);
-
-        return $t && static::class !== self::class && class_exists($p) ? $p::getUrl(['truck' => $t->id]) : null;
-    }
-
-    protected function fleetUrl(): ?string
-    {
-        $p = str_replace('TruckEditor', 'Fleet', static::class);
-
-        return static::class !== self::class && class_exists($p) ? $p::getUrl() : null;
-    }
-
-    public static function urlFor(?Truck $t = null): ?string
-    {
-        if (static::class === self::class) {
+        if (! static::canAccess()) {
             return null;
         }
+        $c = NextTry::counts(NextTry::open()->get(['id', 'next_try_on', 'needs_office']));
+        $n = $c['today'] + $c['overdue'] + $c['office'];
 
-        return static::getUrl($t ? ['truck' => $t->id] : []);
+        return $n ? (string) $n : null;
+    }
+
+    public static function getNavigationBadgeColor(): ?string
+    {
+        return 'warning';
+    }
+
+    public function setTab(string $t): void
+    {
+        $this->tab = in_array($t, ['today', 'overdue', 'hold', 'office'], true) ? $t : 'today';
+    }
+
+    /** The office picks the day of the next try (also takes it off "Needs office"). */
+    public function setDay(int $id, string $day): void
+    {
+        $a = NextTry::open()->find($id);
+        $d = rescue(fn () => Carbon::parse($day)->startOfDay(), null, false);
+        if (! $a || ! $d) {
+            return;
+        }
+        if ($d->lt(today())) {
+            $d = today();
+        }
+        $a->update(['next_try_on' => $d->toDateString(), 'needs_office' => false]);
+        Notification::make()->title("{$a->invoice?->invoice}: next try ".$d->format('D M j'))->success()->send();
+    }
+
+    public function toOffice(int $id): void
+    {
+        NextTry::open()->find($id)?->update(['needs_office' => true, 'next_try_on' => null]);
+    }
+
+    /** Closed by the office (returned to the sender, picked up, cancelled): off the list. */
+    public function close(int $id): void
+    {
+        $a = NextTry::open()->find($id);
+        if ($a) {
+            $a->update(['handled_at' => now(), 'handled_by' => Auth::id()]);
+            Notification::make()->title("{$a->invoice?->invoice} is off the redelivery list")->send();
+        }
     }
 
     protected function getViewData(): array
     {
-        $t = $this->truck();
-        $d = $this->data;
-        $kind = static::KINDS[$d['kind']] ?? static::KINDS['6w'];
-        $rental = $d['ownership'] === 'rental';
-        $company = $d['rental_company_id'] ? RentalCompany::find($d['rental_company_id']) : null;
-        $space = (int) ($d['capacity'] ?: $kind[2]);
-        $exp = $d['date_expired'] ? rescue(fn () => Carbon::parse($d['date_expired']), null, false) : null;
-        $expNote = match (true) {
-            ! $exp => ['Set the expiry date so we can remind you.', 'muted', 'not set'],
-            $exp->isPast() => ['Expired '.$exp->format('M j, Y').'. Renew it, then change the date.', 'bad', 'expired'],
-            $exp->lte(today()->addDays(30)) => ['Expires '.$exp->format('M j, Y').' (in '.today()->diffInDays($exp).' days)', 'warn', 'in '.today()->diffInDays($exp).' days'],
-            default => ['✓ Good until '.$exp->format('M j, Y').' ('.today()->diffForHumans($exp, ['syntax' => Carbon::DIFF_ABSOLUTE, 'parts' => 1]).' left)', 'ok', 'good for '.today()->diffForHumans($exp, ['syntax' => Carbon::DIFF_ABSOLUTE, 'parts' => 1])],
-        };
-        $rateLabel = $d['rate'] !== '' && $d['rate'] !== null && is_numeric($d['rate']) ? '₱'.number_format((float) $d['rate']).' '.static::RATES[$d['rate_way']][1] : 'no rate yet';
-        $bw = ['van' => 70, '4w' => 92, '6w' => 112, '10w' => 140, 'other' => 104][$d['kind']] ?? 112;
-        $booked = $t && $t->isRental() ? collect(Rentals::bookedDays($t, today()->startOfMonth()))->filter(fn ($day) => Carbon::parse($day)->gte(today()))->map(fn ($day) => Carbon::parse($day)->format('M j'))->values() : collect();
-        $next = $t && $t->isRental() ? Rentals::nextBooking($t) : null;
-        $hub = $this->hub();
-        $same = filled($d['plate_no']) ? TruckDuplicates::existing($d['plate_no'], $t?->id) : null;
-        $sameMine = $same && Tracker::canSeeTruck($hub, $same);
+        $all = NextTry::open()->with(['invoice:id,invoice,receiver_name,receiver_barangay,receiver_city,receiver_mobile_no', 'user:id,full_name', 'deliverylog:id,trip_number'])
+            ->orderBy('next_try_on')->orderBy('id')->get();
+        $tries = DeliveryAttempt::whereIn('invoice_id', $all->pluck('invoice_id'))->selectRaw('invoice_id, count(*) n')->groupBy('invoice_id')->pluck('n', 'invoice_id');
+        $rows = $all->filter(fn ($a) => NextTry::tab($a) === $this->tab)->values();
 
         return [
-            'same' => $same, 'sameMine' => $sameMine,
-            'sameUrl' => $sameMine ? $this->profileUrl($same) : null,
-            'sameStats' => $same ? TruckDuplicates::tripCount($same) : 0,
-            'plateSaved' => TruckDuplicates::format($d['plate_no']),
-            't' => $t, 'd' => $d, 'kinds' => static::KINDS, 'rates' => static::RATES, 'rental' => $rental,
-            'color' => $d['is_active'] ? ['van' => '#7a4fb0', '4w' => '#c97a00', '6w' => '#17895e', '10w' => '#1d6fb8', 'other' => '#6b7b88'][$d['kind']] : '#c3ccd4',
-            'bw' => $bw,
-            'kindLine' => collect([$d['kind'] === 'other' ? ($d['category'] ?: 'Other') : $kind[0], $d['make_model'] ?: null, $rental ? ($company?->name ?? 'rental') : null])->filter()->join(' · '),
-            'facts' => array_values(array_filter([
-                ['Space', 'about '.$space.' boxes', ''],
-                $rental ? ['Rental', $rateLabel, 'is-rent'] : null,
-                ['Registration', $expNote[2], $expNote[1] === 'muted' ? 'is-muted' : ($expNote[1] === 'ok' ? '' : 'is-'.$expNote[1])],
-            ])),
-            'expNote' => $expNote,
-            'usual' => $kind[2], 'kindName' => $kind[0],
-            'companies' => Rentals::companies(is_int($hub) ? $hub : null),
-            'hubs' => $hub === null ? Logistichub::orderBy('hub_name')->pluck('hub_name', 'id')->all() : [],
-            'hubName' => is_int($hub) ? Logistichub::find($hub)?->hub_name : null,
-            'booked' => $booked, 'next' => $next,
-            'rentalTabUrl' => $t ? (($u = $this->profileUrl($t)) ? $u.'&tab=rental' : null) : null,
-            'cancelUrl' => $this->profileUrl($t) ?? $this->fleetUrl(),
-            'fleetUrl' => $this->fleetUrl(),
-            'photoUrl' => $this->photo ? rescue(fn () => $this->photo->temporaryUrl(), null, false)
-                : ($t?->truck_picture && ! $this->removePhoto ? Storage::disk('public')->url($t->truck_picture) : null),
-            'spaceReady' => TruckSpace::ready(),
-            'spaceGuess' => TruckSpace::ready() && $d['cargo_length_cm'] && $d['cargo_width_cm'] && $d['cargo_height_cm']
-                ? TruckSpace::fit(new Truck(['cargo_length_cm' => $d['cargo_length_cm'], 'cargo_width_cm' => $d['cargo_width_cm'], 'cargo_height_cm' => $d['cargo_height_cm'], 'fill_pct' => $d['fill_pct']])) : null,
+            'counts' => NextTry::counts($all),
+            'rows' => $rows,
+            'tries' => $tries,
+            'choices' => NextTry::choices(),
+            'tabs' => ['today' => 'Due today', 'overdue' => 'Overdue', 'hold' => 'On hold', 'office' => 'Needs office'],
         ];
     }
 }
-DISPATCH_FILE_END_21
+DISPATCH_FILE_END_3
 
-# ---------------------------------------------------------------- app/Filament/Shared/UnloadContainerPage.php
-mkdir -p 'app/Filament/Shared'
-cat > 'app/Filament/Shared/UnloadContainerPage.php' <<'DISPATCH_FILE_END_22'
+# ---------------------------------------------------------------- app/Filament/Warehouse/Pages/Redelivery.php
+mkdir -p 'app/Filament/Warehouse/Pages'
+cat > 'app/Filament/Warehouse/Pages/Redelivery.php' <<'DISPATCH_FILE_END_4'
 <?php
 
-namespace App\Filament\Shared;
+namespace App\Filament\Warehouse\Pages;
 
-use App\Filament\Concerns\ScansInvoices;
-use App\Models\Boxes\WhSection;
-use App\Models\Boxes\WhSpot;
-use App\Models\Boxissue;
-use App\Models\Container;
-use App\Models\Invoice;
-use App\Models\Invoiceissue;
-use App\Models\Unmanifested;
-use App\Models\User;
-use App\Models\Whtripinvoice;
-use App\Support\Boxes\BoxSets;
-use App\Support\Boxes\Crossdock;
-use App\Support\Boxes\Sections;
-use App\Support\Boxes\TruckSets;
-use App\Support\Warehouses\Coverage;
-use Filament\Actions\Action;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\MarkdownEditor;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\Textarea;
-use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Filament\Schemas\Schema;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Auth;
-use Livewire\Attributes\Locked;
+use App\Filament\Shared\Deliveries\RedeliveryPage;
 
-/**
- * Scan station for unloading a shipping container: every box scanned is
- * marked verified. Boxes that are damaged can be reported, and boxes that
- * are not on the manifest can be recorded as unmanifested.
- */
-abstract class UnloadContainerPage extends Page
-{
-    use ScansInvoices;
+class Redelivery extends RedeliveryPage {}
+DISPATCH_FILE_END_4
 
-    protected string $view = 'filament.pages.scaninvoice';
-
-    /** The last code that was not found in the container (for the unmanifested form). */
-    #[Locked]
-    public ?string $missingCode = null;
-
-    /** Where the box just scanned goes: a section tile, or the waiting truck. */
-    public ?array $route = null;
-
-    /** The box's set: "Maria Santos · 2 of 3 · 1 more still in this container". */
-    public ?array $setInfo = null;
-
-    abstract protected function containerQuery(): Builder;
-
-    public function mount(): void
-    {
-        $this->form->fill();
-    }
-
-    public function form(Schema $schema): Schema
-    {
-        return $schema
-            ->statePath('data')
-            ->components([
-                Select::make('container_id')
-                    ->label('Container')
-                    ->placeholder('Choose the container you are unloading')
-                    ->searchable()
-                    ->live()
-                    ->required()
-                    ->afterStateUpdated(fn () => $this->reset('lastInvoiceId', 'lastStatus', 'lastMessage', 'missingCode'))
-                    ->options(fn () => $this->containerQuery()
-                        ->with('consolidator:id,company_name')
-                        ->latest('id')
-                        ->get()
-                        ->mapWithKeys(fn (Container $container) => [
-                            $container->id => collect([
-                                $container->container_no,
-                                $container->batch_no ? 'batch '.$container->batch_no : null,
-                                $container->batch_year,
-                                $container->consolidator?->company_name,
-                            ])->filter()->join(' · '),
-                        ])),
-            ]);
-    }
-
-    protected function selectionField(): ?string
-    {
-        return 'container_id';
-    }
-
-    protected function selectionLabel(): string
-    {
-        return 'a container';
-    }
-
-    public function stationHeading(): string
-    {
-        return 'Unload the container';
-    }
-
-    public function stationDescription(): string
-    {
-        return 'Pick the container, then scan each box as it comes off. Scanned boxes are marked verified.';
-    }
-
-    public function stationIcon(): string
-    {
-        return 'heroicon-o-archive-box-arrow-down';
-    }
-
-    public function progressLabel(): string
-    {
-        return 'Boxes verified in this container';
-    }
-
-    protected function selectedContainer(): ?Container
-    {
-        return $this->containerQuery()->find($this->data['container_id'] ?? null);
-    }
-
-    protected function handleScan(string $code): void
-    {
-        $container = $this->selectedContainer();
-
-        if (! $container) {
-            $this->scanResult('danger', 'That container is not available any more.');
-
-            return;
-        }
-
-        $this->missingCode = null;
-        $this->route = null;
-        $this->setInfo = null;
-
-        if ($section = Sections::fromCode($code)) {
-            $this->placeInSection($container, $section);
-
-            return;
-        }
-        if ($spot = Sections::spotFromCode($code)) {
-            $this->placeOnSpot($container, $spot);
-
-            return;
-        }
-
-        // board 58: two boxes with this number in the container still to unload → Which one?
-        $same = Invoice::where('container_id', $container->id)->where('invoice', $code)->orderBy('id')->get();
-        $invoice = $this->whichRow($code, $same, fn ($i) => $i, fn ($i) => (bool) $i->is_verified);
-        if ($invoice === false) {
-            return;
-        }
-
-        if (! $invoice) {
-            $this->missingCode = $code;
-            $other = $this->invoicesMatching($code)->first();
-
-            $this->scanResult(
-                'danger',
-                $other
-                    ? "{$code} is manifested in another container ({$other->container?->container_no})."
-                    : "{$code} is not on this container's manifest.",
-                $other,
-            );
-
-            return;
-        }
-
-        if ($invoice->is_verified) {
-            $who = $invoice->verified_by && $invoice->verified_by !== Auth::id() ? User::find($invoice->verified_by)?->first_name : null;
-            $when = $invoice->verified_at ? Carbon::parse($invoice->verified_at)->format('g:i A') : null;
-            $this->route = Sections::tile($invoice->whSection);
-            $this->scanResult('warning', $same->count() > 1 && $same->every(fn ($i) => $i->is_verified)
-                ? "Already unloaded: all {$same->count()} boxes with number {$code}. Leave this one."
-                : "{$code} was already verified".($who ? " by {$who}" : '').($when ? " at {$when}" : '').'. Not counted again.', $invoice);
-
-            return;
-        }
-
-        $invoice->forceFill(['is_verified' => true, 'verified_at' => now(), 'verified_by' => Auth::id()])->save();
-
-        $msg = $this->sendToSection($container, $invoice);
-        if ($same->count() > 1) {
-            $msg .= $this->whichSuffix($same->filter(fn ($i) => $i->is_verified || $i->is($invoice))->count(), $same->count(), $invoice);
-        }
-        $this->scanResult('success', $msg, $invoice);
-    }
-
-    /** After the box is verified: pick its section, or load it straight onto the waiting truck. */
-    protected function sendToSection(Container $container, Invoice $invoice): string
-    {
-        $code = $invoice->invoice;
-        $warehouseId = $this->warehouseId($container);
-        $section = Sections::forInvoice($invoice, $warehouseId);
-        $this->setInfo = BoxSets::atUnload($invoice);
-
-        // Two warehouses: a box that another warehouse delivers goes to the transfer for it.
-        if ($home = Coverage::transferTo($invoice, $warehouseId)) {
-            $to = Sections::of($warehouseId)->first(fn ($s) => (int) $s->to_warehouse_id === $home);
-            if ($to) {
-                $section = $to;
-            } else {
-                $name = Coverage::name($home);
-                $invoice->forceFill(['wh_section_id' => null, 'sectioned_at' => now()])->save();
-                $this->route = ['kind' => 'transfer', 'code' => 'T', 'name' => 'Transfer → '.$name, 'color' => '#c97a00'];
-
-                return "{$code} verified · transfer to {$name}.";
-            }
-        }
-
-        if (! $section) {
-            return "{$code} verified.";
-        }
-
-        if ($trip = Crossdock::load($invoice, $warehouseId, $section)) {
-            $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => null])->save();
-            $this->route = ['kind' => 'truck', 'code' => 'TRUCK', 'name' => $trip->warehouse?->name ?? $section->goesTo(), 'trip' => $trip->trip_number, 'plate' => $trip->truck?->plate_no, 'color' => '#e2700c'];
-            $this->setInfo = TruckSets::card($invoice, $trip, $warehouseId) ?? $this->setInfo;
-
-            return "{$code} verified · onto truck {$trip->trip_number}.";
-        }
-
-        $label = Sections::labelScan($warehouseId);
-        $invoice->forceFill(['wh_section_id' => $section->id, 'sectioned_at' => $label ? null : now()]
-            + (\Illuminate\Support\Facades\Schema::hasColumn('invoices', 'wh_spot_id') ? ['wh_spot_id' => null] : []))->save();
-        $this->route = Sections::tile($section) + ['pending' => $label, 'why' => $section->kind === 'check' ? Sections::whyCheck($invoice) : null]
-            + $this->spotChoice($section, $invoice);
-
-        return "{$code} verified · section {$section->code}.";
-    }
-
-    /** Spots of the section (optional, board 50): the crew scans the spot's QR, taps one, or skips. */
-    protected function spotChoice(WhSection $section, Invoice $invoice): array
-    {
-        $spots = Sections::spotsOf($section);
-
-        return $spots->isEmpty() ? [] : ['spots' => $spots->map(fn ($p) => ['id' => $p->id, 'code' => $p->code])->values()->all(), 'spot' => null, 'invoiceId' => $invoice->id];
-    }
-
-    /** Put the box on a spot of its section, or no spot (Skip). */
-    public function setSpot(int $invoiceId, ?int $spotId): bool
-    {
-        $container = $this->selectedContainer();
-        $invoice = $container ? Invoice::where('container_id', $container->id)->find($invoiceId) : null;
-        if (! $invoice || ! $invoice->wh_section_id) {
-            return false;
-        }
-        $spot = $spotId ? WhSpot::where('wh_section_id', $invoice->wh_section_id)->find($spotId) : null;
-        if ($spotId && ! $spot) {
-            return false;
-        }
-        $invoice->forceFill(['wh_spot_id' => $spot?->id])->save();
-        $section = $invoice->whSection;
-        $this->route = Sections::tile($section) + $this->spotChoice($section, $invoice);
-        $this->route['spot'] = $spot?->code ?? 'skip';
-        $this->lastInvoiceId = $invoice->id;
-        $this->lastStatus = 'success';
-        $this->lastMessage = $spot ? "{$invoice->invoice} on spot {$spot->code}." : "{$invoice->invoice} in section {$section?->code} (no spot).";
-
-        return true;
-    }
-
-    /** A spot's QR was scanned: the last box this person scanned for that section goes on it. */
-    protected function placeOnSpot(Container $container, WhSpot $spot): void
-    {
-        $box = Invoice::where('container_id', $container->id)->where('verified_by', Auth::id())->where('wh_section_id', $spot->wh_section_id)
-            ->orderByDesc('verified_at')->orderByDesc('id')->first();
-        $this->route = Sections::tile($spot->section);
-        if (! $box) {
-            $this->scanResult('warning', "Spot {$spot->code}: none of your boxes are for section {$spot->section?->code}.");
-
-            return;
-        }
-        $this->setSpot($box->id, $spot->id);
-        $this->scanResult('success', "{$box->invoice} on spot {$spot->code}.", $box);
-        $this->route = Sections::tile($spot->section) + $this->spotChoice($spot->section, $box);
-        $this->route['spot'] = $spot->code;
-    }
-
-    /** Section-label scan (when switched on): the boxes this person scanned for that section are now there. */
-    protected function placeInSection(Container $container, WhSection $section): void
-    {
-        $warehouseId = $this->warehouseId($container);
-        if (! Sections::labelScan($warehouseId)) {
-            $this->scanResult('warning', 'The section label scan is off: boxes are saved in their section when you scan them.');
-
-            return;
-        }
-        $pending = Invoice::where('container_id', $container->id)->where('verified_by', Auth::id())
-            ->whereNotNull('wh_section_id')->whereNull('sectioned_at')->get();
-        $here = Crossdock::here($warehouseId)->pluck('id');
-        if ($here->isNotEmpty()) {
-            $onTruck = Whtripinvoice::whereIn('whdeliverylog_id', $here)->whereIn('invoice_id', $pending->pluck('id'))->pluck('invoice_id')->all();
-            $pending = $pending->reject(fn ($b) => in_array($b->id, $onTruck, true));
-        }
-        $mine = $pending->where('wh_section_id', $section->id);
-        $other = $pending->where('wh_section_id', '!=', $section->id);
-        $this->route = Sections::tile($section);
-
-        if ($mine->isEmpty()) {
-            $this->scanResult('warning', $other->isNotEmpty()
-                ? 'Wrong section: your '.$other->count().' '.str('box')->plural($other->count()).' '.($other->count() === 1 ? 'is' : 'are').' for '.$other->map(fn ($b) => $b->whSection?->code)->unique()->join(', ').', not '.$section->code.'.'
-                : "Section {$section->code}: none of your boxes are waiting for it.");
-
-            return;
-        }
-        Invoice::whereIn('id', $mine->pluck('id'))->update(['sectioned_at' => now()]);
-        $this->scanResult('success', $mine->count().' '.str('box')->plural($mine->count())." saved in section {$section->code}"
-            .($other->isNotEmpty() ? ' · '.$other->count().' still for '.$other->map(fn ($b) => $b->whSection?->code)->unique()->join(', ') : '').'.');
-    }
-
-    protected function warehouseId(?Container $container): ?int
-    {
-        return $container?->warehouse_id ?? Auth::user()?->warehouse_id;
-    }
-
-    // ------------------------------------------------------------------ truck here (switched on in the transfer trip)
-
-    /** "Put in section instead": take the box off the truck and keep it in its section. */
-    public function putInSection(int $invoiceId): bool
-    {
-        $container = $this->selectedContainer();
-        $invoice = $container ? Invoice::where('container_id', $container->id)->find($invoiceId) : null;
-        $trip = $invoice ? Crossdock::tripOf($invoice, $this->warehouseId($container)) : null;
-        if (! $trip || ! Crossdock::unload($invoice, $trip)) {
-            return false;
-        }
-        $section = $invoice->whSection ?? Sections::forInvoice($invoice, $this->warehouseId($container));
-        $invoice->forceFill(['wh_section_id' => $section?->id, 'sectioned_at' => now()])->save();
-        $this->route = Sections::tile($section);
-        $this->lastInvoiceId = $invoice->id;
-        $this->lastStatus = 'success';
-        $this->lastMessage = "{$invoice->invoice} stays in section ".($section?->code ?? '').'. It goes on the next truck.';
-
-        return true;
-    }
-
-    /** TRUCK screen: "Bring it to the truck too" for another box of the customer that is in its section. */
-    public function addSetBox(int $ofInvoiceId, int $boxId): ?string
-    {
-        $container = $this->selectedContainer();
-        $of = $container ? Invoice::where('container_id', $container->id)->find($ofInvoiceId) : null;
-        $warehouseId = $this->warehouseId($container);
-        $trip = $of ? Crossdock::tripOf($of, $warehouseId) : null;
-        $box = $trip ? TruckSets::add($of, $boxId, $trip, $warehouseId) : null;
-        if (! $box) {
-            return null;
-        }
-        $this->setInfo = TruckSets::card($of, $trip, $warehouseId);
-
-        return $box->invoice;
-    }
-
-    /** The trucks here now at this warehouse (switched on in their transfer trip). */
-    public function truckStatus(): array
-    {
-        return Crossdock::status($this->warehouseId($this->selectedContainer()));
-    }
-
-    /** Who scanned how many boxes off this container. */
-    public function team(): array
-    {
-        $id = $this->data['container_id'] ?? null;
-        if (! $id) {
-            return [];
-        }
-        $counts = Invoice::where('container_id', $id)->whereNotNull('verified_by')->selectRaw('verified_by, count(*) n')->groupBy('verified_by')->pluck('n', 'verified_by');
-        $names = User::whereIn('id', $counts->keys())->pluck('first_name', 'id');
-
-        return $counts->sortDesc()->map(fn ($n, $uid) => ['name' => (int) $uid === Auth::id() ? 'You' : ($names[$uid] ?? '?'), 'n' => (int) $n, 'me' => (int) $uid === Auth::id()])->values()->all();
-    }
-
-    /** @return array{loaded: int, total: int, last?: ?string, issues?: int, unmanifested?: int} */
-    /**
-     * Progress of many containers in one database question (the Scan app list).
-     *
-     * @param  list<int>  $ids
-     * @return array<int, array{loaded: int, total: int}>
-     */
-    public function progressMany(array $ids): array
-    {
-        if (! $ids) {
-            return [];
-        }
-
-        return Invoice::whereIn('container_id', $ids)->selectRaw('container_id as c, count(*) as total, sum(case when is_verified = 1 then 1 else 0 end) as loaded')
-            ->groupBy('container_id')->toBase()->get()
-            ->mapWithKeys(fn ($r) => [(int) $r->c => ['loaded' => (int) $r->loaded, 'total' => (int) $r->total]])->all();
-    }
-
-    public function progress(): array
-    {
-        $containerId = $this->data['container_id'] ?? null;
-
-        if (! $containerId) {
-            return ['loaded' => 0, 'total' => 0];
-        }
-
-        $query = Invoice::where('container_id', $containerId);
-
-        return [
-            'loaded' => (clone $query)->where('is_verified', true)->count(),
-            'total' => $query->count(),
-            'last' => (clone $query)->max('verified_at'),
-            'issues' => Invoiceissue::where('container_id', $containerId)->count(),
-            'unmanifested' => Unmanifested::where('container_id', $containerId)->count(),
-        ];
-    }
-
-    public function household(): array
-    {
-        return $this->householdRows($this->lastInvoice(), fn (Invoice $box) => [
-            'trip' => $box->is_verified ? 'Verified' : 'Not scanned yet',
-            'done' => (bool) $box->is_verified,
-        ]);
-    }
-
-    public function reportIssueAction(): Action
-    {
-        return Action::make('reportIssue')
-            ->label('Report a problem')
-            ->icon(Heroicon::OutlinedExclamationTriangle)
-            ->color('danger')
-            ->outlined()
-            ->visible(fn () => $this->lastInvoiceId !== null && $this->lastInvoice()?->container_id == ($this->data['container_id'] ?? null))
-            ->modalHeading(fn () => 'Report a problem with '.$this->lastInvoice()?->invoice)
-            ->modalWidth('lg')
-            ->schema([
-                Select::make('boxissue_id')
-                    ->label('Problem')
-                    ->options(fn () => Boxissue::query()->orderBy('issue_type')->pluck('issue_type', 'id'))
-                    ->required(),
-                MarkdownEditor::make('remarks')
-                    ->label('Notes')
-                    ->toolbarButtons(['bold', 'italic', 'bulletList']),
-                FileUpload::make('attachment_pic')
-                    ->label('Photo')
-                    ->image()
-                    ->disk('public')
-                    ->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('damage'))
-                    ->visibility('private')
-                    ->required(),
-            ])
-            ->action(function (array $data): void {
-                $invoice = $this->lastInvoice();
-
-                if (! $invoice) {
-                    return;
-                }
-
-                Invoiceissue::create([
-                    'invoice' => $invoice->invoice,
-                    'invoice_id' => $invoice->id,
-                    'container_id' => $invoice->container_id,
-                    'boxissue_id' => $data['boxissue_id'],
-                    'remarks' => $data['remarks'] ?? null,
-                    'attachment_pic' => $data['attachment_pic'] ?? null,
-                    'user_id' => Auth::id(),
-                ]);
-
-                Notification::make()->title("Problem recorded for {$invoice->invoice}")->success()->send();
-            });
-    }
-
-    public function unmanifestedAction(): Action
-    {
-        return Action::make('unmanifested')
-            ->label('Record as unmanifested box')
-            ->icon(Heroicon::OutlinedDocumentPlus)
-            ->color('warning')
-            ->visible(fn () => filled($this->missingCode))
-            ->modalHeading(fn () => "Unmanifested box {$this->missingCode}")
-            ->modalDescription('This box is in the container but not on its manifest. Take a photo and add a note.')
-            ->modalWidth('lg')
-            ->schema([
-                FileUpload::make('attachment_pic')
-                    ->label('Photo')
-                    ->image()
-                    ->disk('public')
-                    ->directory(fn () => \App\Support\Photos\Storage\PhotoFolders::dir('unmanifested'))
-                    ->visibility('private')
-                    ->required(),
-                Textarea::make('remarks')->label('Notes')->rows(3),
-            ])
-            ->action(function (array $data): void {
-                Unmanifested::create([
-                    'invoice' => $this->missingCode,
-                    'container_id' => $this->data['container_id'],
-                    'attachment_pic' => $data['attachment_pic'] ?? null,
-                    'remarks' => $data['remarks'] ?? null,
-                ]);
-
-                Notification::make()->title("Unmanifested box {$this->missingCode} recorded")->success()->send();
-
-                $this->missingCode = null;
-            });
-    }
-
-    public function photoStep(): ?string
-    {
-        return 'unload';
-    }
-
-    public function photoContext(): array
-    {
-        $id = $this->data['container_id'] ?? null;
-
-        return [
-            'container_id' => $id,
-            'warehouse_id' => ($id ? Container::whereKey($id)->value('warehouse_id') : null) ?? Auth::user()?->warehouse_id,
-            'logistichub_id' => Auth::user()?->logistichub_id,
-        ];
-    }
-
-    public function appChoices(): Collection
-    {
-        return $this->containerQuery()->with('consolidator:id,company_name')->latest('id')->limit(60)->get()
-            ->map(fn (Container $c) => ['id' => $c->id, 'name' => $c->container_no, 'active' => (bool) ($c->is_active ?? true) && ! $c->is_unloaded,
-                'sub' => collect([$c->batch_no ? 'Batch '.$c->batch_no : null, $c->consolidator?->company_name])->filter()->join(' · ') ?: null]);
-    }
-}
-DISPATCH_FILE_END_22
-
-# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Deliveryinvs/Tables/DeliveryinvsTable.php
-mkdir -p 'app/Filament/Warehouse/Resources/Deliveryinvs/Tables'
-cat > 'app/Filament/Warehouse/Resources/Deliveryinvs/Tables/DeliveryinvsTable.php' <<'DISPATCH_FILE_END_23'
-<?php
-
-namespace App\Filament\Warehouse\Resources\Deliveryinvs\Tables;
-
-use App\Filament\Exports\DeliveryinvExporter;
-use App\Filament\Warehouse\Resources\Deliverylogs\DeliverylogResource;
-use App\Models\Consolidator;
-use App\Models\Deliveryinv;
-use App\Models\Invoice;
-use App\Models\Tripinvoice;
-use Filament\Actions\Action;
-use Filament\Actions\ActionGroup;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Actions\ExportAction;
-use Filament\Actions\Exports\Enums\ExportFormat;
-use Filament\Actions\Exports\Models\Export;
-use Filament\Actions\ViewAction;
-use Filament\Forms\Components\FileUpload;
-use Filament\Notifications\Notification;
-use Filament\Support\Icons\Heroicon;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Filters\SelectFilter;
-use Filament\Tables\Table;
-use Illuminate\Contracts\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\Auth;
-
-class DeliveryinvsTable
-{
-    public static function configure(Table $table): Table
-    {
-        return $table
-            ->query(Deliveryinv::Unloadedinv())
-            ->columns([
-                TextColumn::make('deliverylog.trip_number')
-                    ->searchable()
-                    ->label('Trip Number')
-                    ->color('primary')
-                    ->url(fn (Model $record) => DeliverylogResource::getUrl('edit', ['record' => $record->deliverylog_id])),
-                TextColumn::make('company')
-                    ->label('Company')
-                    ->getStateUsing(function (Model $record) {
-                        // $companyname = Consolidator::where('code', $records->location_code)->first();
-                        $locationcode = Invoice::where('id', $record->invoice_id)->value('location_code');
-
-                        return $companyname = Consolidator::nameForCode($locationcode);
-                    }),
-                TextColumn::make('invoice')
-                    ->searchable()
-                    ->label('Invoice'),
-                TextColumn::make('invdata.container.batch_no')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable()
-                    ->label('Batch No'),
-                TextColumn::make('invdata.container.batch_year')
-                    ->searchable()
-                    ->label('Batch Year'),
-                TextColumn::make('invdata.container.container_no')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->searchable()
-                    ->label('Container No'),
-                TextColumn::make('invdata.sender_name')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Sender'),
-                TextColumn::make('invdata.receiver_name')
-                    ->label('Receiver'),
-                TextColumn::make('invdata.receiver_address')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Address'),
-                TextColumn::make('is_delivered')
-                    ->label('Status')
-                    ->formatStateUsing(function (Model $record) {
-                        return $record->is_delivered ? 'Delivered' : 'In Transit';
-                    })
-                    ->color(function ($record) {
-                        return $record->is_delivered ? 'success' : 'danger';
-                    }),
-
-                TextColumn::make('invdata.receiver_province')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Province'),
-                TextColumn::make('invdata.receiver_city')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('City'),
-                TextColumn::make('invdata.receiver_barangay')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Barangay'),
-                TextColumn::make('invdata.boxtype')
-                    ->label('Box Type'),
-                TextColumn::make('invdata.routearea.description')
-                    ->toggleable(isToggledHiddenByDefault: true)
-                    ->label('Route Area'),
-            ])
-            ->filters([
-                SelectFilter::make('is_delivered')
-                    ->label('Is Delivered')
-                    ->options([
-                        1 => 'Yes',
-                        0 => 'No',
-                    ])->default(0),
-                // SelectFilter::make('routearea_id')
-                //     ->label('Route')
-                //     ->relationship('invoice.routearea', 'description'),
-                SelectFilter::make('deliverylog_id')
-                    ->label('Trip Number')
-                    ->searchable()
-                    ->preload()
-                    ->relationship('deliverylog', 'trip_number', fn (Builder $query) => $query->where('logistichub_id', Auth::user()->logistichub_id)),
-
-                SelectFilter::make('container_id')
-                    ->label('Batch / Container')
-                    ->relationship(
-                        name: 'invoice.container',
-                        titleAttribute: 'container_no'
-
-                    )
-                    ->searchable(['container_no', 'batch_no', 'batch_year'])
-                    ->preload()
-                    ->getOptionLabelFromRecordUsing(function (Model $record) {
-                        return "{$record->container_no} {$record->batch_no} {$record->batch_year}";
-                    }),
-
-                SelectFilter::make('province')
-                    ->label('Province')
-                    ->multiple()
-                    ->searchable()
-                    ->options(
-                        Invoice::query()
-                            ->select('receiver_province')
-                            ->distinct()
-                            ->orderBy('receiver_province')
-                            ->pluck('receiver_province', 'receiver_province')
-                            ->toArray()
-                    )
-                    ->query(function (Builder $query, array $data) {
-                        if (! empty($data['values'])) {
-                            $query->whereHas('invoice', function (Builder $q) use ($data) {
-                                $q->whereIn('receiver_province', $data['values']);
-                            });
-                        }
-                    }),
-            ])->deferFilters(false)
-            ->headerActions([
-                ExportAction::make()
-                    ->label('Export')
-                    ->icon(Heroicon::ArrowUturnDown)
-                    ->Color('primary')
-                    ->exporter(DeliveryinvExporter::class)
-                    ->formats([
-                        ExportFormat::Xlsx,
-                    ])
-                    ->fileName(fn (Export $export): string => 'Delivery Invoices Export - '.now()->format('Y-m-d_H-i-s').'.xlsx'),
-            ])
-            ->recordActions([
-                ActionGroup::make([
-                    // ViewAction::make()
-                    //     ->slideOver()
-                    //     ->modal()
-                    //     ->label('View')
-                    //     ->color('primary')
-                    //     ->icon(Heroicon::Eye)
-                    //     ->hidden(fn($record) => empty($record->delivery_picture)),
-
-                    Action::make('Edit')
-                        ->label('Edit Picture')
-                        ->color('info')
-                        ->icon(Heroicon::PencilSquare)
-                        ->hidden(fn ($record) => empty($record->delivery_picture))
-                        ->fillForm(fn (Model $record): array => [
-
-                            'delivery_picture' => $record->delivery_picture,
-                        ])
-                        ->schema([
-                            FileUpload::make('delivery_picture')
-                                ->label('Delivery Picture')
-                                ->multiple()
-                                ->panelLayout('grid')
-                                ->uploadingMessage('Uploading attachment...')
-                                ->image()
-                                ->openable()
-                                ->disk('public')
-                                ->directory(function (Model $record) {
-                                    return \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $record->invoice);
-                                })
-                                ->downloadable()
-                                ->visibility('private')
-                                ->required()
-                                ->removeUploadedFileButtonPosition('right'),
-                        ])
-                        ->action(function (array $data, Model $record): void {
-                            if (! auth()->user()->hasRole('cscanada')) {
-                                Tripinvoice::where('id', $record->id)
-                                    ->update([
-                                        'delivery_picture' => $data['delivery_picture'],
-                                    ]);
-                                Notification::make()
-                                    ->title('Delivery Picture Updated')
-                                    ->success()
-                                    ->send();
-                            } else {
-                                Notification::make()
-                                    ->title('Edit Denied')
-                                    ->warning()
-                                    ->send();
-                            }
-
-                        }),
-                    Action::make('Picture')
-                        ->label('Add Picture')
-                        ->color('danger')
-                        ->icon(Heroicon::Camera)
-                        ->hidden(fn ($record) => ! empty($record->delivery_picture))
-                        ->schema([
-                            FileUpload::make('delivery_picture')
-                                ->label('Delivery Picture')
-                                ->multiple()
-                                ->panelLayout('grid')
-                                ->uploadingMessage('Uploading ...')
-                                ->acceptedFileTypes([
-                                    'image/*',
-                                    'application/pdf',
-                                ])
-                                ->openable()
-                                ->disk('public')
-                                ->directory(function (Model $record) {
-                                    return \App\Support\Photos\Storage\PhotoFolders::dir('delivery', $record->invoice);
-                                })
-                                ->visibility('private')
-                                ->required()
-                                ->removeUploadedFileButtonPosition('right'),
-                            // ->minFiles(6),
-                        ])
-                        ->action(function (array $data, Model $record): void {
-                            if (! auth()->user()->hasRole('cscanada')) {
-                                Tripinvoice::where('id', $record->id)
-                                    ->update([
-                                        'delivery_picture' => $data['delivery_picture'],
-                                        'is_delivered' => true,
-                                    ]);
-                                Notification::make()
-                                    ->title('Picture Added and Status Updated to Delivered')
-                                    ->success()
-                                    ->send();
-                            } else {
-                                Notification::make()
-                                    ->title('Add Picture Denied')
-                                    ->warning()
-                                    ->send();
-                            }
-
-                        }),
-                    Action::make('Delete Picture')
-                        ->requiresConfirmation()
-                        ->label('Delete Picture')
-                        ->color('danger')
-                        ->icon(Heroicon::Trash)
-                        ->hidden(fn ($record) => empty($record->delivery_picture))
-                        ->action(function (array $data, Model $record): void {
-                            if (! auth()->user()->hasRole('cscanada')) {
-                                Tripinvoice::where('id', $record->id)
-                                    ->update([
-                                        'delivery_picture' => null,
-                                        'is_delivered' => false,
-                                    ]);
-                                Notification::make()
-                                    ->title('Picture Deleted ')
-                                    ->success()
-                                    ->send();
-                            } else {
-                                Notification::make()
-                                    ->title('Delete Denied')
-                                    ->warning()
-                                    ->send();
-                            }
-
-                        }),
-                ]),
-            ])
-            ->toolbarActions([
-                BulkActionGroup::make([
-                    //    DeleteBulkAction::make(),
-                ]),
-            ]);
-    }
-}
-DISPATCH_FILE_END_23
-
-# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Trucks/Schemas/TruckForm.php
-mkdir -p 'app/Filament/Warehouse/Resources/Trucks/Schemas'
-cat > 'app/Filament/Warehouse/Resources/Trucks/Schemas/TruckForm.php' <<'DISPATCH_FILE_END_24'
-<?php
-
-namespace App\Filament\Warehouse\Resources\Trucks\Schemas;
-
-use Filament\Forms\Components\DatePicker;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\MarkdownEditor;
-use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
-use Filament\Schemas\Components\Group;
-use Filament\Schemas\Components\Section;
-use Filament\Schemas\Schema;
-
-class TruckForm
-{
-    public static function configure(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                                Group::make()
-                    ->schema([
-                        \App\Filament\Shared\Trucks\OwnershipSection::make(),
-                        Section::make('vehicles Information')
-                            ->schema([
-                                TextInput::make('category')
-                                    ->hint('Ex. Ten Wheeler, Truck, Mini Truck or Van')
-                                    ->hintColor('warning')
-                                    ->hintIcon('heroicon-m-truck')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('description')
-                                    ->hint('Ex Brand, Color, Model')
-                                    ->hintColor('warning')
-                                    ->hintIcon('heroicon-m-truck')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('registration_no')
-                                    ->label('Registration Number')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('plate_no')
-                                    ->label('Plate Number')
-                                    ->unique()
-                                    ->required()
-                                    ->maxLength(255),
-                                // Select::make('logistichub_id')
-                                // ->label('Logistic Hub/Location')
-                                // ->options(Logistichub::query()->pluck('hub_name', 'id'))
-                                // ->required(),
-                                MarkdownEditor::make('Note')
-                                    ->columnSpanFull(),
-                            ])
-
-                    ]),
-                Group::make()
-                    ->schema([
-                        Section::make('Other Information')
-                            ->schema([
-                                FileUpload::make('truck_picture')
-                                ->image()
-                                ->avatar()
-                                ->imageEditor()
-                                ->circleCropper()
-                                ->uploadingMessage('Uploading attachment...')
-                                ->openable()
-                                ->maxSize(1024)
-                                ->disk('public')
-                                ->directory('trucks')
-                                ->visibility('private')
-                                ->removeUploadedFileButtonPosition('right')
-                                ->label('Vehicles Picture')
-                                ->columnSpanFull(),
-                                DatePicker::make('date_registered')
-                                    ->native(false)
-                                    ->closeOnDateSelection(true)
-                                    ->label('Date Register')
-                                    ->required(),
-                                DatePicker::make('date_expired')
-                                    ->label('Registration Expiration Date')
-                                    ->native(false)
-                                    ->closeOnDateSelection(true)
-                                    ->required()
-                                    ->rules(['after_or_equal:today']),
-                                    Toggle::make('is_active')
-                                    ->default(true)
-                                    ->required(),
-                            ])
-
-                    ])
-
-
-            ]);
-    }
-}
-DISPATCH_FILE_END_24
-
-# ---------------------------------------------------------------- app/Filament/Warehouse/Resources/Truckteams/Schemas/TruckteamForm.php
-mkdir -p 'app/Filament/Warehouse/Resources/Truckteams/Schemas'
-cat > 'app/Filament/Warehouse/Resources/Truckteams/Schemas/TruckteamForm.php' <<'DISPATCH_FILE_END_25'
-<?php
-
-namespace App\Filament\Warehouse\Resources\Truckteams\Schemas;
-
-use App\Filament\Resources\UserResource\Pages\EditUser;
-use App\Models\Workposition;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
-use Filament\Schemas\Components\Group;
-use Filament\Schemas\Components\Section;
-use Filament\Schemas\Components\Utilities\Get;
-use Filament\Schemas\Schema;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
-
-class TruckteamForm
-{
-    public static function configure(Schema $schema): Schema
-    {
-        return $schema
-            ->components([
-                Group::make()
-                    ->schema([
-                        Section::make('Personal Information')
-                            ->schema([
-                                TextInput::make('first_name')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('middle_name')
-                                    ->maxLength(255),
-                                TextInput::make('last_name')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('address')
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->columnSpanFull(),
-                                TextInput::make('mobile_number')
-                                    ->required()
-                                    ->maxLength(255),
-                                TextInput::make('email')
-                                    ->email()
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->unique(ignoreRecord: true),
-                                // Select::make('panelcategory_id')
-                                //     ->label('Panel Category')
-                                //     ->relationship(name: 'panelcategory', titleAttribute: 'description')
-                                //      ->required(),
-                                // Select::make('logistichub_id')
-                                // ->label('Logistic Hub/Location')
-                                // ->options(Logistichub::query()->pluck('hub_name', 'id'))
-                                // ->required(),
-                                Select::make('workposition_id')
-                                    ->label('Work Position')
-                                    ->options(Workposition::query()
-                                        ->where('is_crew', true)
-                                        ->pluck('position_description', 'id'))
-                                    ->required(),
-
-                                Toggle::make('is_active')
-                                    ->label('Active')
-                                    ->required(),
-                                // Toggle::make('is_crew')
-                                //     ->label('Crew')
-                                //     ->required(),
-
-                                //         Select::make('roles')
-                                // ->multiple()
-                                // ->relationship('roles', 'name')
-                                // ->preload(),
-
-                            ])->columns(3),
-
-                    ])->columnSpan(['lg' => 2]),
-                Group::make()
-                    ->schema([
-                        Section::make()
-                            ->schema([
-                                FileUpload::make('profile_picture')
-                                    ->image()
-                                    ->avatar()
-                                    ->imageEditor()
-                                    ->circleCropper()
-                                    // ->panelLayout('grid')
-                                    ->uploadingMessage('Uploading attachment...')
-                                    ->openable()
-                                    ->getUploadedFileNameForStorageUsing(function ($file, Get $get) {
-                                        return Str::slug($get('last_name') ?: 'user').'-'.Str::random(8).'.'.$file->getClientOriginalExtension();
-                                    })
-                                    ->maxSize(1024)
-                                    ->disk('public')
-                                    ->directory('people')
-                                    ->visibility('private')
-                                    ->removeUploadedFileButtonPosition('right')
-                                    ->label('Profile Picture'),
-                                TextInput::make('password')
-                                    ->password()
-                                    ->required()
-                                    ->dehydrateStateUsing(fn ($state) => Hash::make($state))
-                                    ->dehydrated(fn ($state) => filled($state))
-                                    ->maxLength(255)
-                                    ->hiddenOn(EditUser::class)
-                                    ->maxLength(255),
-                            ]),
-                    ])->columnSpan(['lg' => 1]),
-            ])->columns(3);
-    }
-}
-DISPATCH_FILE_END_25
-
-# ---------------------------------------------------------------- app/Http/Controllers/DriverOfflineController.php
+# ---------------------------------------------------------------- app/Http/Controllers/InvoiceController.php
 mkdir -p 'app/Http/Controllers'
-cat > 'app/Http/Controllers/DriverOfflineController.php' <<'DISPATCH_FILE_END_26'
+cat > 'app/Http/Controllers/InvoiceController.php' <<'DISPATCH_FILE_END_5'
 <?php
 
 namespace App\Http\Controllers;
 
-use App\Enums\FailedDeliveryReason;
-use App\Models\Maps\TripStop;
-use App\Models\OfflineSubmission;
+use App\Models\AppSetting;
+use App\Models\Consolidator;
+use App\Models\Invoice;
 use App\Models\Tripinvoice;
+use App\Models\Truckcrew;
 use App\Models\User;
-use App\Services\TripAssignment;
-use App\Support\Branding;
-use App\Support\DriverTrip;
-use App\Support\Maps\TripSorter;
-use App\Support\Photos\PhotoShrinker;
-use DomainException;
-use Illuminate\Http\JsonResponse;
+use Barryvdh\Snappy\Facades\SnappyPdf as PDF;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 
-/**
- * Driver app without signal.
- *  - trip():  today's boxes, saved on the phone while there is signal.
- *  - sync():  one delivery or not-delivered saved on the phone, sent when the signal is back.
- *             Uses the same rules as the app (TripAssignment). Sending the same one twice does nothing.
- *  - shell(): the page the phone opens with no signal (no data in it; it reads what the phone saved).
- */
-class DriverOfflineController extends Controller
+class InvoiceController extends Controller
 {
-    /** How far back a phone time is believed (older = "now"). */
-    public const MAX_AGE_HOURS = 48;
+    /** Used until Admin sets another number in Settings → Printing. */
+    public const BULK_LIMIT = 15;
 
-    protected function driver(): ?User
+    /** The most receipts one bulk print may hold (Admin → Settings → Printing). */
+    public static function bulkLimit(): int
     {
-        $user = Auth::user();
-
-        return $user && $user->is_active && $user->panelcategory?->code === 'drv' && ! $user->is_admin ? $user : null;
+        return max(1, min(100, (int) AppSetting::get('print.bulk_limit', self::BULK_LIMIT)));
     }
 
-    public function trip(): JsonResponse
+    /**
+     * Printable delivery receipt for one invoice, including the truck and
+     * crew of the most recent trip the invoice was loaded on.
+     */
+    public function tripinvoice(int $invoice): Response
     {
-        $driver = $this->driver();
-        if (! $driver) {
-            return response()->json(['message' => 'Sign in to the Driver app.'], 401);
+        $invoice = Invoice::findOrFail($invoice);
+
+        return $this->pdf([$this->receiptHtml($invoice)], "invoice-{$invoice->invoice}.pdf");
+    }
+
+    /** Several receipts in one PDF, one receipt per page (at most the number set in Settings → Printing). */
+    public function bulk(Request $request): Response
+    {
+        $ids = collect(explode(',', (string) $request->query('ids')))
+            ->map(fn ($id) => (int) trim($id))->filter()->unique()->values();
+
+        if ($ids->isEmpty()) {
+            abort(422, 'Select the boxes to print.');
+        }
+        if ($ids->count() > static::bulkLimit()) {
+            abort(422, 'You can print at most '.static::bulkLimit().' receipts at once.');
         }
 
-        $trip = DriverTrip::for($driver);
-        $boxes = $trip->trip
-            ? $trip->boxes()->with('invdata')->withCount('deliveryAttempts')->orderBy('invoice')->get()
+        $invoices = Invoice::whereKey($ids)->get()->sortBy(fn ($i) => $ids->search($i->id))->values();
+        abort_if($invoices->isEmpty(), 404);
+
+        return $this->pdf($invoices->map(fn (Invoice $i) => $this->receiptHtml($i))->all(), 'receipts-'.now()->format('Ymd-His').'.pdf');
+    }
+
+    protected function receiptHtml(Invoice $invoice): string
+    {
+        return view('invoices.pdfinvoice', static::receiptData($invoice))->render();
+    }
+
+    /** What the printed receipt shows (Part 44: the signed receipt uses the same, with its blank lines filled). */
+    public static function receiptData(Invoice $invoice): array
+    {
+        $trip = Tripinvoice::with('deliverylog.truck')
+            ->where('invoice_id', $invoice->id)
+            ->latest('id')
+            ->first()
+            ?->deliverylog;
+
+        $truck = $trip?->truck;
+
+        $crew = $truck
+            ? User::with('workposition')
+                ->whereIn('id', Truckcrew::where('truck_id', $truck->id)->pluck('crew'))
+                ->get()
             : collect();
 
-        return response()->json([
-            'csrf' => csrf_token(),
-            'saved_at' => now()->toIso8601String(),
-            'driver' => ['id' => $driver->id, 'first_name' => $driver->first_name],
-            'trip' => $trip->trip ? [
-                'id' => $trip->trip->id,
-                'number' => $trip->trip->trip_number,
-                'plate' => $trip->trip->truck?->plate_no,
-            ] : null,
-            'boxes' => $boxes->map(fn (Tripinvoice $b) => [
-                'id' => $b->id,
-                'invoice' => $b->invoice,
-                'codes' => array_values(array_unique(array_filter([$b->invoice, $b->invdata?->invoice]))),
-                'name' => Str::title((string) $b->invdata?->receiver_name),
-                'address' => collect([$b->invdata?->receiver_address, $b->invdata?->receiver_barangay, $b->invdata?->receiver_city])
-                    ->filter()->map(fn ($p) => Str::title($p))->join(', '),
-                'phone' => $b->invdata?->receiver_mobile_no,
-                'delivered' => (bool) $b->is_delivered,
-                'attempted' => $b->delivery_attempts_count > 0,
-            ])->values(),
-            // Maps & routes: the stops in order, so Navigate works without signal too
-            'stops' => $trip->trip && TripSorter::ensure($trip->trip, 0)
-                ? TripSorter::stops($trip->trip)->map(fn (TripStop $s) => [
-                    'id' => $s->id, 'no' => $s->stop_no, 'name' => $s->name, 'address' => $s->address,
-                    'place' => trim(($s->barangay ? $s->barangay.', ' : '').$s->city, ', '),
-                    'lat' => $s->lat, 'lng' => $s->lng, 'exact' => $s->exact, 'priority' => $s->priority,
-                    'go' => $s->hasPin() ? $s->lat.','.$s->lng : $s->address.', Philippines',
-                    'phone' => $s->phone, 'boxes' => array_map('intval', $s->box_ids ?? []),
-                ])->values()
-                : [],
-            'reasons' => collect(FailedDeliveryReason::cases())->map(fn (FailedDeliveryReason $r) => [
-                'value' => $r->value, 'label' => $r->getLabel(), 'prompt' => $r->notePrompt(),
-                'note' => $r->requiresNote(), 'photo' => $r->requiresPhoto(),
-            ])->values(),
+        // The crew member whose position mentions "driver" is the driver; the next one is the assistant.
+        $isDriver = fn (User $user) => Str::contains(
+            Str::lower(($user->workposition?->code ?? '').' '.($user->workposition?->position_description ?? '')),
+            ['driver', 'drv'],
+        );
+
+        $driver = $crew->first($isDriver) ?? $crew->first();
+        $leadman = $crew->reject(fn (User $user) => $user->is($driver))->first();
+
+        return [
+            'invoice' => $invoice,
+            'truck' => $truck,
+            'driver' => $driver,
+            'leadman' => $leadman,
+            'consolidator' => Consolidator::where('code', $invoice->location_code)->first(),
+        ];
+    }
+
+    /**
+     * Join several receipts into one document, each starting on a new page.
+     * (One document, because many wkhtmltopdf builds can't take several.)
+     *
+     * @param  list<string>  $pages
+     */
+    protected function onePerPage(array $pages): string
+    {
+        $head = preg_match('~<head[^>]*>.*?</head>~is', $pages[0], $m) ? $m[0] : '<head><meta charset="UTF-8"></head>';
+        $bodies = array_map(fn ($html) => preg_match('~<body[^>]*>(.*)</body>~is', $html, $b) ? $b[1] : $html, $pages);
+        $last = count($bodies) - 1;
+
+        return '<!DOCTYPE html><html>'.$head.'<body>'
+            .implode('', array_map(fn ($body, $i) => '<div style="'.($i < $last ? 'page-break-after: always;' : '').'">'.$body.'</div>', $bodies, array_keys($bodies)))
+            .'</body></html>';
+    }
+
+    /** @param  list<string>  $pages  one receipt per page */
+    protected function pdf(array $pages, string $name): Response
+    {
+        $binary = \App\Support\Pdf\WkBinary::find();
+
+        // A clear message instead of a crash when the PDF program isn't found on this computer or domain.
+        if (! $binary) {
+            return response(
+                "Cannot create the PDF receipt.\n\n"
+                ."The PDF program (wkhtmltopdf) was not found. Looked in:\n  "
+                .implode("\n  ", \App\Support\Pdf\WkBinary::candidates())."\n\n"
+                ."Put wkhtmltopdf in one of these places (on Plesk: /var/www/vhosts/<your domain>/bin/wkhtmltopdf),\n"
+                ."or set its path in .env, for example:\n"
+                ."WKHTML_PDF_BINARY=/var/www/vhosts/icargoxpress.net/bin/wkhtmltopdf\n\n"
+                ."Then run: php artisan optimize:clear\n",
+                503,
+                ['Content-Type' => 'text/plain; charset=utf-8'],
+            );
+        }
+        config(['snappy.pdf.binary' => $binary]);
+
+        $pdf = PDF::loadHTML(count($pages) === 1 ? $pages[0] : $this->onePerPage($pages));
+
+        foreach (['margin-top', 'margin-bottom', 'margin-right', 'margin-left'] as $margin) {
+            $pdf->setOption($margin, '5mm');
+        }
+
+        // The receipt loads logos and the barcode from files on this server.
+        $pdf->setOption('enable-local-file-access', true);
+
+        // A missing logo or image must not stop the whole receipt from printing.
+        $pdf->setOption('load-error-handling', 'ignore');
+        $pdf->setOption('load-media-error-handling', 'ignore');
+
+        return $pdf->inline($name);
+    }
+}
+DISPATCH_FILE_END_5
+
+# ---------------------------------------------------------------- app/Jobs/MakeSignedReceipt.php
+mkdir -p 'app/Jobs'
+cat > 'app/Jobs/MakeSignedReceipt.php' <<'DISPATCH_FILE_END_6'
+<?php
+
+namespace App\Jobs;
+
+use App\Models\DeliverySignature;
+use App\Support\Deliveries\SignedReceipt;
+use App\Support\Sms\SmsEvents;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Queue\Queueable;
+use Throwable;
+
+/** Part 44: make the signed receipt (PDF + picture), put the picture in the delivery photos, text the receiver if damaged. */
+class MakeSignedReceipt implements ShouldQueue
+{
+    use Queueable;
+
+    public int $tries = 3;
+
+    public function __construct(public int $signatureId) {}
+
+    public function handle(): void
+    {
+        $s = DeliverySignature::with('tripinvoice')->find($this->signatureId);
+        if (! $s) {
+            return;
+        }
+        if (! $s->receipt_pdf) {
+            SignedReceipt::make($s);
+        }
+        $box = $s->tripinvoice;
+        if ($s->receipt_jpg && $box) {
+            $photos = array_values((array) $box->delivery_picture);
+            if (! in_array($s->receipt_jpg, $photos, true)) {
+                $photos[] = $s->receipt_jpg; // the signed receipt as a picture, with the delivery photos
+                $box->forceFill(['delivery_picture' => $photos])->saveQuietly();
+            }
+        }
+        if ($s->isDamaged() && ! $s->sms_message_id) {
+            try {
+                SmsEvents::damaged($s->fresh());
+            } catch (Throwable $e) {
+                report($e);
+            }
+        }
+    }
+}
+DISPATCH_FILE_END_6
+
+# ---------------------------------------------------------------- app/Models/DeliveryAttempt.php
+mkdir -p 'app/Models'
+cat > 'app/Models/DeliveryAttempt.php' <<'DISPATCH_FILE_END_7'
+<?php
+
+namespace App\Models;
+
+use App\Enums\FailedDeliveryReason;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+/** A delivery a driver tried and could not complete. */
+class DeliveryAttempt extends Model
+{
+    protected function casts(): array
+    {
+        return [
+            'reason' => FailedDeliveryReason::class,
+            'photos' => 'array',
+            'needs_office' => 'boolean',
+            'handled_at' => 'datetime',
+        ];
+    }
+
+    public function tripinvoice(): BelongsTo
+    {
+        return $this->belongsTo(Tripinvoice::class);
+    }
+
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class);
+    }
+
+    public function deliverylog(): BelongsTo
+    {
+        return $this->belongsTo(Deliverylog::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+}
+DISPATCH_FILE_END_7
+
+# ---------------------------------------------------------------- app/Models/DeliverySignature.php
+mkdir -p 'app/Models'
+cat > 'app/Models/DeliverySignature.php' <<'DISPATCH_FILE_END_8'
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Storage;
+
+/** Part 44: a delivery signed on the driver's phone (damaged box, or no paper receipt). */
+class DeliverySignature extends Model
+{
+    public const DAMAGE = ['torn' => 'Torn', 'crushed' => 'Crushed', 'wet' => 'Wet', 'open' => 'Opened', 'dented' => 'Dented', 'missing' => 'Items missing'];
+
+    public const PAPER = ['wet_torn' => 'Paper wet or torn', 'left_at_hub' => 'Left at the hub', 'no_more' => 'No more receipts'];
+
+    public const RELATIONSHIP = ['Self', 'Spouse', 'Parent', 'Child', 'Sibling', 'Relative', 'Helper', 'Neighbor', 'Other'];
+
+    protected function casts(): array
+    {
+        return ['damage' => 'array', 'cant_sign' => 'boolean', 'signed_at' => 'datetime'];
+    }
+
+    public function tripinvoice(): BelongsTo
+    {
+        return $this->belongsTo(Tripinvoice::class);
+    }
+
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    public function isDamaged(): bool
+    {
+        return $this->why === 'damaged';
+    }
+
+    /** "Torn, crushed" (and the note). */
+    public function damageText(): string
+    {
+        $list = collect($this->damage ?? [])->map(fn ($d) => self::DAMAGE[$d] ?? $d)->join(', ');
+
+        return trim($list.($this->damage_note ? ($list ? ' · ' : '').$this->damage_note : ''));
+    }
+
+    public function link(): string
+    {
+        return url('/r/'.$this->token);
+    }
+
+    public function signatureData(): ?string
+    {
+        if (! $this->signature || ! Storage::disk('public')->exists($this->signature)) {
+            return null;
+        }
+
+        return 'data:image/png;base64,'.base64_encode(Storage::disk('public')->get($this->signature));
+    }
+}
+DISPATCH_FILE_END_8
+
+# ---------------------------------------------------------------- app/Providers/AppServiceProvider.php
+mkdir -p 'app/Providers'
+cat > 'app/Providers/AppServiceProvider.php' <<'DISPATCH_FILE_END_9'
+<?php
+
+namespace App\Providers;
+
+use App\Models\Consolidator;
+use App\Support\Navigation\DispatchNavigationManager;
+use App\Support\Photos\PhotoShrinker;
+use App\Support\SchemaMemo;
+use Filament\Actions\DeleteAction;
+use Filament\Forms\Components\FileUpload;
+use Filament\Navigation\NavigationManager;
+use Filament\Notifications\Notification;
+use Filament\Schemas\Components\Section;
+use Filament\Support\Assets\Css;
+use Filament\Support\Assets\Js;
+use Filament\Support\Facades\FilamentAsset;
+use Filament\Tables\Table;
+use Illuminate\Console\Events\CommandFinished;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Events\MigrationEnded;
+use Illuminate\Database\Events\MigrationsEnded;
+use Illuminate\Database\Events\SchemaLoaded;
+use Illuminate\Database\QueryException;
+use Illuminate\Database\Schema\Builder;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        // Speed: Schema::hasTable / hasColumn answers are remembered (App\Support\SchemaMemo); forgotten when migrations run.
+        $this->app->extend('db.schema', fn ($schema) => $schema instanceof Builder ? new SchemaMemo($schema) : $schema);
+    }
+
+    public function boot(): void
+    {
+        // Side menus: groups in the order of the work, clear names, numbers on what waits (App\Support\Navigation\Menu).
+        $this->app->scoped(NavigationManager::class, fn () => new DispatchNavigationManager);
+
+        // Forms are built with Filament schemas, which only pass the fields they render.
+        Model::unguard();
+
+        // Photos on this server or in a bucket (Settings → Photo storage): the public and box disks.
+        \Illuminate\Support\Facades\Storage::extend('routed', function ($app, array $config) {
+            $adapter = new \App\Support\Photos\Storage\RoutedAdapter($config['name'], $config);
+
+            return new \Illuminate\Filesystem\FilesystemAdapter(new \League\Flysystem\Filesystem($adapter, $config), $adapter, $config);
+        });
+        // Local only: buckets as folders, to try the page without R2 (PHOTOS_FAKE_BUCKETS=1 in .env).
+        if ($this->app->environment('local') && env('PHOTOS_FAKE_BUCKETS')) {
+            \App\Support\Photos\Storage\PhotoStore::$fake = true;
+        }
+        // The page shows if a queue worker runs (Supervisor or Plesk): it is seen here.
+        Event::listen(\Illuminate\Queue\Events\Looping::class, function () {
+            static $last = 0;
+            if (time() - $last > 60) {
+                $last = time();
+                \Illuminate\Support\Facades\Cache::put('photos.queue.seen', $last, 3600);
+            }
+        });
+
+        Section::configureUsing(fn (Section $section) => $section->columnSpanFull());
+
+        // Photos are made smaller on the phone before upload (longest side 1600 px), like the
+        // Scan app and the Driver app. A 3 MB phone photo becomes a few hundred KB.
+        // Non-photo files are not touched; small pictures (logos) are never made bigger.
+        FileUpload::configureUsing(fn (FileUpload $upload) => $upload
+            ->automaticallyResizeImagesMode('contain')
+            ->automaticallyResizeImagesToWidth((string) PhotoShrinker::MAX_SIDE)
+            ->automaticallyResizeImagesToHeight((string) PhotoShrinker::MAX_SIDE)
+            ->imageResizeUpscale(false));
+
+        // Consistent, roomier tables in every panel.
+        Table::configureUsing(fn (Table $table) => $table
+            ->paginationPageOptions([10, 25, 50, 100])
+            ->defaultPaginationPageOption(25)
+            ->striped());
+
+        // Deleting something that is still in use (e.g. a truck that has trips) used to end in a
+        // database error page. Show a clear message instead.
+        DeleteAction::configureUsing(fn (DeleteAction $action) => $action->using(
+            function (Model $record, DeleteAction $action): bool {
+                try {
+                    return (bool) $record->delete();
+                } catch (QueryException $exception) {
+                    if (! in_array($exception->getCode(), ['23000', '23503'], true)) {
+                        throw $exception;
+                    }
+
+                    Notification::make()
+                        ->title('Cannot delete this record')
+                        ->body('It is still used by other records (for example trips or invoices). Remove those first.')
+                        ->danger()
+                        ->persistent()
+                        ->send();
+
+                    $action->halt();
+
+                    return false;
+                }
+            },
+        ));
+
+        // Queue workers live for hours; start every job with fresh lookups.
+        Queue::looping(function () {
+            Consolidator::flushNameCache();
+            SchemaMemo::reset();
+        });
+
+        // Tables changed: forget the remembered Schema answers.
+        Event::listen([MigrationsEnded::class, MigrationEnded::class, SchemaLoaded::class], fn () => SchemaMemo::flush());
+        Event::listen(CommandFinished::class, function ($e) {
+            if (in_array($e->command, ['optimize:clear', 'cache:clear', 'migrate', 'migrate:fresh', 'migrate:rollback', 'migrate:refresh', 'migrate:reset', 'db:wipe'], true)) {
+                SchemaMemo::flush();
+            }
+        });
+
+        FilamentAsset::register([
+            Js::make('barcode-scanner', resource_path('js/barcode-scanner.js')),
+            Js::make('driver-offline', resource_path('js/driver-offline.js')),
+            // Check photos: full screen with zoom, and Use photo / Retake right after a photo (board 68).
+            Js::make('photo-viewer', resource_path('js/photo-viewer.js')),
+            // The receiver signs on the driver's phone (Part 44).
+            Js::make('sign-pad', resource_path('js/sign-pad.js')),
+            // Maps & routes: the stops map (Leaflet 1.9.4 + OpenStreetMap), only on the pages that show it.
+            // Kept in resources/vendor so the server does not need node_modules (composer runs
+            // filament:upgrade, which publishes these files, before any npm step).
+            Js::make('leaflet', resource_path('vendor/leaflet/leaflet.js'))->loadedOnRequest(),
+            Css::make('leaflet', resource_path('vendor/leaflet/leaflet.css'))->loadedOnRequest(),
+            Js::make('trip-map', resource_path('js/trip-map.js'))->loadedOnRequest(),
+            Js::make('truck-map', resource_path('js/truck-map.js'))->loadedOnRequest(),
+        ]);
+    }
+}
+DISPATCH_FILE_END_9
+
+# ---------------------------------------------------------------- app/Services/TripAssignment.php
+mkdir -p 'app/Services'
+cat > 'app/Services/TripAssignment.php' <<'DISPATCH_FILE_END_10'
+<?php
+
+namespace App\Services;
+
+use App\Enums\FailedDeliveryReason;
+use App\Enums\UndoDeliveryReason;
+use App\Models\DeliveryAttempt;
+use App\Models\Deliverylog;
+use App\Models\DeliveryReversal;
+use App\Models\Invoice;
+use App\Models\Tripinvoice;
+use App\Models\Truck;
+use App\Models\User;
+use App\Models\Whdeliverylog;
+use App\Models\Whtripinvoice;
+use App\Support\Ai\PhotoCheck;
+use DomainException;
+use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+
+/**
+ * All trip bookkeeping in one place: putting invoices on a trip, taking them
+ * off, scanning them onto the truck and marking them delivered.
+ *
+ * Every write runs in a transaction so the trip row and the invoice flags
+ * (is_assigned, wh_is_assigned, hub_assigned …) can never get out of sync.
+ */
+class TripAssignment
+{
+    /**
+     * Put invoices on a delivery trip (hub → destination hub).
+     *
+     * @param  iterable<Invoice>  $invoices
+     * @return int how many were added (invoices already on a trip are skipped)
+     */
+    public function addToDeliveryTrip(Deliverylog $trip, iterable $invoices): int
+    {
+        $this->ensureEditable($trip);
+
+        return DB::transaction(function () use ($trip, $invoices): int {
+            $added = 0;
+
+            foreach ($invoices as $invoice) {
+                $alreadyOnTrip = Tripinvoice::where('invoice_id', $invoice->id)->whereHas('deliverylog')->lockForUpdate()->exists();
+
+                if ($alreadyOnTrip) {
+                    continue;
+                }
+
+                // Leftover rows from a deleted trip would hide the box; drop them.
+                Tripinvoice::where('invoice_id', $invoice->id)->whereDoesntHave('deliverylog')->delete();
+
+                Tripinvoice::create([
+                    'deliverylog_id' => $trip->id,
+                    'logistichub_id' => $trip->assigned_to,
+                    'invoice' => $invoice->invoice,
+                    'invoice_id' => $invoice->id,
+                ]);
+
+                $invoice->update(['is_assigned' => true]);
+                $added++;
+            }
+
+            return $added;
+        });
+    }
+
+    /**
+     * Put invoices on a warehouse trip.
+     *
+     * @param  iterable<Invoice>  $invoices
+     */
+    public function addToWarehouseTrip(Whdeliverylog $trip, iterable $invoices): int
+    {
+        $this->ensureEditable($trip);
+
+        return DB::transaction(function () use ($trip, $invoices): int {
+            $added = 0;
+
+            foreach ($invoices as $invoice) {
+                // Skip boxes already on a warehouse trip that has not been unloaded yet.
+                $onTheMove = Whtripinvoice::where('invoice_id', $invoice->id)
+                    ->whereHas('whdeliverylog')
+                    ->where('is_unloaded', false)
+                    ->lockForUpdate()
+                    ->exists();
+
+                if ($onTheMove) {
+                    continue;
+                }
+
+                Whtripinvoice::where('invoice_id', $invoice->id)->whereDoesntHave('whdeliverylog')->delete();
+
+                Whtripinvoice::create([
+                    'whdeliverylog_id' => $trip->id,
+                    'user_id' => Auth::id(),
+                    'truck_id' => $trip->truck_id,
+                    'warehouse_id' => Auth::user()?->warehouse_id ?? $trip->user_whid,
+                    'invoice_id' => $invoice->id,
+                ]);
+
+                $invoice->update(['wh_is_assigned' => true]);
+                $added++;
+            }
+
+            return $added;
+        });
+    }
+
+    /**
+     * A partner hub hands invoices it received over to one of its own trips.
+     *
+     * @param  iterable<Tripinvoice>  $tripinvoices
+     */
+    public function addToHubTrip(Deliverylog $hubTrip, iterable $tripinvoices): int
+    {
+        $this->ensureEditable($hubTrip);
+
+        return DB::transaction(function () use ($hubTrip, $tripinvoices): int {
+            $added = 0;
+
+            foreach ($tripinvoices as $tripinvoice) {
+                if ($tripinvoice->hub_assigned) {
+                    continue;
+                }
+
+                $tripinvoice->update([
+                    'hub_assigned' => true,
+                    'deliveryloghub_id' => $hubTrip->id,
+                ]);
+                $added++;
+            }
+
+            return $added;
+        });
+    }
+
+    /**
+     * Take an invoice off its delivery trip. When $returned is true the box
+     * is flagged as returned so it shows up for re-delivery.
+     */
+    public function removeFromDeliveryTrip(Tripinvoice $tripinvoice, bool $returned = false): void
+    {
+        if ($tripinvoice->deliverylog) {
+            $this->ensureEditable($tripinvoice->deliverylog);
+        }
+
+        DB::transaction(function () use ($tripinvoice, $returned): void {
+            $changes = ['is_assigned' => false];
+
+            if ($returned) {
+                $changes['is_returned'] = true;
+            }
+
+            Invoice::whereKey($tripinvoice->invoice_id)->update($changes);
+            $tripinvoice->delete();
+        });
+    }
+
+    /** Release an invoice from a partner hub's trip (it stays on the original trip). */
+    public function removeFromHubTrip(Tripinvoice $tripinvoice): void
+    {
+        $tripinvoice->update([
+            'hub_assigned' => false,
+            'deliveryloghub_id' => null,
+            'is_loaded_hub' => false,
         ]);
     }
 
-    public function sync(Request $request): JsonResponse
+    /**
+     * Record that a box was scanned onto the truck.
+     * Once every box on the trip is loaded, the truck and trip are marked as on the road.
+     */
+    public function markLoaded(Tripinvoice $tripinvoice, bool $atHub = false): void
     {
-        $driver = $this->driver();
-        if (! $driver) {
-            return response()->json(['message' => 'Sign in to the Driver app.'], 401);
+        DB::transaction(function () use ($tripinvoice, $atHub): void {
+            $tripinvoice->update([$atHub ? 'is_loaded_hub' : 'is_loaded' => true]);
+
+            $tripId = $atHub ? $tripinvoice->deliveryloghub_id : $tripinvoice->deliverylog_id;
+
+            if ($trip = Deliverylog::find($tripId)) {
+                $this->refreshLoadStatus($trip, $atHub);
+            }
+        });
+    }
+
+    public function refreshLoadStatus(Deliverylog $trip, bool $atHub = false): void
+    {
+        $tripColumn = $atHub ? 'deliveryloghub_id' : 'deliverylog_id';
+        $loadedColumn = $atHub ? 'is_loaded_hub' : 'is_loaded';
+
+        $invoices = Tripinvoice::where($tripColumn, $trip->id);
+        $total = (clone $invoices)->count();
+        $loaded = (clone $invoices)->where($loadedColumn, true)->count();
+
+        if ($total > 0 && $total === $loaded) {
+            $trip->truck?->update(['is_assigned' => true]);
+            $trip->update(['is_current' => true]);
+        }
+    }
+
+    /**
+     * Driver hands the box to the receiver.
+     *
+     * @param  array<int, string>  $pictures  stored photo paths
+     */
+    public function markDelivered(Tripinvoice $tripinvoice, array $pictures, ?User $by = null): void
+    {
+        DB::transaction(function () use ($tripinvoice, $pictures, $by): void {
+            $alreadyDelivered = (bool) $tripinvoice->is_delivered;
+
+            $tripinvoice->update([
+                'delivery_picture' => array_values($pictures),
+                'is_delivered' => true,
+                // Updating the photos later must not restart the undo window.
+                'delivered_at' => $alreadyDelivered ? $tripinvoice->delivered_at : now(),
+                'delivered_by' => $alreadyDelivered ? $tripinvoice->delivered_by : ($by ?? Auth::user())?->getKey(),
+            ]);
+
+            Invoice::whereKey($tripinvoice->invoice_id)->update(['is_delivered' => true]);
+        });
+
+        if ($pictures) {
+            PhotoCheck::queueDelivery($tripinvoice, $pictures);
+        }
+        // the driver's phone was at this receiver: their barangay and place are known for next time
+        \App\Support\Maps\Barangays::learnFromDelivery($tripinvoice->fresh());
+    }
+
+    /** How long a driver can undo their own delivery. After that only the office can. */
+    public const DRIVER_UNDO_MINUTES = 30;
+
+    /** Minutes this driver has left to undo the delivery (null when they can't). */
+    public function driverUndoMinutesLeft(Tripinvoice $tripinvoice, User $driver): ?int
+    {
+        if (! $tripinvoice->is_delivered || ! $tripinvoice->delivered_at || (int) $tripinvoice->delivered_by !== (int) $driver->getKey()) {
+            return null;
         }
 
-        $data = $request->validate([
-            'uuid' => ['required', 'uuid'],
-            'type' => ['required', 'in:deliver,miss'],
-            'tripinvoice_id' => ['required', 'integer'],
-            'at' => ['required', 'date'],
-            'reason' => ['nullable', 'string'],
-            'note' => ['nullable', 'string', 'max:500'],
-            'photos' => ['array', 'max:12'],
-            'photos.*' => ['image', 'max:12288'],
+        $secondsLeft = self::DRIVER_UNDO_MINUTES * 60 - $tripinvoice->delivered_at->diffInSeconds(now());
+
+        return $secondsLeft > 0 ? (int) ceil($secondsLeft / 60) : null;
+    }
+
+    /**
+     * Put a delivered box back on the driver's list. Drivers can only undo their own
+     * deliveries within DRIVER_UNDO_MINUTES; the office can undo any time.
+     * The photos and the reason are kept in the box's history.
+     */
+    public function undoDelivery(
+        Tripinvoice $tripinvoice,
+        User $by,
+        UndoDeliveryReason $reason,
+        ?string $note = null,
+        bool $byOffice = false,
+    ): DeliveryReversal {
+        if (! $tripinvoice->is_delivered) {
+            throw new DomainException("{$tripinvoice->invoice} is not marked as delivered.");
+        }
+
+        if (! $byOffice && $this->driverUndoMinutesLeft($tripinvoice, $by) === null) {
+            throw new DomainException('It is too late to undo this delivery. Ask the office to change it.');
+        }
+
+        if ($reason->requiresNote() && blank($note)) {
+            throw new DomainException('Please add a note for this reason.');
+        }
+
+        $reversal = DB::transaction(function () use ($tripinvoice, $by, $reason, $note, $byOffice): DeliveryReversal {
+            $reversal = DeliveryReversal::create([
+                'tripinvoice_id' => $tripinvoice->id,
+                'invoice_id' => $tripinvoice->invoice_id,
+                'deliverylog_id' => $tripinvoice->deliveryloghub_id ?: $tripinvoice->deliverylog_id,
+                'user_id' => $by->getKey(),
+                'delivered_by' => $tripinvoice->delivered_by,
+                'delivered_at' => $tripinvoice->delivered_at ?? $tripinvoice->updated_at,
+                'reason' => $reason,
+                'note' => filled($note) ? trim($note) : null,
+                'photos' => $tripinvoice->delivery_picture ?: null,
+                'by_office' => $byOffice,
+            ]);
+
+            $tripinvoice->update([
+                'is_delivered' => false,
+                'delivered_at' => null,
+                'delivered_by' => null,
+                'delivery_picture' => null,
+            ]);
+
+            Invoice::whereKey($tripinvoice->invoice_id)->update(['is_delivered' => false]);
+
+            return $reversal;
+        });
+
+        $this->notifyAboutUndo($reversal, $tripinvoice);
+
+        return $reversal;
+    }
+
+    /** Office undid it → tell the driver. Driver undid it → tell the dispatcher. */
+    protected function notifyAboutUndo(DeliveryReversal $reversal, Tripinvoice $tripinvoice): void
+    {
+        $recipient = $reversal->by_office
+            ? User::find($reversal->delivered_by)
+            : $reversal->deliverylog?->user;
+
+        if (! $recipient || $recipient->is($reversal->user)) {
+            return;
+        }
+
+        Notification::make()
+            ->title("Delivery of {$tripinvoice->invoice} was undone")
+            ->body(collect([
+                $reversal->reason->getLabel(),
+                ($reversal->by_office ? 'By the office: ' : 'By the driver: ').$reversal->user->full_name,
+                $reversal->note,
+            ])->filter()->join("\n"))
+            ->icon('heroicon-o-arrow-uturn-left')
+            ->warning()
+            ->sendToDatabase($recipient);
+    }
+
+    /**
+     * Driver could not hand the box over. The box stays on the truck; the
+     * attempt is kept as history and the dispatcher who made the trip is told.
+     *
+     * @param  array<int, string>  $photos  stored photo paths
+     */
+    public function recordFailedAttempt(
+        Tripinvoice $tripinvoice,
+        User $driver,
+        FailedDeliveryReason $reason,
+        ?string $note = null,
+        array $photos = [],
+        ?string $nextOn = null,
+    ): DeliveryAttempt {
+        if ($tripinvoice->is_delivered) {
+            throw new DomainException("{$tripinvoice->invoice} is already delivered.");
+        }
+
+        if ($reason->requiresNote() && blank($note)) {
+            throw new DomainException('Please add a note for this reason.');
+        }
+
+        if ($reason->requiresPhoto() && $photos === []) {
+            throw new DomainException('Please add a photo for this reason.');
+        }
+
+        $attempt = DB::transaction(fn () => DeliveryAttempt::create([
+            'tripinvoice_id' => $tripinvoice->id,
+            'invoice_id' => $tripinvoice->invoice_id,
+            'deliverylog_id' => $tripinvoice->deliveryloghub_id ?: $tripinvoice->deliverylog_id,
+            'user_id' => $driver->id,
+            'reason' => $reason,
+            'note' => filled($note) ? trim($note) : null,
+            'photos' => array_values($photos) ?: null,
+        ] + static::nextTryFields($tripinvoice, $reason, $nextOn)));
+
+        $this->notifyDispatcher($attempt);
+
+        return $attempt;
+    }
+
+    /** Part 44: when to try again, from the reason and how many tries there were. */
+    public static function nextTryFields(Tripinvoice $box, FailedDeliveryReason $reason, ?string $picked = null): array
+    {
+        if (! \Illuminate\Support\Facades\Schema::hasColumn('delivery_attempts', 'next_try_on')) {
+            return [];
+        }
+        $plan = \App\Support\Deliveries\NextTry::plan($reason, DeliveryAttempt::where('invoice_id', $box->invoice_id)->count() + 1, $picked);
+
+        return ['next_try_on' => $plan['on']?->toDateString(), 'needs_office' => $plan['office']];
+    }
+
+    protected function notifyDispatcher(DeliveryAttempt $attempt): void
+    {
+        $dispatcher = $attempt->deliverylog?->user;
+
+        if (! $dispatcher || $dispatcher->is($attempt->user)) {
+            return;
+        }
+
+        $count = DeliveryAttempt::where('invoice_id', $attempt->invoice_id)->count();
+
+        Notification::make()
+            ->title("{$attempt->tripinvoice->invoice} not delivered")
+            ->body(collect([
+                $attempt->reason->getLabel().($count > 1 ? " (attempt {$count})" : ''),
+                'Trip '.$attempt->deliverylog?->trip_number.' · '.$attempt->user->full_name,
+                $attempt->note,
+            ])->filter()->join("\n"))
+            ->icon($attempt->reason->getIcon())
+            ->warning()
+            ->sendToDatabase($dispatcher);
+    }
+
+    /**
+     * An undelivered box came back on the truck: take it off the trip and put it
+     * back in the pool of boxes waiting for a trip, flagged as returned.
+     * The driver's reasons and photos stay in the delivery attempts history.
+     */
+    public function returnToInventory(Tripinvoice $tripinvoice): void
+    {
+        if ($tripinvoice->is_delivered) {
+            throw new DomainException("{$tripinvoice->invoice} was delivered — it can't be returned.");
+        }
+
+        DB::transaction(function () use ($tripinvoice): void {
+            Invoice::whereKey($tripinvoice->invoice_id)->update([
+                'is_assigned' => false,
+                'is_returned' => true,
+            ]);
+
+            $tripinvoice->delete();
+        });
+    }
+
+    /**
+     * Partner hub version: the box leaves the hub's own trip and goes back to the
+     * hub's list of boxes waiting for a trip (it stays assigned to the hub).
+     */
+    public function returnToHubInventory(Tripinvoice $tripinvoice): void
+    {
+        if ($tripinvoice->is_delivered) {
+            throw new DomainException("{$tripinvoice->invoice} was delivered — it can't be returned.");
+        }
+
+        DB::transaction(function () use ($tripinvoice): void {
+            $this->removeFromHubTrip($tripinvoice);
+            Invoice::whereKey($tripinvoice->invoice_id)->update(['is_returned' => true]);
+        });
+    }
+
+    /** Free the truck and close the trip. */
+    public function releaseTruck(Deliverylog $trip): void
+    {
+        DB::transaction(function () use ($trip): void {
+            $trip->truck?->update(['is_assigned' => false]);
+            $trip->update(['is_current' => false, 'is_active' => false]);
+        });
+    }
+
+    /**
+     * Swap the truck on a trip: the old truck becomes available again,
+     * the new one is marked as in use. Does nothing when the truck did not change.
+     */
+    public function swapTruck(?int $oldTruckId, ?int $newTruckId): void
+    {
+        if ($oldTruckId === $newTruckId) {
+            return;
+        }
+
+        DB::transaction(function () use ($oldTruckId, $newTruckId): void {
+            if ($oldTruckId) {
+                Truck::whereKey($oldTruckId)->update(['is_assigned' => false]);
+            }
+
+            if ($newTruckId) {
+                Truck::whereKey($newTruckId)->update(['is_assigned' => true]);
+            }
+        });
+    }
+
+    public function ensureEditable(Deliverylog|Whdeliverylog $trip): void
+    {
+        if ($trip->is_lock) {
+            throw new DomainException("Trip {$trip->trip_number} is locked. Ask an administrator to unlock it first.");
+        }
+    }
+}
+DISPATCH_FILE_END_10
+
+# ---------------------------------------------------------------- app/Support/Deliveries/DeliveryProof.php
+mkdir -p 'app/Support/Deliveries'
+cat > 'app/Support/Deliveries/DeliveryProof.php' <<'DISPATCH_FILE_END_11'
+<?php
+
+namespace App\Support\Deliveries;
+
+use App\Jobs\MakeSignedReceipt;
+use App\Models\Boxissue;
+use App\Models\DeliverySignature;
+use App\Models\Invoice;
+use App\Models\Invoiceissue;
+use App\Models\Tripinvoice;
+use App\Models\User;
+use App\Support\Photos\Storage\PhotoFolders;
+use DomainException;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+/**
+ * Part 44 (boards 69, 70, 70b): a delivery signed on the driver's phone.
+ * Damaged: the receiver signs that they saw the damage, a damage issue is made for the office,
+ * and the receiver gets an SMS with the receipt link. No paper receipt: the receiver signs on the phone.
+ */
+class DeliveryProof
+{
+    /**
+     * @param  array{why: string, paper_reason?: ?string, recipient_name: string, relationship?: ?string, damage?: array, damage_note?: ?string,
+     *               cant_sign?: bool, signature?: ?string, lat?: ?float, lng?: ?float}  $d
+     */
+    public static function record(Tripinvoice $box, User $driver, array $d): DeliverySignature
+    {
+        $why = $d['why'] === 'damaged' ? 'damaged' : 'no_paper';
+        $name = trim(Str::squish((string) ($d['recipient_name'] ?? '')));
+        if ($name === '') {
+            throw new DomainException('Type the name of the person who received the box.');
+        }
+        $damage = array_values(array_intersect(array_keys(DeliverySignature::DAMAGE), (array) ($d['damage'] ?? [])));
+        if ($why === 'damaged' && $damage === [] && blank($d['damage_note'] ?? null)) {
+            throw new DomainException('Tap what is damaged.');
+        }
+        $cant = (bool) ($d['cant_sign'] ?? false);
+        $png = static::png($d['signature'] ?? null);
+        if (! $png && ! $cant) {
+            throw new DomainException('Ask the receiver to sign.');
+        }
+
+        $token = static::token();
+        $dir = PhotoFolders::dir('delivery', $box->invoice);
+        $path = null;
+        if ($png) {
+            $path = $dir.'/signature-'.$token.'.png';
+            Storage::disk('public')->put($path, $png);
+        }
+
+        return DeliverySignature::create([
+            'tripinvoice_id' => $box->id,
+            'invoice_id' => $box->invoice_id,
+            'user_id' => $driver->id,
+            'why' => $why,
+            'paper_reason' => $why === 'no_paper' && isset(DeliverySignature::PAPER[$d['paper_reason'] ?? '']) ? $d['paper_reason'] : null,
+            'recipient_name' => Str::limit($name, 117, ''),
+            'relationship' => in_array($d['relationship'] ?? null, DeliverySignature::RELATIONSHIP, true) ? $d['relationship'] : null,
+            'damage' => $why === 'damaged' ? $damage : null,
+            'damage_note' => $why === 'damaged' && filled($d['damage_note'] ?? null) ? Str::limit(trim($d['damage_note']), 290, '') : null,
+            'cant_sign' => $cant && ! $png,
+            'signature' => $path,
+            'token' => $token,
+            'lat' => is_numeric($d['lat'] ?? null) ? $d['lat'] : null,
+            'lng' => is_numeric($d['lng'] ?? null) ? $d['lng'] : null,
+            'signed_at' => now(),
         ]);
+    }
 
-        // Sent before (e.g. the answer got lost): give the same answer again.
-        if ($done = OfflineSubmission::where('uuid', $data['uuid'])->where('user_id', $driver->id)->first()) {
-            return $this->answer($done);
+    /** After the box is marked delivered: the damage issue, then the receipt (and the SMS) in the background. */
+    public static function after(DeliverySignature $s): void
+    {
+        if ($s->isDamaged() && ! $s->invoiceissue_id) {
+            $box = $s->tripinvoice;
+            $type = Boxissue::firstOrCreate(['issue_type' => 'Damaged on delivery']);
+            $issue = Invoiceissue::create([
+                'invoice' => $box?->invoice, 'invoice_id' => $s->invoice_id, 'container_id' => Invoice::whereKey($s->invoice_id)->value('container_id'),
+                'boxissue_id' => $type->id, 'user_id' => $s->user_id,
+                'remarks' => 'Delivered damaged: '.$s->damageText().'. Received by '.$s->recipient_name.($s->relationship ? ' ('.strtolower($s->relationship).')' : '').', who saw the damage and signed.',
+                'attachment_pic' => array_values((array) ($box?->delivery_picture ?? [])),
+            ]);
+            $s->update(['invoiceissue_id' => $issue->id]);
         }
+        MakeSignedReceipt::dispatch($s->id)->afterCommit();
+    }
 
-        $at = Carbon::parse($data['at'])->setTimezone(config('app.timezone'));
-        if ($at->isFuture() || $at->lt(now()->subHours(self::MAX_AGE_HOURS))) {
-            $at = now();
+    /** The PNG from the signature pad ("data:image/png;base64,…"), at most 300 KB. */
+    public static function png(?string $dataUrl): ?string
+    {
+        if (! $dataUrl || ! preg_match('~^data:image/png;base64,([A-Za-z0-9+/=\s]+)$~', $dataUrl, $m)) {
+            return null;
         }
+        $bin = base64_decode($m[1], true);
 
-        $box = DriverTrip::for($driver)->boxes()->with('invdata')->find($data['tripinvoice_id']);
-        $result = ['status' => 'saved', 'message' => null];
+        return $bin !== false && strlen($bin) > 60 && strlen($bin) <= 300 * 1024 && str_starts_with($bin, "\x89PNG") ? $bin : null;
+    }
 
-        if (! $box) {
-            $result = ['status' => 'conflict', 'message' => 'This box is no longer on your trip. Keep it on the truck and call the office.'];
-        } elseif ($box->is_delivered) {
-            $mine = (int) $box->delivered_by === (int) $driver->id;
-            $result = $mine
-                ? ['status' => 'saved', 'message' => 'Already delivered by you.']
-                : ['status' => 'conflict', 'message' => 'Someone else already marked this box delivered. Call the office.'];
-        } else {
-            $dir = \App\Support\Photos\Storage\PhotoFolders::dir($data['type'] === 'deliver' ? 'delivery' : 'not-delivered', $box->invoice);
-            $paths = collect($request->file('photos', []))->map(function ($f) use ($dir) {
-                $path = $f->store($dir, 'public');
-                PhotoShrinker::file('public', $path);
+    protected static function token(): string
+    {
+        do {
+            $t = Str::lower(Str::random(10));
+        } while (DeliverySignature::where('token', $t)->exists());
 
-                return $path;
-            })->all();
+        return $t;
+    }
+}
+DISPATCH_FILE_END_11
 
-            try {
-                DB::transaction(function () use ($data, $box, $driver, $paths, $at): void {
-                    $service = app(TripAssignment::class);
-                    if ($data['type'] === 'deliver') {
-                        if ($paths === []) {
-                            throw new DomainException('A delivery needs at least one photo.');
-                        }
-                        $service->markDelivered($box, $paths, $driver);
-                        $box->forceFill(['delivered_at' => $at])->save();
-                    } else {
-                        $reason = FailedDeliveryReason::tryFrom((string) ($data['reason'] ?? '')) ?? FailedDeliveryReason::Other;
-                        $attempt = $service->recordFailedAttempt($box, $driver, $reason, $data['note'] ?? null, $paths);
-                        $attempt->forceFill(['created_at' => $at])->save();
-                    }
-                });
-            } catch (DomainException $e) {
-                foreach ($paths as $p) {
-                    Storage::disk('public')->delete($p);
-                }
-                $result = ['status' => 'conflict', 'message' => $e->getMessage()];
+# ---------------------------------------------------------------- app/Support/Deliveries/NextTry.php
+mkdir -p 'app/Support/Deliveries'
+cat > 'app/Support/Deliveries/NextTry.php' <<'DISPATCH_FILE_END_12'
+<?php
+
+namespace App\Support\Deliveries;
+
+use App\Enums\FailedDeliveryReason as R;
+use App\Models\DeliveryAttempt;
+use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+
+/**
+ * Part 44 (board 69): when a box that could not be delivered is tried again.
+ * The reason sets the date; after 3 tries, or when only the office can fix it, the office decides.
+ */
+class NextTry
+{
+    public const MAX_TRIES = 3;
+
+    /** Reasons the driver cannot fix by coming back: the office calls or fixes the address first. */
+    public const OFFICE = [R::AddressNotFound, R::PhoneUnreachable, R::Refused, R::BoxDamaged];
+
+    /** The next working day (no Sundays). */
+    public static function workday(?Carbon $from = null, int $days = 1): Carbon
+    {
+        $d = ($from ?? today())->copy()->startOfDay();
+        for ($i = 0; $i < $days; $i++) {
+            $d->addDay();
+            if ($d->isSunday()) {
+                $d->addDay();
             }
         }
 
-        $row = OfflineSubmission::create([
-            'uuid' => $data['uuid'], 'user_id' => $driver->id, 'tripinvoice_id' => $data['tripinvoice_id'],
-            'type' => $data['type'], 'status' => $result['status'], 'message' => $result['message'], 'happened_at' => $at,
-            'payload' => ['reason' => $data['reason'] ?? null, 'note' => $data['note'] ?? null, 'photos' => count($request->file('photos', []))],
-        ]);
-
-        return $this->answer($row);
+        return $d;
     }
 
-    protected function answer(OfflineSubmission $row): JsonResponse
+    /**
+     * @return array{on: ?Carbon, office: bool, text: string}
+     */
+    public static function plan(R $reason, int $tryNumber, ?string $picked = null): array
     {
-        return response()->json(['uuid' => $row->uuid, 'status' => $row->status, 'message' => $row->message]);
+        if ($tryNumber >= self::MAX_TRIES) {
+            return ['on' => null, 'office' => true, 'text' => "Try {$tryNumber} of ".self::MAX_TRIES.': the office takes over'];
+        }
+        if (in_array($reason, self::OFFICE, true)) {
+            return ['on' => null, 'office' => true, 'text' => match ($reason) {
+                R::AddressNotFound => 'The office fixes the address first',
+                R::PhoneUnreachable => 'The office calls the receiver first',
+                R::Refused => 'The office calls the sender first',
+                default => 'The office decides',
+            }];
+        }
+        $on = match ($reason) {
+            R::Rescheduled => $picked ? Carbon::parse($picked)->startOfDay() : static::workday(),
+            R::AreaInaccessible => static::workday(null, 2),
+            default => static::workday(),
+        };
+        if ($on->lte(today())) {
+            $on = static::workday();
+        }
+
+        return ['on' => $on, 'office' => false, 'text' => 'Next try: '.$on->format('D M j')];
     }
 
-    /** The page the phone opens with no signal. It holds no data; driver-offline.js reads what the phone saved. */
-    public function shell(): Response
+    /** Days the receiver can pick when they ask for another day. */
+    public static function choices(): array
     {
-        return response(view('pwa.driver-offline', [
-            'company' => Branding::companyName(),
-            'script' => asset('js/app/driver-offline.js').'?v='.self::scriptVersion(),
-        ])->render(), 200, ['Cache-Control' => 'no-cache']);
+        return collect([1, 2, 3, 5])->mapWithKeys(fn ($n) => [static::workday(null, $n)->toDateString() => $n === 1 ? 'Tomorrow · '.static::workday()->format('D') : static::workday(null, $n)->format('D M j')])->all();
     }
 
-    public static function scriptVersion(): string
+    /** The latest try of each box that is still not delivered. */
+    public static function open(): Builder
     {
-        $file = public_path('js/app/driver-offline.js');
+        return DeliveryAttempt::query()
+            ->whereIn('id', DeliveryAttempt::selectRaw('MAX(id)')->groupBy('invoice_id'))
+            ->whereNull('handled_at')
+            ->whereHas('invoice', fn ($q) => $q->where('is_delivered', false));
+    }
 
-        return is_file($file) ? substr(md5((string) filemtime($file)), 0, 8) : '0';
+    /** Due today / Overdue / On hold (a later day) / Needs office. */
+    public static function tab(DeliveryAttempt $a): string
+    {
+        return match (true) {
+            $a->needs_office || ! $a->next_try_on => 'office',
+            Carbon::parse($a->next_try_on)->lt(today()) => 'overdue',
+            Carbon::parse($a->next_try_on)->isToday() => 'today',
+            default => 'hold',
+        };
+    }
+
+    /** @return Collection<string, int> */
+    public static function counts(Collection $rows): Collection
+    {
+        return collect(['today' => 0, 'overdue' => 0, 'hold' => 0, 'office' => 0])->merge($rows->countBy(fn ($a) => static::tab($a)));
     }
 }
-DISPATCH_FILE_END_26
+DISPATCH_FILE_END_12
 
-# ---------------------------------------------------------------- app/Support/Photos/BoxPhotos.php
+# ---------------------------------------------------------------- app/Support/Deliveries/SignedReceipt.php
+mkdir -p 'app/Support/Deliveries'
+cat > 'app/Support/Deliveries/SignedReceipt.php' <<'DISPATCH_FILE_END_13'
+<?php
+
+namespace App\Support\Deliveries;
+
+use App\Http\Controllers\InvoiceController;
+use App\Models\DeliverySignature;
+use App\Models\Invoice;
+use App\Support\Pdf\WkBinary;
+use App\Support\Photos\Storage\PhotoFolders;
+use Illuminate\Support\Facades\Storage;
+use Knp\Snappy\Image;
+use Knp\Snappy\Pdf;
+use Throwable;
+
+/**
+ * Part 44 (board 70b): the receipt you print today, with only its blank lines filled in:
+ * delivery date, time, truck, recipient name, relationship, the signature, the boxes ticked,
+ * and the damage in REMARKS. Saved as receipt.pdf, and as receipt.jpg in the delivery photos.
+ */
+class SignedReceipt
+{
+    /** Tests: write small stand-in files instead of running wkhtmltopdf. */
+    public static bool $fake = false;
+
+    public static function html(DeliverySignature $s): string
+    {
+        $invoice = Invoice::findOrFail($s->invoice_id);
+        $data = InvoiceController::receiptData($invoice);
+        $at = $s->signed_at ?? $s->created_at ?? now();
+        $remarks = $s->isDamaged()
+            ? 'Damaged: '.$s->damageText().'. The receiver saw the damage before signing.'
+            : '';
+        if ($s->cant_sign) {
+            $remarks = trim($remarks.' The receiver could not sign.');
+        }
+        $data['signed'] = [
+            'date' => $at->format('M j, Y'),
+            'time' => $at->format('g:i A'),
+            'truck' => (string) ($data['truck']?->description ?: $data['truck']?->plate_no ?: ''),
+            'name' => (string) $s->recipient_name,
+            'relationship' => (string) $s->relationship,
+            'sig' => $s->signatureData(),
+            'damaged' => $s->isDamaged(),
+            'remarks' => $remarks,
+        ];
+
+        return view('invoices.pdfinvoice', $data)->render();
+    }
+
+    /**
+     * The picture keeps only the first copy of the receipt (it is printed twice on the page):
+     * cut at the first long white gap after the text, and saved a bit smaller.
+     */
+    public static function firstCopy(string $jpg): string
+    {
+        if (! function_exists('imagecreatefromstring') || ! ($im = @imagecreatefromstring($jpg))) {
+            return $jpg;
+        }
+        $w = imagesx($im);
+        $h = imagesy($im);
+        $started = false;
+        $white = 0;
+        $cut = $h;
+        for ($y = 0; $y < $h; $y += 2) {
+            $dark = false;
+            for ($x = 0; $x < $w; $x += 3) {
+                $c = imagecolorat($im, $x, $y);
+                if ((($c >> 16) & 255) + (($c >> 8) & 255) + ($c & 255) < 600) {
+                    $dark = true;
+                    break;
+                }
+            }
+            if ($dark) {
+                $started = true;
+                $white = 0;
+            } elseif ($started && ($white += 2) >= 110) {
+                $cut = min($h, $y - $white + 40);
+                break;
+            }
+        }
+        $out = imagecrop($im, ['x' => 0, 'y' => 0, 'width' => $w, 'height' => max(200, $cut)]) ?: $im;
+        ob_start();
+        imagejpeg($out, null, 78);
+
+        return (string) ob_get_clean();
+    }
+
+    /** Make receipt.pdf and receipt.jpg next to the delivery photos. Returns false when it could not. */
+    public static function make(DeliverySignature $s): bool
+    {
+        $dir = PhotoFolders::dir('delivery', $s->tripinvoice?->invoice ?? (string) $s->invoice_id, $s->signed_at);
+        $base = $dir.'/receipt-'.$s->token;
+        $disk = Storage::disk('public');
+        try {
+            if (static::$fake) {
+                $pdf = '%PDF-1.4 signed receipt '.$s->token;
+                $jpg = base64_decode('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==');
+            } else {
+                $bin = WkBinary::find();
+                if (! $bin) {
+                    return false;
+                }
+                $html = static::html($s);
+                $pdf = (new Pdf($bin))->getOutputFromHtml($html, [
+                    'margin-top' => '5mm', 'margin-bottom' => '5mm', 'margin-left' => '5mm', 'margin-right' => '5mm',
+                    'enable-local-file-access' => true, 'load-error-handling' => 'ignore', 'load-media-error-handling' => 'ignore',
+                ]);
+                $jpg = null;
+                $img = dirname($bin).'/wkhtmltoimage';
+                if (WkBinary::works($img)) {
+                    $jpg = (new Image($img))->getOutputFromHtml($html, ['format' => 'jpg', 'quality' => 70, 'width' => 900, 'enable-local-file-access' => true, 'load-error-handling' => 'ignore']);
+                }
+            }
+            $disk->put($base.'.pdf', $pdf);
+            $s->receipt_pdf = $base.'.pdf';
+            if ($jpg) {
+                $jpg = static::firstCopy($jpg);
+                $disk->put($base.'.jpg', $jpg);
+                $s->receipt_jpg = $base.'.jpg';
+            }
+            $s->save();
+
+            return true;
+        } catch (Throwable $e) {
+            report($e);
+
+            return false;
+        }
+    }
+}
+DISPATCH_FILE_END_13
+
+# ---------------------------------------------------------------- app/Support/Navigation/Menu.php
+mkdir -p 'app/Support/Navigation'
+cat > 'app/Support/Navigation/Menu.php' <<'DISPATCH_FILE_END_14'
+<?php
+
+namespace App\Support\Navigation;
+
+use App\Models\Shipping\WrongHubBox;
+use App\Support\Shipping\Shipments;
+use App\Support\Tracking\Tracker;
+use App\Support\Trips\TripFill;
+use Filament\Navigation\NavigationGroup;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
+
+/**
+ * The side menu of the Admin, Warehouse and Partner hub panels, in one place:
+ * the groups (in the order of the work of the day) and, per page, its group, name and place.
+ * Pages not listed here keep their own group and name.
+ */
+class Menu
+{
+    /** Panel => [group name => folded at first]. */
+    public const GROUPS = [
+        'admin' => [
+            'Boxes' => false, 'Trips & delivery' => false, 'Sea & partner hubs' => false, 'Money' => false,
+            'AI helpers' => true, 'Scan on this computer' => false,
+            'Settings · company & people' => true, 'Settings · places & routes' => true,
+            'Settings · trucks & boxes' => true, 'Settings · messages & AI' => true, 'Help' => false,
+        ],
+        'warehouse' => [
+            'Boxes' => false, 'Trips' => false, 'Sea & returns' => false, 'Scan on this computer' => false,
+            'Trucks' => false, 'AI helpers' => true, 'Settings & help' => true,
+        ],
+        'company' => [
+            'Coming in' => false, 'Delivery' => false, 'Returns' => false, 'Scan on this computer' => false,
+            'Trucks & people' => false, 'AI helpers' => true, 'Settings & help' => true,
+        ],
+    ];
+
+    /** Panel => [page or resource class (short, after the panel's namespace) => [group, name or null to keep, sort]]. */
+    public const ITEMS = [
+        'admin' => [
+            'Resources\\ContainerResource' => ['Boxes', null, 1],
+            'Resources\\Unmanifesteds\\UnmanifestedResource' => ['Boxes', null, 2],
+            'Resources\\Inventories\\InventoryResource' => ['Boxes', 'Inventory', 3],
+            'Pages\\WhereToUnload' => ['Boxes', null, 1],
+            'Resources\\Boxsummaries\\BoxsummaryResource' => ['Boxes', 'Box summary', 4],
+            'Resources\\Searchinvs\\SearchinvResource' => ['Boxes', 'Find a box', 5],
+            'Resources\\Invoiceissues\\InvoiceissueResource' => ['Boxes', 'Box issues', 6],
+            'Pages\\BoxPhotos' => ['Boxes', 'Box photos', 7],
+
+            'Resources\\Deliverylogs\\DeliverylogResource' => ['Trips & delivery', 'Delivery trips', 1],
+            'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Trips & delivery', 'Delivery invoices', 2],
+            'Pages\\PlanTrips' => ['Trips & delivery', null, 0],
+            'Pages\\NewBoxes' => ['Trips & delivery', null, 0],
+            'Pages\\Picking' => ['Trips & delivery', null, 1],
+            'Pages\\Redelivery' => ['Trips & delivery', null, 1],
+            'Pages\\AddressesToCheck' => ['Trips & delivery', null, 2],
+            'Pages\\Overrides' => ['Trips & delivery', null, 2],
+            'Pages\\WarehouseTransfers' => ['Trips & delivery', null, 2],
+            'Pages\\CrewBoard' => ['Trips & delivery', null, 3],
+            'Pages\\TruckTracking' => ['Trips & delivery', null, 4],
+            'Pages\\TruckDay' => ['Trips & delivery', null, 5],
+
+            'Pages\\SeaShipments' => ['Sea & partner hubs', null, 1],
+            'Pages\\WrongHub' => ['Sea & partner hubs', null, 2],
+
+            'Pages\\CostPerBox' => ['Money', null, 1],
+            'Pages\\Fuel' => ['Money', null, 2],
+
+            'Pages\\Scaninvoice' => ['Scan on this computer', 'Unload container', 1],
+            'Pages\\Scanload' => ['Scan on this computer', 'Load truck', 2],
+            'Pages\\ReturnBoxes' => ['Scan on this computer', 'Return boxes', 3],
+
+            'Pages\\Companyinfo' => ['Settings · company & people', 'Company info', 1],
+            'Pages\\AppIcons' => ['Settings · company & people', null, 2],
+            'Pages\\PrintSettings' => ['Settings · company & people', null, 3],
+            'Resources\\UserResource' => ['Settings · company & people', null, 4],
+            '\\BezhanSalleh\\FilamentShield\\Resources\\Roles\\RoleResource' => ['Settings · company & people', null, 5],
+            'Resources\\Workpositions\\WorkpositionResource' => ['Settings · company & people', 'Job positions', 6],
+            'Resources\\PanelcategoryResource' => ['Settings · company & people', 'Account types', 7],
+
+            'Resources\\Warehouses\\WarehouseResource' => ['Settings · places & routes', null, 1],
+            'Pages\\WarehouseSections' => ['Settings · places & routes', null, 2],
+            'Pages\\WarehouseCoverage' => ['Settings · places & routes', null, 2],
+            'Pages\\HubAreas' => ['Settings · places & routes', null, 2],
+            'Resources\\Logistichubs\\LogistichubResource' => ['Settings · places & routes', 'Logistic hubs', 3],
+            'Pages\\HubIslands' => ['Settings · places & routes', null, 4],
+            'Pages\\Forwarders' => ['Settings · places & routes', 'Forwarders', 4],
+            'Pages\\Ports' => ['Settings · places & routes', 'Ports', 4],
+            'Resources\\RouteareaResource' => ['Settings · places & routes', 'Route areas', 5],
+            'Pages\\MapsRoutes' => ['Settings · places & routes', null, 6],
+
+            'Pages\\Fleet' => ['Settings · trucks & boxes', 'Trucks', 1],
+            'Pages\\RentalTrucks' => ['Settings · trucks & boxes', null, 1],
+            'Resources\\Truckteams\\TruckteamResource' => ['Settings · trucks & boxes', 'Truck teams', 2],
+            'Pages\\TrackingSettings' => ['Settings · trucks & boxes', 'Truck tracking settings', 3],
+            'Pages\\FuelSettings' => ['Settings · trucks & boxes', 'Fuel settings', 4],
+            'Pages\\BoxSizeSettings' => ['Settings · trucks & boxes', null, 5],
+            'Pages\\TripRules' => ['Settings · trucks & boxes', null, 5],
+            'Resources\\Boxissues\\BoxissueResource' => ['Settings · trucks & boxes', 'Box issue types', 6],
+            'Pages\\BoxPhotoSettings' => ['Settings · trucks & boxes', 'Box photo settings', 7],
+            'Pages\\PhotoStorage' => ['Settings · trucks & boxes', 'Photo storage', 7],
+            'Pages\\AgingLimits' => ['Settings · trucks & boxes', null, 8],
+            'Resources\\ConsolidatorResource' => ['Settings · trucks & boxes', null, 9],
+            'Resources\\CompanyResource' => ['Settings · trucks & boxes', 'Agents', 10],
+
+            'Pages\\SmsSettings' => ['Settings · messages & AI', null, 1],
+            'Pages\\SmsLog' => ['Settings · messages & AI', null, 2],
+            'Pages\\AiSettings' => ['Settings · messages & AI', 'AI settings', 3],
+            'Pages\\AddressAi' => ['Settings · messages & AI', null, 4],
+            'Resources\\HelpGuides\\HelpGuideResource' => ['Settings · messages & AI', 'Help guides (edit)', 4],
+
+            'Pages\\HelpGuide' => ['Help', null, 1],
+        ],
+        'warehouse' => [
+            'Resources\\Containers\\ContainerResource' => ['Boxes', null, 1],
+            'Resources\\Inventories\\InventoryResource' => ['Boxes', 'Inventory', 2],
+            'Pages\\Sections' => ['Boxes', null, 3],
+            'Resources\\Searchinvs\\SearchinvResource' => ['Boxes', 'Find a box', 4],
+            'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Boxes', 'Delivery invoices', 5],
+            'Resources\\Invoiceissues\\InvoiceissueResource' => ['Boxes', 'Box issues', 6],
+            'Pages\\BoxPhotos' => ['Boxes', 'Box photos', 7],
+
+            'Resources\\Deliverylogs\\DeliverylogResource' => ['Trips', 'Delivery trips', 1],
+            'Resources\\Whdeliverylogs\\WhdeliverylogResource' => ['Trips', 'Transfers to other warehouses', 2],
+            'Pages\\PlanTrips' => ['Trips', null, 0],
+            'Pages\\NewBoxes' => ['Trips', null, 0],
+            'Pages\\Picking' => ['Trips', null, 1],
+            'Pages\\Redelivery' => ['Trips', null, 1],
+            'Pages\\AddressesToCheck' => ['Trips', null, 2],
+            'Pages\\Overrides' => ['Trips', null, 2],
+            'Pages\\WarehouseTransfers' => ['Trips', null, 2],
+            'Pages\\CrewBoard' => ['Trips', null, 3],
+            'Pages\\TruckTracking' => ['Trips', null, 3],
+            'Pages\\TruckDay' => ['Trips', null, 4],
+            'Pages\\Fuel' => ['Trips', null, 5],
+
+            'Pages\\SeaShipments' => ['Sea & returns', null, 1],
+            'Pages\\ComingBack' => ['Sea & returns', null, 2],
+
+            'Pages\\Unloadedcontainer' => ['Scan on this computer', 'Unload container', 1],
+            'Pages\\Hubloaded' => ['Scan on this computer', 'Load delivery truck', 2],
+            'Pages\\HubReturnBoxes' => ['Scan on this computer', 'Return boxes', 3],
+            'Pages\\Whloaded' => ['Scan on this computer', 'Load transfer truck', 4],
+            'Pages\\Whunloaded' => ['Scan on this computer', 'Receive transfer truck', 5],
+
+            'Pages\\Fleet' => ['Trucks', 'Trucks', 1],
+            'Pages\\RentalTrucks' => ['Trucks', null, 2],
+            'Pages\\Crew' => ['Trucks', 'Crew', 2],
+
+            'Pages\\MapsRoutes' => ['Settings & help', null, 1],
+            'Pages\\WarehouseCoverage' => ['Settings & help', null, 1],
+            'Pages\\InstallApps' => ['Settings & help', null, 2],
+            'Pages\\HelpGuide' => ['Settings & help', null, 3],
+        ],
+        'company' => [
+            'Pages\\IncomingShipments' => ['Coming in', null, 1],
+            'Pages\\IncomingBoxes' => ['Coming in', null, 2],
+
+            'Pages\\PlanTrips' => ['Delivery', null, 0],
+            'Pages\\Picking' => ['Delivery', null, 1],
+            'Resources\\Deliverylogs\\DeliverylogResource' => ['Delivery', 'Delivery trips', 1],
+            'Resources\\Deliveryinvs\\DeliveryinvResource' => ['Delivery', 'Delivery invoices', 2],
+            'Pages\\NotDelivered' => ['Delivery', null, 3],
+            'Pages\\AddressesToCheck' => ['Delivery', null, 3],
+            'Pages\\TrackBox' => ['Delivery', null, 4],
+            'Pages\\MyArea' => ['Settings & help', 'My area', 0],
+
+            'Pages\\WrongHub' => ['Returns', null, 1],
+
+            'Pages\\LoadTruck' => ['Scan on this computer', 'Load truck', 1],
+            'Pages\\ReturnBoxes' => ['Scan on this computer', 'Return boxes', 2],
+
+            'Pages\\Fleet' => ['Trucks & people', 'Trucks', 1],
+            'Pages\\RentalTrucks' => ['Trucks & people', null, 2],
+            'Pages\\CrewBoard' => ['Trucks & people', null, 2],
+            'Pages\\HubDrivers' => ['Trucks & people', null, 2],
+            'Pages\\Crew' => ['Trucks & people', 'Crew', 3],
+            'Pages\\TruckTracking' => ['Trucks & people', null, 4],
+            'Pages\\TruckDay' => ['Trucks & people', null, 5],
+            'Pages\\Fuel' => ['Trucks & people', null, 6],
+
+            'Pages\\BoxPhotos' => ['Settings & help', 'Box photos', 1],
+            'Pages\\MapsRoutes' => ['Settings & help', null, 2],
+            'Pages\\InstallApps' => ['Settings & help', null, 3],
+            'Pages\\HelpGuide' => ['Settings & help', null, 4],
+        ],
+    ];
+
+    /** Pages with a number of what waits: panel => [short class => counter]. */
+    public const BADGES = [
+        'admin' => ['Pages\\SeaShipments' => 'sea', 'Pages\\WrongHub' => 'wrongHub', 'Pages\\NewBoxes' => 'newBoxes'],
+        'warehouse' => ['Pages\\SeaShipments' => 'sea', 'Pages\\ComingBack' => 'comingBack', 'Pages\\NewBoxes' => 'newBoxes'],
+        'company' => ['Pages\\IncomingShipments' => 'sea', 'Pages\\WrongHub' => 'wrongHub'],
+    ];
+
+    protected const BASE = ['admin' => 'App\\Filament\\', 'warehouse' => 'App\\Filament\\Warehouse\\', 'company' => 'App\\Filament\\Company\\'];
+
+    public static function has(?string $panel): bool
+    {
+        return isset(self::GROUPS[$panel ?? '']);
+    }
+
+    /** @return array<NavigationGroup> */
+    public static function groups(string $panel): array
+    {
+        return collect(self::GROUPS[$panel] ?? [])
+            ->map(fn (bool $folded, string $name) => NavigationGroup::make($name)->collapsible()->collapsed($folded))
+            ->values()->all();
+    }
+
+    protected static function full(string $panel, string $short): string
+    {
+        return str_starts_with($short, '\\') ? ltrim($short, '\\') : self::BASE[$panel].$short;
+    }
+
+    /** @return array<class-string, array{0: string, 1: ?string, 2: int}> */
+    public static function items(string $panel): array
+    {
+        return collect(self::ITEMS[$panel] ?? [])->mapWithKeys(fn ($v, $k) => [static::full($panel, $k) => $v])->all();
+    }
+
+    /** @return array<class-string, string> */
+    public static function badges(string $panel): array
+    {
+        return collect(self::BADGES[$panel] ?? [])->mapWithKeys(fn ($v, $k) => [static::full($panel, $k) => $v])->all();
+    }
+
+    /** The number shown beside a page, kept for a minute; null when nothing waits. */
+    public static function count(string $panel, string $counter): ?string
+    {
+        $user = Auth::user();
+        if (! $user) {
+            return null;
+        }
+        try {
+            $n = Cache::remember("menu:{$panel}:{$user->getKey()}:{$counter}", 60, function () use ($panel, $user, $counter): int {
+                if ($counter === 'newBoxes') {
+                    // new boxes of cities that already have a trip (board 45b)
+                    return (int) collect(TripFill::newBoxes($user))->sum('n');
+                }
+                if (! Shipments::ready()) {
+                    return 0;
+                }
+                $hub = Tracker::hubFor($user, $panel);
+                if ($hub === false) {
+                    return 0;
+                }
+
+                return match ($counter) {
+                    'sea' => Shipments::visible($hub)->where('status', '!=', 'received')->count(),
+                    'wrongHub' => WrongHubBox::query()->when(is_int($hub), fn ($q) => $q->where('logistichub_id', $hub))->where('status', 'waiting')->count(),
+                    'comingBack' => WrongHubBox::query()->where('status', 'returning')->count(),
+                    default => 0,
+                };
+            });
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $n > 0 ? (string) $n : null;
+    }
+}
+DISPATCH_FILE_END_14
+
+# ---------------------------------------------------------------- app/Support/Photos/BoxAlbum.php
 mkdir -p 'app/Support/Photos'
-cat > 'app/Support/Photos/BoxPhotos.php' <<'DISPATCH_FILE_END_27'
+cat > 'app/Support/Photos/BoxAlbum.php' <<'DISPATCH_FILE_END_15'
 <?php
 
 namespace App\Support\Photos;
 
 use App\Models\BoxPhoto;
+use App\Models\DeliveryAttempt;
+use App\Models\Deliverylog;
 use App\Models\Invoice;
-use App\Models\Invoiceissue;
-use App\Models\PhotoSetting;
+use App\Models\Logistichub;
+use App\Models\Tripinvoice;
 use App\Models\User;
-use App\Support\Ai\PhotoCheck;
-use Illuminate\Http\UploadedFile;
+use App\Models\Whdeliverylog;
+use App\Models\Whtripinvoice;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
-/** Saves scan photos: made smaller (max 1600 px, JPEG) and stamped with invoice, date and who took it. */
-class BoxPhotos
+/**
+ * Every photo of a box in one list: scan photos (box_photos) plus the driver's
+ * delivery photos (tripinvoices.delivery_picture) and not-delivered photos (delivery_attempts.photos).
+ *
+ * Each photo is an array with a key used for selecting it:
+ *   p:{box_photo id}   d:{tripinvoice id}:{n}   a:{delivery attempt id}:{n}
+ */
+class BoxAlbum
 {
-    public const MAX_SIDE = 1600;
+    public const MAX_BOXES = 30;
+
+    public function __construct(public readonly ?User $user) {}
+
+    /** Partner hub users only see their own boxes. Null = sees everything. */
+    protected function hubLimit(): ?int
+    {
+        if (! $this->user || $this->user->hasRole('super_admin')) {
+            return $this->user ? null : -1;
+        }
+        $hub = $this->user->logistichub_id ? Logistichub::find($this->user->logistichub_id) : null;
+        if ($hub?->is_company) {
+            return $hub->id;
+        }
+
+        return ($hub || $this->user->warehouse_id) ? null : -1;
+    }
+
+    /** Invoice ids for a search by invoice, container or trip number. */
+    public function find(string $q): Collection
+    {
+        $q = trim($q);
+        if ($q === '') {
+            return collect();
+        }
+
+        $ids = Invoice::query()->where('invoice', 'like', "%{$q}%")->limit(200)->pluck('id')
+            ->merge(BoxPhoto::search($q)->whereNotNull('invoice_id')->limit(500)->pluck('invoice_id'))
+            ->merge(Invoice::query()->whereHas('container', fn ($c) => $c->where('container_no', 'like', "%{$q}%"))->limit(500)->pluck('id'))
+            ->merge(Tripinvoice::query()->where(fn ($t) => $t
+                ->whereIn('deliverylog_id', Deliverylog::where('trip_number', 'like', "%{$q}%")->select('id'))
+                ->orWhereIn('deliveryloghub_id', Deliverylog::where('trip_number', 'like', "%{$q}%")->select('id')))->limit(500)->pluck('invoice_id'))
+            ->merge(Whtripinvoice::query()->whereIn('whdeliverylog_id', Whdeliverylog::where('trip_number', 'like', "%{$q}%")->select('id'))->limit(500)->pluck('invoice_id'))
+            ->filter()->unique()->values();
+
+        return $this->allowed($ids);
+    }
+
+    /** The boxes of these that this user may see. */
+    public function allowed(Collection $ids): Collection
+    {
+        $hub = $this->hubLimit();
+        if ($hub === -1) {
+            return collect();
+        }
+        if ($hub === null) {
+            return $ids->values();
+        }
+
+        return $ids->intersect(
+            Tripinvoice::where('logistichub_id', $hub)->whereIn('invoice_id', $ids)->pluck('invoice_id')
+                ->merge(BoxPhoto::where('logistichub_id', $hub)->whereIn('invoice_id', $ids)->pluck('invoice_id'))
+        )->values();
+    }
 
     /**
-     * @param  array{container_id?: ?int, deliverylog_id?: ?int, whdeliverylog_id?: ?int, warehouse_id?: ?int, logistichub_id?: ?int}  $context
+     * Boxes with their photos, newest box first. Boxes without any photo are left out.
+     *
+     * @return Collection<int, array{invoice: Invoice, items: Collection, journey: array, worst: ?string, delivered: ?array, attempts: Collection}>
      */
-    public static function store(UploadedFile $file, string $step, ?Invoice $invoice, array $context, ?User $user, ?string $condition = null, ?string $note = null): BoxPhoto
+    public function boxes(Collection $invoiceIds): Collection
     {
-        $taken = now();
-        $stamp = collect([
-            $invoice?->invoice ?? 'BATCH',
-            BoxPhoto::SHORT[$step] ?? $step,
-            $condition ? strtoupper($condition) : null,
-            $taken->format('d M Y g:i A'),
-            $user?->full_name,
-        ])->filter()->join('  |  ');
+        if ($invoiceIds->isEmpty()) {
+            return collect();
+        }
 
-        $bytes = static::shrink((string) file_get_contents($file->getRealPath()), $stamp);
-        $path = \App\Support\Photos\Storage\PhotoFolders::dir('scan/'.\App\Support\Photos\Storage\PhotoFolders::clean($step), $invoice?->invoice ?? 'batch', $taken).'/'.Str::uuid().'.jpg';
-        Storage::disk('box')->put($path, $bytes);
+        $invoices = Invoice::whereKey($invoiceIds->take(500))->get()->keyBy('id');
+        $scan = BoxPhoto::visibleTo($this->user)
+            ->with('container:id,container_no', 'deliverylog:id,trip_number', 'whdeliverylog:id,trip_number', 'user:id,first_name,last_name', 'warehouse:id,name', 'logistichub:id,hub_name')
+            ->whereIn('invoice_id', $invoices->keys())->orderBy('taken_at')->orderBy('id')->get()->groupBy('invoice_id');
+        $trips = Tripinvoice::with('deliverer:id,first_name,last_name', 'deliverylog:id,trip_number', 'hubTrip:id,trip_number')
+            ->whereIn('invoice_id', $invoices->keys())->where('is_delivered', true)->get()->groupBy('invoice_id');
+        $attempts = DeliveryAttempt::with('user:id,first_name,last_name', 'deliverylog:id,trip_number')
+            ->whereIn('invoice_id', $invoices->keys())->orderBy('created_at')->get()->groupBy('invoice_id');
 
-        $photo = BoxPhoto::create([
-            'invoice_id' => $invoice?->id,
-            'invoice' => $invoice?->invoice,
-            'step' => $step,
-            'condition' => $condition,
-            'note' => $note ? Str::limit(trim($note), 250, '') : null,
-            'is_batch' => ! $invoice,
-            'path' => $path,
-            'size' => strlen($bytes),
-            'container_id' => $context['container_id'] ?? null,
-            'deliverylog_id' => $context['deliverylog_id'] ?? null,
-            'whdeliverylog_id' => $context['whdeliverylog_id'] ?? null,
-            'warehouse_id' => $context['warehouse_id'] ?? null,
-            'logistichub_id' => $context['logistichub_id'] ?? null,
-            'user_id' => $user?->id,
-            'taken_at' => $taken,
+        return $invoices->map(function (Invoice $box) use ($scan, $trips, $attempts) {
+            $items = collect();
+            foreach ($scan->get($box->id, collect()) as $p) {
+                $items->push($this->scanItem($p));
+            }
+
+            $missCards = collect();
+            foreach ($attempts->get($box->id, collect()) as $a) {
+                $photos = collect($a->photos)->filter()->values();
+                $cardItems = $photos->map(fn ($path, $n) => $this->publicItem('a:'.$a->id.':'.$n, $box, 'not_delivered', $path, $n + 1, $photos->count(), [
+                    'ref' => 'Trip '.($a->deliverylog?->trip_number ?? '—').' · '.$a->reason->getLabel(),
+                    'who' => $a->user?->full_name, 'at' => $a->created_at, 'note' => $a->note,
+                ]))->filter();
+                $items = $items->merge($cardItems);
+                $missCards->push(['reason' => $a->reason->getLabel(), 'at' => $a->created_at, 'who' => $a->user?->full_name,
+                    'trip' => $a->deliverylog?->trip_number, 'note' => $a->note, 'keys' => $cardItems->pluck('key')->all()]);
+            }
+
+            $delivered = null;
+            if ($row = $trips->get($box->id)?->sortByDesc('delivered_at')->first()) {
+                $photos = collect($row->delivery_picture)->filter()->values();
+                $at = $row->delivered_at ? Carbon::parse($row->delivered_at) : $row->updated_at;
+                $trip = $row->hubTrip?->trip_number ?? $row->deliverylog?->trip_number;
+                // Part 44: signed on the phone (damaged, or no paper receipt)
+                $sig = \Illuminate\Support\Facades\Schema::hasTable('delivery_signatures') ? \App\Models\DeliverySignature::where('tripinvoice_id', $row->id)->latest('id')->first() : null;
+                $cardItems = $photos->map(fn ($path, $n) => $this->publicItem('d:'.$row->id.':'.$n, $box, 'delivered', $path, $n + 1, $photos->count(), [
+                    'ref' => 'Trip '.($trip ?? '—').' · delivered to '.($sig?->recipient_name ?: ($box->receiver_name ?: 'receiver')),
+                    'who' => $row->deliverer?->full_name, 'at' => $at, 'note' => null,
+                ]))->filter()->map(function ($i) use ($sig) {
+                    if (str_contains((string) $i['path'], '/receipt-')) {
+                        $i['label'] = 'Signed receipt';
+                    } elseif ($sig?->isDamaged()) {
+                        $i['condition'] = 'damaged';
+                        $i['note'] = $sig->damageText();
+                    }
+
+                    return $i;
+                });
+                $items = $items->merge($cardItems);
+                $delivered = ['at' => $at, 'who' => $row->deliverer?->full_name, 'to' => $sig?->recipient_name ?: $box->receiver_name, 'trip' => $trip, 'keys' => $cardItems->pluck('key')->all(),
+                    'signed' => $sig ? ['by' => $sig->recipient_name, 'rel' => $sig->relationship, 'damaged' => $sig->isDamaged(), 'damage' => $sig->damageText(),
+                        'paper' => \App\Models\DeliverySignature::PAPER[$sig->paper_reason] ?? null, 'link' => $sig->link(), 'cant' => $sig->cant_sign, 'issue' => $sig->invoiceissue_id] : null];
+            }
+
+            if ($items->isEmpty()) {
+                return null;
+            }
+
+            return [
+                'invoice' => $box,
+                'items' => $items->keyBy('key'),
+                'journey' => $this->journey($items),
+                'worst' => static::worst($items->pluck('condition')),
+                'delivered' => $delivered,
+                'attempts' => $missCards,
+                'latest' => $items->max(fn ($i) => $i['at']?->timestamp ?? 0),
+            ];
+        })->filter()->sortByDesc('latest')->take(self::MAX_BOXES)->values();
+    }
+
+    /** All photos of one box, oldest first (for the invoice Photos window and Track a box). */
+    public function forInvoice(?int $invoiceId): Collection
+    {
+        return $invoiceId ? ($this->boxes(collect([$invoiceId]))->first()['items'] ?? collect())->sortBy(fn ($i) => $i['at']?->timestamp ?? 0)->values() : collect();
+    }
+
+    /** Photos for the given keys, if this user may see them. */
+    public function resolve(array $keys): Collection
+    {
+        $keys = collect($keys)->map(fn ($k) => (string) $k)->unique();
+        $boxIds = collect();
+        foreach ($keys as $key) {
+            [$kind, $id] = array_pad(explode(':', $key), 2, null);
+            $boxIds->push(match ($kind) {
+                'p' => BoxPhoto::whereKey((int) $id)->value('invoice_id'),
+                'd' => Tripinvoice::whereKey((int) $id)->value('invoice_id'),
+                'a' => DeliveryAttempt::whereKey((int) $id)->value('invoice_id'),
+                default => null,
+            });
+        }
+
+        return $this->boxes($this->allowed($boxIds->filter()->unique()->values()))->flatMap(fn ($b) => $b['items']->values())
+            ->filter(fn ($i) => $keys->contains($i['key']))->values();
+    }
+
+    protected function scanItem(BoxPhoto $p): array
+    {
+        return [
+            'key' => 'p:'.$p->id, 'kind' => 'scan', 'step' => $p->step,
+            'label' => BoxPhoto::SHORT[$p->step] ?? $p->step,
+            'condition' => $p->condition, 'note' => $p->note,
+            'ref' => $p->reference(), 'place' => $p->place(), 'who' => $p->user?->full_name, 'at' => $p->taken_at,
+            'url' => $p->url(), 'download' => $p->downloadUrl(), 'name' => $p->fileName(),
+            'disk' => 'box', 'path' => $p->path, 'size' => (int) $p->size,
+            'invoice' => $p->invoice, 'photo' => $p,
+        ];
+    }
+
+    protected function publicItem(string $key, Invoice $box, string $step, string $path, int $n, int $of, array $meta): ?array
+    {
+        $disk = Storage::disk('public');
+        if (! $disk->exists($path)) {
+            return null;
+        }
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION)) ?: 'jpg';
+
+        return [
+            'key' => $key, 'kind' => $step, 'step' => $step,
+            'label' => $step === 'delivered' ? 'Delivered' : 'Not delivered',
+            'condition' => null, 'note' => $meta['note'], 'n' => $n, 'of' => $of,
+            'ref' => $meta['ref'], 'place' => null, 'who' => $meta['who'], 'at' => $meta['at'],
+            'url' => $disk->url($path), 'download' => $disk->url($path), 'name' => $box->invoice.'_'.$step.'_'.$n.'.'.$ext,
+            'disk' => 'public', 'path' => $path, 'size' => (int) rescue(fn () => $disk->size($path), 0, false),
+            'invoice' => $box->invoice, 'photo' => null,
+        ];
+    }
+
+    /** Steps in the order they happened, each with its worst condition. */
+    protected function journey(Collection $items): array
+    {
+        return $items->reject(fn ($i) => $i['label'] === 'Signed receipt')->sortBy(fn ($i) => $i['at']?->timestamp ?? 0)->groupBy('label')
+            ->map(fn ($g, $label) => ['label' => $label, 'kind' => $g->first()['kind'], 'condition' => static::worst($g->pluck('condition')), 'at' => $g->first()['at']?->timestamp ?? 0])
+            ->sortBy('at')->values()->all();
+    }
+
+    public static function worst(Collection $conditions): ?string
+    {
+        foreach (['damaged', 'wet', 'open', 'good'] as $c) {
+            if ($conditions->contains($c)) {
+                return $c;
+            }
+        }
+
+        return null;
+    }
+}
+DISPATCH_FILE_END_15
+
+# ---------------------------------------------------------------- app/Support/Sms/SmsEvents.php
+mkdir -p 'app/Support/Sms'
+cat > 'app/Support/Sms/SmsEvents.php' <<'DISPATCH_FILE_END_16'
+<?php
+
+namespace App\Support\Sms;
+
+use App\Models\DeliveryAttempt;
+use App\Models\Deliverylog;
+use App\Models\Logistichub;
+use App\Models\Maps\TripStop;
+use App\Models\Sms\SmsMessage;
+use App\Models\Tracking\TruckPosition;
+use App\Models\Tripinvoice;
+use App\Support\Ai\TripPlanner;
+use App\Support\Maps\TripSorter;
+use App\Support\Tracking\Tracker;
+use Illuminate\Support\Str;
+use Throwable;
+
+/**
+ * When to text receivers. One text per receiver (all their boxes together), never twice
+ * for the same thing. Nothing is sent when the message is switched off or there is no key.
+ */
+class SmsEvents
+{
+    /** Trip on the road: all boxes loaded, or the first box delivered. */
+    public static function outForDelivery(Deliverylog $trip): int
+    {
+        if (TripSorter::isTransfer($trip) || ($trip->no_sms ?? false)) {
+            return 0;
+        }
+        // a hub's own trip has its own switch and text
+        $atHub = Tripinvoice::where('deliveryloghub_id', $trip->id)->exists();
+        $kind = $atHub && array_key_exists('out_for_delivery_hub', SmsSettings::KINDS) ? 'out_for_delivery_hub' : 'out_for_delivery';
+        if (! SmsSettings::on($kind)) {
+            return 0;
+        }
+        // Trip planned by city: boxes keep joining while loading, so text only once the trip is locked.
+        if (\App\Support\Trips\CityTrips::isCityTrip($trip) && ! $trip->is_lock && ! $trip->taken_at) {
+            return 0;
+        }
+        if (! TripSorter::ensure($trip, 0)) {
+            return 0;
+        }
+        $boxes = TripSorter::boxes($trip);
+        $hub = Tripinvoice::where('deliveryloghub_id', $trip->id)->exists();
+        $onRoad = ! (clone $boxes)->where($hub ? 'is_loaded_hub' : 'is_loaded', false)->exists() || (clone $boxes)->where('is_delivered', true)->exists();
+        if (! $onRoad || ! (clone $boxes)->exists()) {
+            return 0;
+        }
+        $n = 0;
+        foreach (Tracker::stopsLeft($trip) as $stop) {
+            $n += static::forStop($kind, $trip, $stop) ? 1 : 0;
+        }
+
+        return $n;
+    }
+
+    /** The next 1–2 stops, once the driver is delivering (a box delivered or the truck moving). */
+    public static function driverNext(Deliverylog $trip): int
+    {
+        if (! SmsSettings::on('driver_next') || TripSorter::isTransfer($trip) || ! TripSorter::ensure($trip, 0)) {
+            return 0;
+        }
+        $active = TripSorter::boxes($trip)->where('is_delivered', true)->whereDate('delivered_at', today())->exists()
+            || TruckPosition::where('deliverylog_id', $trip->id)->where('recorded_at', '>=', now()->subMinutes(15))->exists();
+        if (! $active) {
+            return 0;
+        }
+        $card = $trip->truck ? Tracker::card($trip) : null;
+        $n = 0;
+        foreach (Tracker::stopsLeft($trip)->take(2)->values() as $i => $stop) {
+            $min = $i === 0 && $card && preg_match('/~(\d+) min/', (string) $card['next'], $m) ? (int) $m[1] : 15 + $i * 15;
+            $n += static::forStop('driver_next', $trip, $stop, ['minutes' => max(5, (int) (ceil($min / 5) * 5))]) ? 1 : 0;
+        }
+
+        return $n;
+    }
+
+    /** The last box of a receiver was delivered. */
+    public static function delivered(Tripinvoice $box): void
+    {
+        // Part 44: a damaged box gets its own text with the signed receipt instead
+        if (\App\Models\DeliverySignature::where('tripinvoice_id', $box->id)->where('why', 'damaged')->exists()) {
+            return;
+        }
+        if (! SmsSettings::on('delivered') || ! ($trip = static::tripOf($box)) || ! TripSorter::ensure($trip, 0)) {
+            return;
+        }
+        $stop = static::stopOf($trip, $box->id);
+        if (! $stop) {
+            return;
+        }
+        $rows = Tripinvoice::whereIn('id', $stop->box_ids)->get(['id', 'is_delivered', 'delivered_at']);
+        if ($rows->contains(fn ($r) => ! $r->is_delivered)) {
+            return;
+        }
+        static::forStop('delivered', $trip, $stop, ['time' => optional($rows->max('delivered_at'))->format('g:i A') ?? now()->format('g:i A')], $stop->box_ids);
+    }
+
+    public static function notDelivered(DeliveryAttempt $a): void
+    {
+        $box = Tripinvoice::find($a->tripinvoice_id);
+        if (! SmsSettings::on('not_delivered') || ! $box || ! ($trip = static::tripOf($box)) || ! TripSorter::ensure($trip, 0)) {
+            return;
+        }
+        $stop = static::stopOf($trip, $box->id);
+        if (! $stop) {
+            return;
+        }
+        $lang = Templates::langFor($box->invdata?->receiver_province);
+        static::forStop('not_delivered', $trip, $stop, [
+            'reason' => SmsWriter::reason($a, $lang),
+            'next_day' => static::nextDay(),
+        ], [$box->id], perDay: true);
+    }
+
+    /** Part 44: a box handed over damaged, signed on the phone. The receiver gets the receipt link. */
+    public static function damaged(\App\Models\DeliverySignature $s): ?SmsMessage
+    {
+        $box = Tripinvoice::with('invdata')->find($s->tripinvoice_id);
+        $inv = $box?->invdata;
+        if (! SmsSettings::on('delivered_damaged') || ! $s->isDamaged() || ! $inv || $s->sms_message_id) {
+            return null;
+        }
+        $lang = Templates::langFor($inv->receiver_province);
+        $text = Templates::render(Templates::get('delivered_damaged', $lang), [
+            'name' => static::firstName($inv->receiver_name), 'boxes' => (string) $box->invoice, 'box_count' => 1,
+            'by' => Str::title((string) $s->recipient_name), 'time' => ($s->signed_at ?? now())->format('M j, g:i A'),
+            'damage' => Str::lower($s->damageText()) ?: 'see the photos', 'receipt' => $s->link(), 'hub_phone' => SmsSettings::officePhone(),
+        ]);
+        $msg = SmsSender::send('delivered_damaged', $inv->receiver_mobile_no, Str::title((string) $inv->receiver_name), $text, [
+            'deliverylog_id' => $box->deliveryloghub_id ?: $box->deliverylog_id, 'invoice_ids' => [$box->invoice_id], 'lang' => $lang, 'user_id' => $s->user_id,
+        ]);
+        $s->update(['sms_message_id' => $msg->id]);
+
+        return $msg;
+    }
+
+    /** Handed to a partner hub. */
+    public static function hubArrived(Tripinvoice $box): void
+    {
+        if (! SmsSettings::on('hub_arrived') || ! $box->logistichub_id || ! ($inv = $box->invdata)) {
+            return;
+        }
+        $hub = Logistichub::find($box->logistichub_id);
+        if (! $hub?->is_company) {
+            return;
+        }
+        $key = substr(sha1('hub'.$hub->id.TripPlanner::receiverKey($inv).$box->deliverylog_id), 0, 40);
+        if (SmsMessage::where('kind', 'hub_arrived')->where('receiver_key', $key)->exists()) {
+            return;
+        }
+        $codes = Tripinvoice::where('deliverylog_id', $box->deliverylog_id)->where('logistichub_id', $hub->id)->with('invdata')->get()
+            ->filter(fn ($b) => $b->invdata && TripPlanner::receiverKey($b->invdata) === TripPlanner::receiverKey($inv));
+        $lang = Templates::langFor($inv->receiver_province);
+        $text = Templates::render(Templates::get('hub_arrived', $lang), [
+            'name' => static::firstName($inv->receiver_name), 'boxes' => static::codes($codes->pluck('invoice')->all()),
+            'box_count' => $codes->count(), 'hub' => $hub->hub_name, 'hub_phone' => SmsSettings::officePhone(),
+        ]);
+        SmsSender::send('hub_arrived', $inv->receiver_mobile_no, Str::title((string) $inv->receiver_name), $text, ['receiver_key' => $key, 'invoice_ids' => $codes->pluck('invoice_id')->all(), 'lang' => $lang]);
+    }
+
+    protected static function forStop(string $kind, Deliverylog $trip, TripStop $stop, array $extra = [], ?array $ids = null, bool $perDay = false): ?SmsMessage
+    {
+        $already = SmsMessage::where('kind', $kind)->where('deliverylog_id', $trip->id)->where('receiver_key', $stop->receiver_key)
+            ->whereNotIn('status', ['failed'])->when($perDay, fn ($q) => $q->whereDate('created_at', today()));
+        if ($already->exists()) {
+            return null;
+        }
+        $boxes = Tripinvoice::with('invdata')->whereIn('id', $ids ?? $stop->box_ids)->get();
+        $inv = $boxes->first()?->invdata;
+        if (! $inv) {
+            return null;
+        }
+        $lang = Templates::langFor($inv->receiver_province);
+        $driver = $trip->truck ? Tracker::crew($trip->truck_id)['driver'] : null;
+        $text = Templates::render(Templates::get($kind, $lang), $extra + [
+            'name' => static::firstName($inv->receiver_name),
+            'boxes' => static::codes($boxes->pluck('invoice')->all()),
+            'box_count' => $boxes->count(),
+            'truck' => (string) $trip->truck?->plate_no,
+            'driver' => $driver ? Str::before((string) $driver->full_name, ' ') : '',
+            'hub' => (string) $trip->destination?->hub_name,
+            'hub_phone' => $kind === 'out_for_delivery_hub' ? ((string) \App\Models\Logistichub::whereKey($trip->logistichub_id)->value('phone') ?: SmsSettings::officePhone()) : SmsSettings::officePhone(),
         ]);
 
-        PhotoCheck::queueBoxPhoto($photo);
-
-        return $photo;
+        return SmsSender::send($kind, $stop->phone ?: $inv->receiver_mobile_no, $stop->name, $text, [
+            'deliverylog_id' => $trip->id, 'receiver_key' => $stop->receiver_key, 'invoice_ids' => $boxes->pluck('invoice_id')->all(), 'lang' => $lang,
+        ]);
     }
 
-    /** Resize to MAX_SIDE, add a dark strip with the stamp text, save as JPEG. Without GD the file is kept as is. */
-    public static function shrink(string $bytes, string $stamp): string
+    protected static function tripOf(Tripinvoice $box): ?Deliverylog
     {
-        if (! function_exists('imagecreatefromstring') || ! ($src = @imagecreatefromstring($bytes))) {
-            return $bytes;
-        }
-        $src = PhotoShrinker::upright($src, PhotoShrinker::orientation($bytes)); // iPhone photos come sideways
-
-        $w = imagesx($src);
-        $h = imagesy($src);
-        $scale = min(1, self::MAX_SIDE / max($w, $h));
-        $nw = max(1, (int) round($w * $scale));
-        $nh = max(1, (int) round($h * $scale));
-        $img = imagecreatetruecolor($nw, $nh);
-        imagecopyresampled($img, $src, 0, 0, 0, 0, $nw, $nh, $w, $h);
-        imagedestroy($src);
-
-        // stamp: white text on a dark strip, drawn small then scaled up so it stays readable
-        $font = 5;
-        $zoom = max(1, (int) floor($nw / 700));
-        $pad = 6;
-        $text = Str::ascii($stamp);
-        $max = (int) floor(($nw / $zoom - $pad * 2) / imagefontwidth($font));
-        $text = Str::limit($text, $max, '');
-        $sw = (int) ceil($nw / $zoom);
-        $sh = imagefontheight($font) + $pad * 2;
-        $strip = imagecreatetruecolor($sw, $sh);
-        imagefilledrectangle($strip, 0, 0, $sw, $sh, imagecolorallocate($strip, 14, 36, 51));
-        imagestring($strip, $font, $pad, $pad, $text, imagecolorallocate($strip, 255, 255, 255));
-        $dst = imagecreatetruecolor($nw, $sh * $zoom);
-        imagecopyresized($dst, $strip, 0, 0, 0, 0, $nw, $sh * $zoom, $sw, $sh);
-        imagecopymerge($img, $dst, 0, $nh - $sh * $zoom, 0, 0, $nw, $sh * $zoom, 80);
-        imagedestroy($strip);
-        imagedestroy($dst);
-
-        ob_start();
-        imagejpeg($img, null, 78);
-        imagedestroy($img);
-
-        return (string) ob_get_clean();
+        return Deliverylog::with('truck')->find($box->deliveryloghub_id ?: $box->deliverylog_id);
     }
 
-    /** Photos of one box, oldest first. */
-    public static function forInvoice(?int $invoiceId, ?User $user)
+    protected static function stopOf(Deliverylog $trip, int $boxId): ?TripStop
     {
-        return $invoiceId
-            ? BoxPhoto::visibleTo($user)->with('container:id,container_no', 'deliverylog:id,trip_number', 'whdeliverylog:id,trip_number', 'user:id,first_name,last_name', 'warehouse:id,name', 'logistichub:id,hub_name')
-                ->where('invoice_id', $invoiceId)->orderBy('taken_at')->orderBy('id')->get()
-            : collect();
-    }
-
-    /** Delete photos older than the keep time, except boxes with an open Invoice Issue. */
-    public static function prune(): int
-    {
-        $months = PhotoSetting::current()->keep_months;
-        if ($months < 1) {
-            return 0;
+        $stop = TripStop::where('deliverylog_id', $trip->id)->get()->first(fn (TripStop $s) => in_array($boxId, $s->box_ids ?? [], false));
+        if (! $stop) {
+            TripSorter::sort($trip, 0);
+            $stop = TripStop::where('deliverylog_id', $trip->id)->get()->first(fn (TripStop $s) => in_array($boxId, $s->box_ids ?? [], false));
         }
 
-        $openIssue = Invoiceissue::query()->whereHas('invdata', fn ($q) => $q->where(fn ($q) => $q->where('is_resolved', false)->orWhereNull('is_resolved')))->select('invoice');
+        return $stop;
+    }
+
+    public static function firstName(?string $name): string
+    {
+        return Str::title(Str::before(Str::squish((string) $name), ' ')) ?: 'po';
+    }
+
+    public static function codes(array $codes): string
+    {
+        $codes = array_values(array_filter($codes));
+
+        return count($codes) > 4 ? implode(', ', array_slice($codes, 0, 3)).' +'.(count($codes) - 3).' more' : implode(', ', $codes);
+    }
+
+    public static function nextDay(): string
+    {
+        $d = today()->addDay();
+
+        return ($d->isSunday() ? $d->addDay() : $d)->format('M j');
+    }
+
+    /** Every 5 minutes (sms:work). */
+    public static function work(): int
+    {
         $n = 0;
-        BoxPhoto::where('taken_at', '<', now()->subMonths($months))
-            ->where(fn ($q) => $q->whereNull('invoice')->orWhereNotIn('invoice', $openIssue))
-            ->chunkById(200, function ($photos) use (&$n) {
-                foreach ($photos as $p) {
-                    $p->delete();
-                    $n++;
-                }
-            });
+        foreach (Deliverylog::with('truck', 'destination')->where('is_active', true)->get() as $trip) {
+            try {
+                $n += static::outForDelivery($trip) + static::driverNext($trip);
+            } catch (Throwable $e) {
+                report($e);
+            }
+        }
 
         return $n;
     }
 }
-DISPATCH_FILE_END_27
+DISPATCH_FILE_END_16
 
-# ---------------------------------------------------------------- app/Support/Photos/Storage/OldSystem.php
-mkdir -p 'app/Support/Photos/Storage'
-cat > 'app/Support/Photos/Storage/OldSystem.php' <<'DISPATCH_FILE_END_28'
+# ---------------------------------------------------------------- app/Support/Sms/SmsSettings.php
+mkdir -p 'app/Support/Sms'
+cat > 'app/Support/Sms/SmsSettings.php' <<'DISPATCH_FILE_END_17'
 <?php
 
-namespace App\Support\Photos\Storage;
+namespace App\Support\Sms;
 
 use App\Models\AppSetting;
-use App\Models\Photos\PhotoTask;
-use App\Models\Photos\PhotoTaskItem;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Str;
+use App\Models\Sms\SmsMessage;
+use Illuminate\Support\Facades\Crypt;
+use Throwable;
 
-/**
- * Copy from the old system (wms.icargoxpress.net, the first version) to the bucket.
- * Same database as wmsv2: each photo path in the database keeps the same path in the bucket,
- * so it opens in wmsv2 right after. Another database: the files are copied under wms-v1/.
- * Nothing on the old site is ever changed or deleted from here.
- */
-class OldSystem
+/** Admin → Settings → SMS. Keys are saved encrypted. With no key nothing is sent. */
+class SmsSettings
 {
-    public const IMAGES = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
-
-    /** Tables that never hold photos people took. */
-    protected const NOT = ['migrations', 'jobs', 'job_batches', 'failed_jobs', 'cache', 'cache_locks', 'sessions', 'password_reset_tokens',
-        'photo_files', 'photo_tasks', 'photo_task_items', 'storage_buckets', 'app_settings', 'box_photos', 'help_guides', 'notifications', 'activity_log', 'telescope_entries'];
-
-    public static function folder(): ?string
-    {
-        $set = AppSetting::get('photos.old_folder');
-        if ($set) {
-            return rtrim((string) $set, '/');
-        }
-        $guess = dirname(base_path()).'/wms.icargoxpress.net';
-
-        return is_dir($guess) ? $guess : null;
-    }
-
-    public static function env(string $dir): array
-    {
-        $out = [];
-        foreach (@file($dir.'/.env', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
-            if (preg_match('/^\s*([A-Z_]+)\s*=\s*(.*)$/', $line, $m) && in_array($m[1], ['APP_URL', 'DB_CONNECTION', 'DB_HOST', 'DB_PORT', 'DB_DATABASE'], true)) {
-                $out[$m[1]] = trim($m[2], " \t\"'");
-            }
-        }
-
-        return $out;
-    }
-
-    /** What the Find step shows. */
-    public static function find(): array
-    {
-        $dir = static::folder();
-        if (! $dir || ! is_dir($dir)) {
-            return ['found' => false, 'dir' => $dir];
-        }
-        $env = static::env($dir);
-        $c = config('database.connections.'.config('database.default'));
-        $host = fn ($h) => in_array($h, ['localhost', '127.0.0.1', '::1', null, ''], true) ? 'local' : $h;
-        $same = filled($env['DB_DATABASE'] ?? null) && ($env['DB_DATABASE'] ?? null) === ($c['database'] ?? null)
-            && $host($env['DB_HOST'] ?? null) === $host($c['host'] ?? null);
-
-        return [
-            'found' => true, 'dir' => $dir, 'laravel' => is_file($dir.'/artisan'), 'same' => $same,
-            'url' => rtrim($env['APP_URL'] ?? 'https://'.basename($dir), '/'),
-            'storage' => is_dir($dir.'/storage/app/public') ? $dir.'/storage/app/public' : null,
-            'uploads' => is_dir($dir.'/public/uploads') ? $dir.'/public/uploads' : null,
-        ];
-    }
-
-    /** Columns in the database that hold photo paths (text ending in .jpg, .png …). */
-    public static function columns(): Collection
-    {
-        $like = fn ($q, $col) => $q->where(function ($w) use ($col) {
-            foreach (static::IMAGES as $e) {
-                $w->orWhere($col, 'like', '%.'.$e.'%');
-            }
-        });
-        $out = collect();
-        foreach (Schema::getTables() as $t) {
-            $table = $t['name'];
-            if (in_array($table, static::NOT, true) || str_starts_with($table, 'sqlite_')) {
-                continue;
-            }
-            foreach (Schema::getColumns($table) as $col) {
-                if (! preg_match('/char|text|json|string/i', (string) ($col['type_name'] ?? $col['type'] ?? ''))) {
-                    continue;
-                }
-                $name = $col['name'];
-                $n = rescue(fn () => $like(DB::table($table), $name)->count(), 0, false);
-                if ($n > 0) {
-                    $ex = (string) $like(DB::table($table), $name)->value($name);
-                    $out->push(['table' => $table, 'column' => $name, 'n' => $n, 'example' => Str::limit(static::paths($ex)[0] ?? $ex, 80)]);
-                }
-            }
-        }
-
-        return $out->sortByDesc('n')->values();
-    }
-
-    /** One value can hold several paths (a JSON list) or a full link. */
-    public static function paths(?string $value): array
-    {
-        $value = trim((string) $value);
-        if ($value === '') {
-            return [];
-        }
-        $list = str_starts_with($value, '[') ? (json_decode($value, true) ?: []) : [$value];
-
-        return collect($list)->flatten()->filter(fn ($p) => is_string($p) && in_array(strtolower(pathinfo(parse_url($p, PHP_URL_PATH) ?: $p, PATHINFO_EXTENSION)), static::IMAGES, true))
-            ->map(function ($p) {
-                $p = parse_url($p, PHP_URL_PATH) ?: $p;
-                $p = ltrim($p, '/');
-
-                return str_starts_with($p, 'storage/') ? substr($p, 8) : $p;
-            })->unique()->values()->all();
-    }
-
-    /** Folders with photos in the old and new site: [path => [old => [n, bytes], new => [n, bytes]]]. */
-    public static function folders(array $find): array
-    {
-        $out = [];
-        $walk = function (?string $root, string $label, string $side) use (&$out) {
-            if (! $root || ! is_dir($root)) {
-                return;
-            }
-            $it = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS));
-            foreach ($it as $f) {
-                if (! $f->isFile() || ! in_array(strtolower($f->getExtension()), static::IMAGES, true)) {
-                    continue;
-                }
-                $rel = ltrim(substr($f->getPath(), strlen($root)), '/');
-                $parts = array_slice(explode('/', $rel), 0, 2);
-                $key = $label.($parts[0] !== '' ? '/'.implode('/', $parts) : '');
-                $out[$key][$side][0] = ($out[$key][$side][0] ?? 0) + 1;
-                $out[$key][$side][1] = ($out[$key][$side][1] ?? 0) + $f->getSize();
-            }
-        };
-        $walk(storage_path('app/public'), 'storage/app/public', 'new');
-        $walk($find['storage'] ?? null, 'storage/app/public', 'old');
-        $walk($find['uploads'] ?? null, 'public/uploads', 'old');
-        ksort($out);
-
-        return $out;
-    }
-
-    /** The copy task (one at a time; Scan again refreshes it and keeps what was copied). */
-    public static function task(): ?PhotoTask
-    {
-        return PhotoStore::ready() ? PhotoTask::where('kind', 'copy_old')->latest('id')->first() : null;
-    }
-
-    /** Scan: every photo path, where its file really is. */
-    public static function scan(): PhotoTask
-    {
-        @set_time_limit(600);
-        $find = static::find();
-        $task = static::task() ?? PhotoTask::create(['kind' => 'copy_old', 'status' => 'ready', 'user_id' => Auth::id(), 'options' => ['small' => true, 'keep' => false]]);
-        $known = $task->items()->get(['id', 'path', 'status', 'size_before', 'src_time', 'other'])->keyBy('path');
-        $seen = [];
-        $add = function (string $path, ?string $ref, ?string $src, ?string $other, string $found, array $tidy = []) use ($task, $known, &$seen) {
-            if (isset($seen[$path])) {
-                return;
-            }
-            $seen[$path] = true;
-            $size = $src && is_file($src) ? filesize($src) : null;
-            $time = $src && is_file($src) ? filemtime($src) : null;
-            $old = $known[$path] ?? null;
-            $data = ['source' => $src, 'other' => $other, 'found' => $found, 'ref' => $ref ? Str::limit($ref, 118, '') : null, 'size_before' => $size, 'src_time' => $time];
-            if (! $old || $old->status !== 'done') {
-                $data += ['new_path' => $tidy[0] ?? null, 'tbl' => $tidy[1] ?? null, 'col' => $tidy[2] ?? null];
-            }
-            if ($old) {
-                // copied before and the file did not change: stays done; changed: copied again
-                $changed = $old->status === 'done' && ($old->size_before !== $size || $old->src_time !== $time);
-                $old->update($data + ($found === 'missing' ? ['status' => 'missing'] : ($changed || $old->status === 'missing' ? ['status' => 'pending', 'checked' => false] : [])));
-            } else {
-                PhotoTaskItem::create($data + ['photo_task_id' => $task->id, 'disk' => 'public', 'path' => $path, 'status' => $found === 'missing' ? 'missing' : 'pending']);
-            }
-        };
-
-        if (($find['same'] ?? false) || ! ($find['found'] ?? false)) {
-            foreach (static::columns() as $c) {
-                $hasId = Schema::hasColumn($c['table'], 'id');
-                $isKnown = isset(PhotoFolders::known()[$c['table'].'.'.$c['column']]);
-                $q = DB::table($c['table'])->whereNotNull($c['column'])->select($isKnown ? ['*'] : array_filter([$hasId ? 'id' : null, $c['column']]));
-                $hasId ? $q->orderBy('id') : $q->orderBy($c['column']);
-                foreach ($q->cursor() as $row) {
-                    foreach (static::paths($row->{$c['column']}) as $p) {
-                        $new = storage_path('app/public/'.$p);
-                        $olds = array_filter([($find['storage'] ?? null) ? $find['storage'].'/'.$p : null, ($find['found'] ?? false) ? $find['dir'].'/public/'.$p : null]);
-                        $old = collect($olds)->first(fn ($f) => is_file($f));
-                        $hasNew = is_file($new);
-                        $ref = $c['table'].'.'.$c['column'].(isset($row->id) ? ' #'.$row->id : '');
-                        $np = $isKnown ? PhotoFolders::newPath($c['table'], $c['column'], $row, $p) : null;
-                        $tidy = $np ? [$np, $c['table'], $c['column']] : [];
-                        if (PhotoStore::placeOf('public', $p) !== 'server') {
-                            // already in a bucket (copied before, or moved): nothing to do
-                            if (! isset($known[$p]) && ! isset($seen[$p])) {
-                                PhotoTaskItem::create(['photo_task_id' => $task->id, 'disk' => 'public', 'path' => $p, 'found' => 'wmsv2', 'ref' => Str::limit($ref, 118, ''),
-                                    'status' => 'skipped', 'note' => 'Already in the bucket']);
-                            }
-                            $seen[$p] = true;
-
-                            continue;
-                        }
-                        match (true) {
-                            $hasNew && $old && filesize($new) !== filesize($old) => $add($p, $ref, filemtime($new) >= filemtime($old) ? $new : $old, filemtime($new) >= filemtime($old) ? $old : $new, 'both', $tidy),
-                            $hasNew => $add($p, $ref, $new, null, 'wmsv2', $tidy),
-                            (bool) $old => $add($p, $ref, $old, null, 'wms', $tidy),
-                            default => $add($p, $ref, null, null, 'missing'),
-                        };
-                    }
-                }
-            }
-        } else {
-            // another database: every picture file of the old site, under wms-v1/
-            foreach (['storage' => $find['storage'] ?? null, 'public/uploads' => $find['uploads'] ?? null] as $label => $root) {
-                if (! $root) {
-                    continue;
-                }
-                $it = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS));
-                foreach ($it as $f) {
-                    if ($f->isFile() && in_array(strtolower($f->getExtension()), static::IMAGES, true)) {
-                        $add('wms-v1/'.$label.'/'.ltrim(substr($f->getPathname(), strlen($root)), '/'), null, $f->getPathname(), null, 'wms');
-                    }
-                }
-            }
-        }
-        $task->items()->whereNotIn('path', array_keys($seen))->where('status', '!=', 'done')->delete();
-        $task->update(['total' => $task->items()->where('status', '!=', 'missing')->count()]);
-        $task->forceFill(['options' => array_merge($task->options, ['scanned_at' => now()->toDateTimeString(), 'same' => (bool) ($find['same'] ?? false)])])->save();
-        PhotoWork::count($task);
-
-        return $task->fresh();
-    }
-
-    /** Copy one photo: made smaller if asked, the original kept if asked, then checked by size. */
-    public static function copyOne(PhotoTask $task, PhotoTaskItem $item): void
-    {
-        $to = PhotoStore::target() !== 'server' ? PhotoStore::target() : 'tmp';
-        if (! PhotoStore::usable($to)) {
-            throw new \RuntimeException('The bucket is not ready: put it and press Test connection.');
-        }
-        if ($task->to_place !== $to) {
-            $task->update(['to_place' => $to]);
-        }
-        $fs = PhotoStore::fs($to);
-        $disk = str_starts_with($item->path, 'wms-v1/') ? 'old' : 'public';
-        // put in the new folders (board 67): the path in the database is changed after the copy is checked
-        $tidy = $task->opt('tidy', true) && $item->new_path && $item->tbl && $item->col && $disk === 'public';
-        $key = $tidy ? $item->new_path : $item->path;
-        if (! $task->opt('again') && PhotoStore::placeOf('public', $key) === $to && $disk === 'public') {
-            $item->update(['status' => 'skipped', 'note' => 'Already in the bucket']);
-
-            return;
-        }
-        if (! $item->source || ! is_file($item->source)) {
-            $item->update(['status' => 'missing', 'note' => 'The file is gone']);
-
-            return;
-        }
-        $bytes = (string) file_get_contents($item->source);
-        $out = $task->opt('small', true) ? PhotoWork::smaller($bytes, $item->path) : $bytes;
-        if ($task->opt('keep') && strlen($out) !== strlen($bytes)) {
-            $fs->put('_original/'.$key, $bytes);
-        }
-        $fs->put($key, $out);
-        if ((int) $fs->size($key) !== strlen($out)) {
-            throw new \RuntimeException('The copy in the bucket has a different size.');
-        }
-        if ($item->found === 'both' && $item->other && is_file($item->other)) {
-            $fs->put('_other/'.$key, (string) file_get_contents($item->other));
-        }
-        PhotoStore::record($disk, $key, $to, strlen($out));
-        if ($tidy) {
-            PhotoFolders::rewrite($item->tbl, $item->col, $item->path, $key);
-        }
-        $item->update(['status' => 'done', 'size_after' => strlen($out), 'size_before' => strlen($bytes), 'checked' => false, 'new_path' => $tidy ? $key : null]);
-    }
-
-    /** Try 50: copy 50 photos now, to look at them before copying all. */
-    public static function tryFifty(PhotoTask $task): Collection
-    {
-        @set_time_limit(300);
-        $items = $task->items()->where('status', 'pending')->orderByDesc('size_before')->limit(50)->get();
-        foreach ($items as $i) {
-            PhotoWork::one($task, $i);
-            $i->update(['tried' => true]);
-        }
-        PhotoWork::count($task);
-
-        return $items->map->fresh();
-    }
-
-    /** Pick which of the two files (both sites had one) is the photo; the other is kept under _other/. */
-    public static function pick(PhotoTaskItem $item): void
-    {
-        if ($item->found !== 'both' || ! $item->other) {
-            return;
-        }
-        $item->update(['source' => $item->other, 'other' => $item->source, 'status' => 'pending', 'checked' => false]);
-    }
-
-    /** Old link (as before) for a path. */
-    public static function oldLink(PhotoTaskItem $item, array $find): ?string
-    {
-        if (! $item->source) {
-            return null;
-        }
-        if (str_starts_with($item->source, storage_path('app/public'))) {
-            return url('/storage/'.$item->path);
-        }
-        $dir = $find['dir'] ?? '';
-        $rel = ltrim(substr($item->source, strlen($dir)), '/');
-
-        return ($find['url'] ?? '').'/'.(str_starts_with($rel, 'storage/app/public/') ? 'storage/'.substr($rel, 19) : preg_replace('#^public/#', '', $rel));
-    }
-}
-DISPATCH_FILE_END_28
-
-# ---------------------------------------------------------------- app/Support/Photos/Storage/PhotoFolders.php
-mkdir -p 'app/Support/Photos/Storage'
-cat > 'app/Support/Photos/Storage/PhotoFolders.php' <<'DISPATCH_FILE_END_29'
-<?php
-
-namespace App\Support\Photos\Storage;
-
-use App\Models\AppSetting;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Str;
-
-/**
- * One tidy folder structure (board 67): kind / year / month / invoice. The same on this server,
- * in R2 or in S3. New photos are saved here; old photos can be put here while they are copied
- * or moved to the bucket (the path in the database is changed after the copy is checked).
- */
-class PhotoFolders
-{
-    /** Folders for each kind of photo (shown on the Photo storage page). */
-    public const MAP = [
-        ['Delivered (POD)', 'delivery/2026/11/0144033/…'],
-        ['Not delivered', 'not-delivered/2026/11/0144033/…'],
-        ['Box photos (scan app)', 'scan/unload/2026/11/0144033/…'],
-        ['Damage (box issue)', 'damage/2026/11/…'],
-        ['Unmanifested box', 'unmanifested/2026/11/…'],
-        ['Sea shipment, at port, LCL pick-up', 'shipments/2026/11/SS-0042/…'],
-        ['Fuel receipt, odometer', 'fuel/2026/11/ABC1234/…'],
-        ['Truck pictures', 'trucks/ABC1234/…'],
-        ['People (users, crew)', 'people/…'],
-        ['Company and agent papers', 'papers/companies/… · papers/containers/…'],
+    public const PROVIDERS = [
+        'semaphore' => ['Semaphore', 'Philippine company, used by many local businesses. Paste the API key from semaphore.co.', true],
+        'twilio' => ['Twilio', 'International. Paste "Account SID:Auth Token"; the sender is your Twilio number or Messaging Service SID. Usually costs more.', true],
+        'm360' => ['M360', 'Philippine SMS provider for businesses. Send us their API details and we connect it.', false],
+        'itexmo' => ['iTexMo / Movider', 'Local and regional options. Send us their API details and we connect it.', false],
     ];
 
-    /** The folder for a new photo: kind / year / month / ref (invoice, plate, shipment). */
-    public static function dir(string $kind, ?string $ref = null, mixed $at = null): string
-    {
-        $at = $at ? Carbon::parse($at) : now();
-        $dated = in_array($kind, ['trucks', 'people', 'papers/companies', 'papers/containers', 'papers/consolidators'], true)
-            ? $kind : $kind.'/'.$at->format('Y/m');
+    public const KINDS = [
+        'out_for_delivery' => ['Out for delivery', 'When the truck is loaded and the trip is on the road', true],
+        'out_for_delivery_hub' => ['Out for delivery from a hub', 'When a hub locks its own trip and the hub truck is on the road', true],
+        'driver_next' => ['Driver is next', 'When the receiver is the next 1–2 stops', true],
+        'delivered' => ['Delivered', 'When the last box of the receiver is delivered', true],
+        'not_delivered' => ['Not delivered', 'When the driver marks it not delivered', true],
+        'delivered_damaged' => ['Delivered damaged', 'When a box is handed over damaged and the receiver signs on the phone: the link to the signed receipt', true],
+        'hub_arrived' => ['Arrived at partner hub', 'When the box is handed to a partner hub', false],
+        'set_split' => ['Rest of the boxes follow', 'When some of a customer\'s boxes stay behind at loading', false],
+    ];
 
-        return $dated.(filled($ref) ? '/'.static::clean((string) $ref) : '');
+    public static function provider(): string
+    {
+        $p = (string) AppSetting::get('sms.provider', 'semaphore');
+
+        return isset(self::PROVIDERS[$p]) ? $p : 'semaphore';
     }
 
-    public static function clean(string $ref): string
+    public static function key(?string $provider = null): ?string
     {
-        return trim(preg_replace('/[^A-Za-z0-9._-]+/', '-', $ref), '-.') ?: 'x';
-    }
-
-    /** New photos at most this many KB (0 = no limit). */
-    public static function maxKb(): int
-    {
-        return (int) AppSetting::get('photos.max_kb', 200);
-    }
-
-    /**
-     * Columns that hold photo paths, and how to find each photo's kind, date and invoice.
-     * [table.column => [kind, date column, ref: callable(row) => ?string]]
-     */
-    public static function known(): array
-    {
-        $inv = fn ($id) => $id ? DB::table('invoices')->where('id', $id)->value('invoice') : null;
-        $plate = fn ($id) => $id ? DB::table('trucks')->where('id', $id)->value('plate_no') : null;
-
-        return [
-            'tripinvoices.delivery_picture' => ['delivery', ['delivered_at', 'updated_at'], fn ($r) => $r->invoice ?? $inv($r->invoice_id ?? null)],
-            'delivery_attempts.photos' => ['not-delivered', ['created_at'], fn ($r) => $inv($r->invoice_id ?? null)],
-            'invoiceissues.attachment_pic' => ['damage', ['created_at'], fn ($r) => $r->invoice ?? null],
-            'unmanifesteds.attachment_pic' => ['unmanifested', ['created_at'], fn ($r) => $r->invoice ?? null],
-            'fuel_fills.receipt_path' => ['fuel', ['filled_at', 'created_at'], fn ($r) => $plate($r->truck_id ?? null)],
-            'fuel_fills.odometer_path' => ['fuel', ['filled_at', 'created_at'], fn ($r) => $plate($r->truck_id ?? null)],
-            'sea_shipments.seal_photo' => ['shipments', ['created_at'], fn ($r) => $r->code ?? null],
-            'sea_shipments.port_receipt' => ['shipments', ['created_at'], fn ($r) => $r->code ?? null],
-            'sea_shipments.pickup_photo' => ['shipments', ['pickup_at', 'created_at'], fn ($r) => $r->code ?? null],
-            'trucks.truck_picture' => ['trucks', [], fn ($r) => $r->plate_no ?? null],
-            'users.profile_picture' => ['people', [], fn ($r) => null],
-            'containers.container_picture' => ['papers/containers', [], fn ($r) => $r->container_no ?? null],
-            'companies.company_picture' => ['papers/companies', [], fn ($r) => null],
-            'companies.company_document' => ['papers/companies', [], fn ($r) => null],
-            'consolidators.company_document' => ['papers/consolidators', [], fn ($r) => null],
-            'box_photos.path' => ['scan', ['taken_at', 'created_at'], fn ($r) => $r->invoice ?? 'batch'],
-        ];
-    }
-
-    /** Where an old photo goes in the new folders, from its record (null: not a known column). */
-    public static function newPath(string $table, string $column, object $row, string $old): ?string
-    {
-        $k = static::known()[$table.'.'.$column] ?? null;
-        if (! $k) {
+        $v = AppSetting::get('sms.key.'.($provider ?? static::provider()));
+        try {
+            return $v ? Crypt::decryptString($v) : null;
+        } catch (Throwable) {
             return null;
         }
-        [$kind, $dates, $ref] = $k;
-        if ($table === 'box_photos') {
-            $kind = 'scan/'.static::clean((string) ($row->step ?? 'photo'));
-        }
-        $at = collect($dates)->map(fn ($c) => $row->{$c} ?? null)->first(fn ($v) => filled($v));
-        $new = static::dir($kind, rescue(fn () => $ref($row), null, false), $at).'/'.basename($old);
-
-        return $new === $old ? null : $new;
     }
 
-    /**
-     * Change one path to another in a column: plain text, or a JSON list of paths.
-     * Only the rows that hold the old path; returns how many rows changed.
-     */
-    public static function rewrite(string $table, string $column, string $old, string $new): int
+    public static function putKey(string $provider, ?string $key): void
     {
-        if (! Schema::hasColumn($table, $column)) {
-            return 0;
-        }
-        $n = DB::table($table)->where($column, $old)->update([$column => $new]);
-        $base = basename($old);
-        $q = DB::table($table)->where($column, 'like', '%'.str_replace(['%', '_'], ['\%', '\_'], $base).'%')->where($column, 'like', '[%');
-        foreach ($q->get(array_filter([Schema::hasColumn($table, 'id') ? 'id' : null, $column])) as $r) {
-            $list = json_decode((string) $r->{$column}, true);
-            if (! is_array($list)) {
-                continue;
-            }
-            $changed = false;
-            $list = array_map(function ($p) use ($old, $new, &$changed) {
-                if (is_string($p) && ltrim(Str::after($p, '/storage/') === $p ? $p : Str::after($p, '/storage/'), '/') === $old) {
-                    $changed = true;
-
-                    return $new;
-                }
-
-                return $p;
-            }, $list);
-            if ($changed && isset($r->id)) {
-                DB::table($table)->where('id', $r->id)->update([$column => json_encode(array_values($list))]);
-                $n++;
-            }
-        }
-
-        return $n;
+        AppSetting::put('sms.key.'.$provider, filled($key) ? Crypt::encryptString(trim($key)) : null);
     }
 
-    /**
-     * Every photo path in the known columns of this system: 'disk|path' => [table, column, new path].
-     * Used by Move (photos of wmsv2 on this server) to put them in the new folders.
-     */
-    public static function refs(): array
+    public static function masked(string $provider): ?string
     {
-        $out = [];
-        foreach (static::known() as $tc => $k) {
-            [$table, $column] = explode('.', $tc);
-            if (! Schema::hasTable($table) || ! Schema::hasColumn($table, $column)) {
-                continue;
-            }
-            $q = DB::table($table)->whereNotNull($column);
-            Schema::hasColumn($table, 'id') ? $q->orderBy('id') : $q->orderBy($column);
-            foreach ($q->cursor() as $row) {
-                foreach (OldSystem::paths($row->{$column}) as $p) {
-                    $k = ($table === 'box_photos' ? 'box|' : 'public|').$p;
-                    if (! isset($out[$k]) && ($new = static::newPath($table, $column, $row, $p))) {
-                        $out[$k] = [$table, $column, $new];
-                    }
-                }
-            }
-        }
+        $k = static::key($provider);
 
-        return $out;
-    }
-}
-DISPATCH_FILE_END_29
-
-# ---------------------------------------------------------------- app/Support/Photos/Storage/PhotoStore.php
-mkdir -p 'app/Support/Photos/Storage'
-cat > 'app/Support/Photos/Storage/PhotoStore.php' <<'DISPATCH_FILE_END_30'
-<?php
-
-namespace App\Support\Photos\Storage;
-
-use App\Models\AppSetting;
-use App\Models\Photos\PhotoFile;
-use App\Models\Photos\StorageBucket;
-use Illuminate\Contracts\Filesystem\Filesystem;
-use Illuminate\Filesystem\FilesystemAdapter;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
-
-/**
- * Settings → Photo storage. Every photo of every app (scan app, driver app, panels) is saved
- * where "New photos go to" points: this server, the Temporary bucket or the Real bucket.
- * Each photo that is not on the server has a row in photo_files saying where it is, so old
- * photos keep opening after a switch. Links to bucket photos are made when a page shows them
- * (temporary links, the buckets stay private).
- */
-class PhotoStore
-{
-    public const PLACES = ['server' => 'This server', 'tmp' => 'Temporary bucket', 'real' => 'Real bucket'];
-
-    public const PROVIDERS = ['r2' => 'Cloudflare R2', 's3' => 'Amazon S3', 'other' => 'Other S3-compatible'];
-
-    /** Folders on the public disk that always stay on the server (logos and icons used in PDFs and the app). */
-    public const SKIP = ['livewire-tmp', 'filament-exports', 'filament-imports', 'exports', 'imports', 'brand', 'favicon', 'logo',
-        'consolidatorlogo', 'help', 'icons', 'pwa', 'invoiceissue-attachments', 'email-attachments'];
-
-    /** Tests: buckets are folders on the disk instead of R2. */
-    public static bool $fake = false;
-
-    protected static array $memo = [];
-
-    protected static ?int $memoApp = null;
-
-    protected static function memo(): array
-    {
-        if (static::$memoApp !== spl_object_id(app())) {
-            static::$memoApp = spl_object_id(app());
-            static::$memo = [];
-        }
-
-        return static::$memo;
-    }
-
-    public static function forgetMemo(): void
-    {
-        static::$memo = [];
-        Cache::forget('photo_files.any');
+        return $k ? substr($k, 0, 4).str_repeat('•', 10).substr($k, -3) : null;
     }
 
     public static function ready(): bool
     {
-        static::memo();
-
-        return static::$memo['ready'] ??= Schema::hasTable('photo_files') && Schema::hasTable('storage_buckets');
+        return (bool) static::key() && (self::PROVIDERS[static::provider()][2] ?? false);
     }
 
-    /** The S3 driver (composer require league/flysystem-aws-s3-v3). */
-    public static function driverReady(): bool
+    public static function sender(): string
     {
-        return static::$fake || class_exists(\League\Flysystem\AwsS3V3\AwsS3V3Adapter::class);
+        return (string) AppSetting::get('sms.sender', '');
     }
 
-    public static function target(): string
+    public static function limit(): int
     {
-        $t = (string) AppSetting::get('photos.target', 'server');
-
-        return isset(static::PLACES[$t]) ? $t : 'server';
+        return (int) AppSetting::get('sms.limit', 3000);
     }
 
-    public static function setTarget(string $place): void
+    public static function on(string $kind): bool
     {
-        AppSetting::put('photos.target', $place);
+        return (bool) AppSetting::get('sms.on.'.$kind, self::KINDS[$kind][2] ?? false);
     }
 
-    public static function bucket(string $slot): StorageBucket
+    /** auto (by province), en, tl, ceb */
+    public static function language(): string
     {
-        static::memo();
-        if (! static::ready()) {
-            return new StorageBucket(['slot' => $slot, 'provider' => 'r2']);
-        }
-
-        return static::$memo['bucket'][$slot] ??= StorageBucket::firstOrNew(['slot' => $slot], ['provider' => 'r2']);
+        return (string) AppSetting::get('sms.language', 'auto');
     }
 
-    /** A bucket new photos can go to: set, tested, not turned off, and the driver is there. */
-    public static function usable(string $slot): bool
+    public static function officePhone(): string
     {
-        if ($slot === 'server') {
-            return true;
-        }
-        $b = static::bucket($slot);
-
-        return static::driverReady() && $b->exists && $b->isSet() && $b->test_ok && ! $b->is_off;
+        return (string) AppSetting::get('sms.office_phone', '');
     }
 
-    /** A bucket photos can be read from (turned off still reads, so nothing breaks). */
-    public static function readable(string $slot): bool
+    /** Texts (SMS parts) used this month. */
+    public static function usedThisMonth(): int
     {
-        $b = static::bucket($slot);
-
-        return static::driverReady() && $b->exists && $b->isSet();
-    }
-
-    public static function config(StorageBucket $b): array
-    {
-        if (static::$fake) {
-            return ['driver' => 'local', 'root' => storage_path('framework/testing/buckets/'.$b->slot.'-'.($b->bucket ?: 'x')), 'throw' => true];
-        }
-
-        return array_filter([
-            'driver' => 's3',
-            'key' => trim((string) $b->access_key),
-            'secret' => trim((string) $b->secret),
-            'region' => $b->provider === 'r2' ? 'auto' : (trim((string) $b->region) ?: 'us-east-1'),
-            'bucket' => trim((string) $b->bucket),
-            'endpoint' => $b->endpointUrl(),
-            'use_path_style_endpoint' => $b->provider !== 's3',
-            'visibility' => 'private',
-            'throw' => true,
-            // R2 and other S3-compatible stores: only the checksums they need.
-            'request_checksum_calculation' => 'when_required',
-            'response_checksum_validation' => 'when_required',
-        ], fn ($v) => $v !== null && $v !== '');
-    }
-
-    /** The bucket as a Laravel disk. */
-    public static function fs(string $slot): FilesystemAdapter
-    {
-        static::memo();
-        $b = static::bucket($slot);
-        $key = $slot.':'.($b->updated_at?->timestamp ?? 0);
-
-        return static::$memo['fs'][$key] ??= Storage::build(static::config($b));
-    }
-
-    /** The disk on this server behind a routed disk (public or box). */
-    public static function server(string $disk): Filesystem
-    {
-        static::memo();
-
-        return static::$memo['server'][$disk] ??= Storage::build(config('filesystems.disks.'.$disk.'.inner') + ['throw' => true]);
-    }
-
-    /** The key in the bucket: the same path (old box photos, box-photos/…, under private/). */
-    public static function key(string $disk, string $path): string
-    {
-        $path = ltrim($path, '/');
-
-        return ($disk === 'box' && str_starts_with($path, 'box-photos/') ? 'private/' : '').$path;
-    }
-
-    public static function skip(string $disk, string $path): bool
-    {
-        return $disk === 'public' && in_array(explode('/', ltrim($path, '/'))[0], static::SKIP, true);
-    }
-
-    /** Any photo off the server at all? (Before anything moved, nothing is looked up.) */
-    public static function any(): bool
-    {
-        static::memo();
-
-        return static::$memo['any'] ??= static::ready() && Cache::rememberForever('photo_files.any', fn () => PhotoFile::query()->exists());
-    }
-
-    public static function placeOf(string $disk, string $path): string
-    {
-        if (! static::any()) {
-            return 'server';
-        }
-        static::memo();
-        $k = $disk.'|'.$path;
-        if (! array_key_exists($k, static::$memo['place'] ?? [])) {
-            if (count(static::$memo['place'] ?? []) > 5000) {
-                static::$memo['place'] = [];
-            }
-            static::$memo['place'][$k] = PhotoFile::where('disk', $disk)->where('path', $path)->value('place') ?? 'server';
-        }
-        $place = static::$memo['place'][$k];
-
-        return $place === 'server' || ! static::readable($place) ? 'server' : $place;
-    }
-
-    /** Where a new photo goes. */
-    public static function targetFor(string $disk, string $path): string
-    {
-        if (! static::ready() || static::skip($disk, $path)) {
-            return 'server';
-        }
-        $t = static::target();
-
-        return $t !== 'server' && static::usable($t) ? $t : 'server';
-    }
-
-    public static function record(string $disk, string $path, string $place, ?int $size = null, ?string $note = null): void
-    {
-        if (! static::ready()) {
-            return;
-        }
-        static::memo();
-        if ($place === 'server' && ! $note) {
-            PhotoFile::where('disk', $disk)->where('path', $path)->delete();
-        } else {
-            PhotoFile::updateOrCreate(['disk' => $disk, 'path' => $path], ['place' => $place, 'size' => $size, 'note' => $note ? Str::limit($note, 150, '') : null]);
-            if (! (static::$memo['any'] ?? false)) {
-                Cache::forever('photo_files.any', true);
-                static::$memo['any'] = true;
-            }
-        }
-        static::$memo['place'][$disk.'|'.$path] = $place;
-    }
-
-    public static function forget(string $disk, string $path): void
-    {
-        if (static::any()) {
-            PhotoFile::where('disk', $disk)->where('path', $path)->delete();
-            static::$memo['place'][$disk.'|'.$path] = 'server';
-        }
-    }
-
-    /** A link for a bucket photo: valid for some hours, made again each time a page shows it. */
-    public static function link(string $slot, string $key, int $hours = 6): string
-    {
-        $fs = static::fs($slot);
-        if (static::$fake) {
-            return url('/photo-storage/fake/'.$slot.'/'.$key);
-        }
-
-        return $fs->temporaryUrl($key, now()->addHours($hours));
-    }
-
-    /** Upload, read back and delete a small file. */
-    public static function test(string $slot): array
-    {
-        $b = static::bucket($slot);
-        if (! static::driverReady()) {
-            return [false, 'The S3 driver is not installed yet. On the server run: composer require league/flysystem-aws-s3-v3'];
-        }
-        if (! $b->isSet()) {
-            return [false, 'Put the bucket details first.'];
-        }
-        static::$memo['fs'] = [];
-        $key = 'wmsv2-test/'.Str::uuid().'.txt';
-        $body = 'Photo storage test '.now()->toIso8601String();
-        try {
-            $fs = static::fs($slot);
-            $fs->put($key, $body);
-            $back = $fs->get($key);
-            $fs->delete($key);
-            $ok = $back === $body;
-            $msg = $ok ? 'Uploaded, read and deleted a test file.' : 'The test file came back different.';
-        } catch (\Throwable $e) {
-            $ok = false;
-            $msg = static::why($e);
-        }
-        $b->forceFill(['test_ok' => $ok, 'test_message' => Str::limit($msg, 250, ''), 'tested_at' => now()])->save();
-        static::$memo['bucket'] = [];
-
-        return [$ok, $msg];
-    }
-
-    /** A clear reason from an S3 error. */
-    public static function why(\Throwable $e): string
-    {
-        $all = $e->getMessage().' '.($e->getPrevious()?->getMessage() ?? '');
-
-        return match (true) {
-            str_contains($all, 'InvalidAccessKeyId') => 'The Access key ID is wrong.',
-            str_contains($all, 'SignatureDoesNotMatch') => 'The Secret access key is wrong.',
-            str_contains($all, 'NoSuchBucket') => 'There is no bucket with this name.',
-            str_contains($all, 'AccessDenied') || str_contains($all, '403') => 'Access denied: the API token needs Object Read & Write on this bucket.',
-            str_contains($all, 'Could not resolve host') || str_contains($all, 'cURL error 6') => 'The Account ID or endpoint is wrong (the address cannot be found).',
-            str_contains($all, 'timed out') || str_contains($all, 'cURL error 28') => 'No answer from the bucket (timed out). Try again.',
-            default => 'Could not connect: '.Str::limit(trim(preg_replace('/\s+/', ' ', $all)), 160),
-        };
-    }
-
-    /** Last 7 days: photos saved to a bucket, photos that stayed on the server because the bucket did not answer. */
-    public static function stats(): array
-    {
-        if (! static::ready()) {
-            return ['bucket' => 0, 'server' => 0];
-        }
-        $q = PhotoFile::where('created_at', '>=', now()->subDays(7));
-
-        return ['bucket' => (clone $q)->whereIn('place', ['tmp', 'real'])->count(), 'server' => (clone $q)->where('place', 'server')->whereNotNull('note')->count()];
-    }
-
-    public static function countIn(string $place): int
-    {
-        return static::ready() ? PhotoFile::where('place', $place)->where('disk', '!=', 'old')->count() : 0;
-    }
-
-    public static function queueSeen(): ?int
-    {
-        return Cache::get('photos.queue.seen');
-    }
-
-    public static function scheduleSeen(): ?int
-    {
-        return Cache::get('photos.schedule.seen');
-    }
-
-    public static function workerOn(): bool
-    {
-        return (static::queueSeen() ?? 0) > now()->subMinutes(5)->timestamp;
-    }
-
-    public static function schedulerOn(): bool
-    {
-        return (static::scheduleSeen() ?? 0) > now()->subMinutes(3)->timestamp;
+        return (int) SmsMessage::where('status', 'sent')->where('created_at', '>=', now()->startOfMonth())->sum('parts');
     }
 }
-DISPATCH_FILE_END_30
+DISPATCH_FILE_END_17
 
-# ---------------------------------------------------------------- app/Support/Photos/Storage/PhotoWork.php
-mkdir -p 'app/Support/Photos/Storage'
-cat > 'app/Support/Photos/Storage/PhotoWork.php' <<'DISPATCH_FILE_END_31'
+# ---------------------------------------------------------------- app/Support/Sms/Templates.php
+mkdir -p 'app/Support/Sms'
+cat > 'app/Support/Sms/Templates.php' <<'DISPATCH_FILE_END_18'
 <?php
 
-namespace App\Support\Photos\Storage;
+namespace App\Support\Sms;
 
-use App\Jobs\RunPhotoTasks;
-use App\Models\Photos\PhotoFile;
-use App\Models\Photos\PhotoTask;
-use App\Models\Photos\PhotoTaskItem;
-use App\Support\Photos\PhotoShrinker;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Cache;
+use App\Models\AppSetting;
 use Illuminate\Support\Str;
 
-/**
- * Moving photos in small batches: by the queue worker (Supervisor or Plesk), by the scheduler
- * (every minute), or by the Photo storage page itself while it is open ("Run here").
- * Each photo is copied, checked (same size in the bucket), and only then the old copy is deleted.
- */
-class PhotoWork
+/** The text of each message, in English, Tagalog and Bisaya, with {blanks}. */
+class Templates
 {
-    /** Server → a bucket: every photo still on the server (not the logos and icons). */
-    public static function startMove(string $to, bool $tidy = true): PhotoTask
+    public const LANGS = ['en' => 'English', 'tl' => 'Tagalog', 'ceb' => 'Bisaya'];
+
+    public const BLANKS = ['{name}', '{boxes}', '{box_count}', '{truck}', '{driver}', '{time}', '{minutes}', '{reason}', '{next_day}', '{hub}', '{hub_phone}', '{by}', '{damage}', '{receipt}'];
+
+    public const DEFAULTS = [
+        'out_for_delivery' => [
+            'en' => 'Hi {name}, your {box_count} box(es) {boxes} are out for delivery today with truck {truck}. Driver: {driver}.',
+            'tl' => 'Hi {name}, ang {box_count} box mo ({boxes}) ay ide-deliver ngayong araw, truck {truck}. Driver: {driver}.',
+            'ceb' => 'Hi {name}, ang {box_count} ka box nimo ({boxes}) i-deliver karong adlawa, truck {truck}. Driver: {driver}.',
+        ],
+        'driver_next' => [
+            'en' => 'Hi {name}, our driver is on the way. Expected in about {minutes} minutes. Please prepare an ID.',
+            'tl' => 'Hi {name}, papunta na ang driver namin. Darating sa loob ng mga {minutes} minuto. Ihanda po ang ID.',
+            'ceb' => 'Hi {name}, padulong na ang among driver. Moabot sa mga {minutes} ka minuto. Palihug andama ang ID.',
+        ],
+        'delivered' => [
+            'en' => 'Hi {name}, box {boxes} was delivered at {time}. Thank you!',
+            'tl' => 'Hi {name}, na-deliver na ang box {boxes} nang {time}. Salamat po!',
+            'ceb' => 'Hi {name}, na-deliver na ang box {boxes} sa {time}. Salamat!',
+        ],
+        'not_delivered' => [
+            'en' => 'Hi {name}, we tried to deliver box {boxes} but {reason}. We will try again on {next_day}. Call {hub_phone}.',
+            'tl' => 'Hi {name}, sinubukan naming i-deliver ang box {boxes} pero {reason}. Babalik kami sa {next_day}. Tumawag sa {hub_phone}.',
+            'ceb' => 'Hi {name}, gisulayan namo i-deliver ang box {boxes} pero {reason}. Mobalik mi sa {next_day}. Tawag sa {hub_phone}.',
+        ],
+        'out_for_delivery_hub' => [
+            'en' => 'Hi {name}, your {box_count} box(es) {boxes} are out for delivery today from {hub} with truck {truck}. Driver: {driver}. Questions: {hub_phone}.',
+            'tl' => 'Hi {name}, ang {box_count} box mo ({boxes}) ay ide-deliver ngayong araw mula sa {hub}, truck {truck}. Driver: {driver}. Tanong: {hub_phone}.',
+            'ceb' => 'Hi {name}, ang imong {box_count} ka box ({boxes}) i-deliver karong adlawa gikan sa {hub}, truck {truck}. Driver: {driver}. Pangutana: {hub_phone}.',
+        ],
+        'hub_arrived' => [
+            'en' => 'Hi {name}, your box {boxes} arrived at {hub} and will be delivered soon.',
+            'tl' => 'Hi {name}, ang box mo ({boxes}) ay dumating na sa {hub} at ide-deliver na sa lalong madaling panahon.',
+            'ceb' => 'Hi {name}, ang imong box ({boxes}) niabot na sa {hub} ug i-deliver dayon.',
+        ],
+        'delivered_damaged' => [
+            'en' => 'Hi {name}, box {boxes} was received by {by} at {time}, damaged: {damage}. Your receipt: {receipt} Questions: {hub_phone}.',
+            'tl' => 'Hi {name}, natanggap ni {by} ang box {boxes} nang {time}, may sira: {damage}. Ang resibo mo: {receipt} Tanong: {hub_phone}.',
+            'ceb' => 'Hi {name}, nadawat ni {by} ang box {boxes} sa {time}, naay guba: {damage}. Imong resibo: {receipt} Pangutana: {hub_phone}.',
+        ],
+        'set_split' => [
+            'en' => 'Hi {name}, {box_count} of your boxes are on the way. Box {boxes} follows on the next trip. Call {hub_phone}.',
+            'tl' => 'Hi {name}, papunta na ang {box_count} sa mga box mo. Ang box {boxes} ay susunod sa next trip. Tumawag sa {hub_phone}.',
+            'ceb' => 'Hi {name}, padulong na ang {box_count} sa imong mga box. Ang box {boxes} mosunod sa sunod nga biyahe. Tawag sa {hub_phone}.',
+        ],
+    ];
+
+    /** Provinces where receivers get Bisaya, and where they get Tagalog (else English). */
+    public const BISAYA = ['cebu', 'bohol', 'siquijor', 'negros oriental', 'leyte', 'southern leyte', 'biliran', 'camiguin', 'misamis oriental', 'misamis occidental',
+        'bukidnon', 'agusan del norte', 'agusan del sur', 'surigao del norte', 'surigao del sur', 'dinagat islands', 'davao del norte', 'davao del sur', 'davao oriental',
+        'davao occidental', 'davao de oro', 'zamboanga del norte', 'zamboanga del sur', 'zamboanga sibugay', 'lanao del norte', 'samar', 'eastern samar', 'northern samar'];
+
+    public const TAGALOG = ['metro manila', 'ncr', 'manila', 'national capital region', 'bulacan', 'cavite', 'laguna', 'batangas', 'rizal', 'quezon', 'nueva ecija',
+        'bataan', 'pampanga', 'tarlac', 'zambales', 'aurora', 'marinduque', 'occidental mindoro', 'oriental mindoro', 'romblon', 'palawan'];
+
+    public static function get(string $kind, string $lang): string
     {
-        @set_time_limit(600);
-        $task = PhotoTask::create(['kind' => 'move', 'from_place' => 'server', 'to_place' => $to, 'status' => 'running', 'user_id' => Auth::id(), 'started_at' => now(),
-            'options' => ['tidy' => $tidy]]);
-        $refs = $tidy ? PhotoFolders::refs() : [];
-        $rows = [];
-        foreach (['public', 'box'] as $disk) {
-            $server = PhotoStore::server($disk);
-            $files = $disk === 'box' ? $server->allFiles('box-photos') : $server->allFiles();
-            foreach ($files as $path) {
-                if (PhotoStore::skip($disk, $path) || str_starts_with(basename($path), '.')) {
-                    continue;
-                }
-                $r = $refs[$disk.'|'.$path] ?? null;
-                $rows[] = ['photo_task_id' => $task->id, 'disk' => $disk, 'path' => $path, 'status' => 'pending', 'created_at' => now(), 'updated_at' => now(),
-                    'new_path' => $r[2] ?? null, 'tbl' => $r[0] ?? null, 'col' => $r[1] ?? null];
-                if (count($rows) >= 500) {
-                    PhotoTaskItem::insert($rows);
-                    $rows = [];
-                }
+        return (string) (AppSetting::get("sms.tpl.{$kind}.{$lang}") ?: (self::DEFAULTS[$kind][$lang] ?? self::DEFAULTS[$kind]['en'] ?? ''));
+    }
+
+    public static function put(string $kind, string $lang, ?string $text): void
+    {
+        $text = Str::squish((string) $text);
+        AppSetting::put("sms.tpl.{$kind}.{$lang}", $text === '' || $text === (self::DEFAULTS[$kind][$lang] ?? null) ? null : $text);
+    }
+
+    public static function langFor(?string $province): string
+    {
+        $rule = SmsSettings::language();
+        if ($rule !== 'auto') {
+            return isset(self::LANGS[$rule]) ? $rule : 'en';
+        }
+        $p = Str::lower(Str::squish((string) $province));
+        foreach (self::BISAYA as $b) {
+            if ($p !== '' && str_contains($p, $b)) {
+                return 'ceb';
             }
         }
-        $rows && PhotoTaskItem::insert($rows);
-        $task->update(['total' => $task->items()->count()]);
-        static::kick();
-
-        return $task;
-    }
-
-    /** Switch to the real bucket: new photos go there now, the Temporary photos move, then Temporary turns off (if asked). */
-    public static function startSwitch(bool $autoOff = true): PhotoTask
-    {
-        PhotoStore::setTarget('real');
-        $task = PhotoTask::create(['kind' => 'switch', 'from_place' => 'tmp', 'to_place' => 'real', 'status' => 'running', 'user_id' => Auth::id(),
-            'started_at' => now(), 'options' => ['auto_off' => $autoOff]]);
-        PhotoFile::where('place', 'tmp')->where('disk', '!=', 'old')->select(['disk', 'path'])->orderBy('id')
-            ->chunk(500, fn ($c) => PhotoTaskItem::insert($c->map(fn ($f) => ['photo_task_id' => $task->id, 'disk' => $f->disk, 'path' => $f->path,
-                'status' => 'pending', 'created_at' => now(), 'updated_at' => now()])->all()));
-        $task->update(['total' => $task->items()->count()]);
-        static::kick();
-
-        return $task;
-    }
-
-    /** Let the queue worker go on (if one runs; otherwise the scheduler or the page does it). */
-    public static function kick(): void
-    {
-        rescue(fn () => RunPhotoTasks::dispatch(), null, false);
-    }
-
-    public static function active(): ?PhotoTask
-    {
-        return PhotoStore::ready() ? PhotoTask::whereIn('status', ['running', 'checking'])->orderBy('id')->first() : null;
-    }
-
-    /** Work for up to $seconds. Returns how many photos were done. */
-    public static function work(int $seconds = 20): int
-    {
-        if (! PhotoStore::ready()) {
-            return 0;
-        }
-        $lock = Cache::lock('photos.work', $seconds + 60);
-        if (! $lock->get()) {
-            return 0;
-        }
-        @ini_set('memory_limit', '512M');
-        $until = microtime(true) + $seconds;
-        $n = 0;
-        try {
-            while (microtime(true) < $until && ($task = static::active())) {
-                $items = $task->items()->where('status', $task->status === 'checking' ? 'done' : 'pending')
-                    ->when($task->status === 'checking', fn ($q) => $q->where('checked', false))->orderBy('id')->limit(25)->get();
-                if ($items->isEmpty()) {
-                    static::finish($task);
-
-                    continue;
-                }
-                foreach ($items as $item) {
-                    if (microtime(true) >= $until) {
-                        break;
-                    }
-                    $task->status === 'checking' ? static::check($task, $item) : static::one($task, $item);
-                    $n++;
-                }
-                static::count($task);
-            }
-        } finally {
-            $lock->release();
-        }
-
-        return $n;
-    }
-
-    protected static function finish(PhotoTask $task): void
-    {
-        $task = $task->fresh();
-        if ($task->kind === 'copy_old' && $task->status === 'checking' && $task->items()->where('status', 'pending')->exists()) {
-            $task->update(['status' => 'running']); // missing in the bucket: copied again, then checked again
-
-            return;
-        }
-        if ($task->kind === 'copy_old' && $task->status === 'running') {
-            $task->update(['status' => 'checking']);
-
-            return;
-        }
-        $task->update(['status' => 'done', 'finished_at' => $task->finished_at ?? now(), 'checked_at' => $task->status === 'checking' ? now() : $task->checked_at]);
-        if ($task->kind === 'switch' && $task->opt('auto_off') && PhotoStore::countIn('tmp') === 0) {
-            $b = PhotoStore::bucket('tmp');
-            $b->exists && $b->update(['is_off' => true]);
-        }
-        PhotoStore::forgetMemo();
-    }
-
-    public static function count(PhotoTask $task): void
-    {
-        $by = $task->items()->selectRaw('status, count(*) as n, sum(coalesce(size_before, 0)) as b, sum(coalesce(size_after, 0)) as a')->groupBy('status')->get()->keyBy('status');
-        $task->update([
-            'done' => (int) ($by['done']->n ?? 0), 'skipped' => (int) ($by['skipped']->n ?? 0), 'failed' => (int) ($by['failed']->n ?? 0),
-            'bytes_before' => (int) (($by['done']->b ?? 0) + ($by['skipped']->b ?? 0)), 'bytes_after' => (int) (($by['done']->a ?? 0) + ($by['skipped']->a ?? 0)),
-        ]);
-    }
-
-    /** One photo of a move, a switch or a copy. */
-    public static function one(PhotoTask $task, PhotoTaskItem $item): void
-    {
-        try {
-            match ($task->kind) {
-                'move', 'switch' => static::moveOne($task, $item),
-                'copy_old' => OldSystem::copyOne($task, $item),
-            };
-        } catch (\Throwable $e) {
-            $item->update(['status' => 'failed', 'note' => Str::limit(PhotoStore::why($e), 150, '')]);
-            $task->update(['last_error' => Str::limit(PhotoStore::why($e), 250, '')]);
-        }
-    }
-
-    protected static function moveOne(PhotoTask $task, PhotoTaskItem $item): void
-    {
-        $from = $task->from_place;
-        $to = $task->to_place;
-        $now = PhotoStore::placeOf($item->disk, $item->path);
-        if ($now === $to) {
-            $item->update(['status' => 'skipped', 'note' => 'Already there']);
-
-            return;
-        }
-        $key = PhotoStore::key($item->disk, $item->path);
-        $src = $from === 'server' ? PhotoStore::server($item->disk) : PhotoStore::fs($from);
-        $srcKey = $from === 'server' ? $item->path : $key;
-        if (! $src->exists($srcKey)) {
-            $item->update(['status' => 'missing', 'note' => 'Not found']);
-
-            return;
-        }
-        $bytes = (string) $src->get($srcKey);
-        $dest = PhotoStore::fs($to);
-        // put in the new folders (board 67): only photos of the server whose record is known
-        $tidy = $from === 'server' && $task->opt('tidy') && $item->new_path && $item->tbl && $item->col;
-        $path = $tidy ? $item->new_path : $item->path;
-        $key = PhotoStore::key($item->disk, $path);
-        $dest->put($key, $bytes);
-        if ((int) $dest->size($key) !== strlen($bytes)) {
-            throw new \RuntimeException('The copy in the bucket has a different size.');
-        }
-        PhotoStore::record($item->disk, $path, $to, strlen($bytes));
-        if ($tidy) {
-            PhotoFolders::rewrite($item->tbl, $item->col, $item->path, $path);
-            PhotoStore::forget($item->disk, $item->path);
-        }
-        $src->delete($srcKey);
-        $item->update(['status' => 'done', 'size_before' => strlen($bytes), 'size_after' => strlen($bytes), 'new_path' => $tidy ? $path : null]);
-    }
-
-    /** Check: the photo is in the bucket. A missing one is copied again. */
-    protected static function check(PhotoTask $task, PhotoTaskItem $item): void
-    {
-        $key = $item->new_path ?: $item->path;
-        $ok = $task->to_place && rescue(fn () => PhotoStore::fs($task->to_place)->exists($key), false, false);
-        $item->update($ok ? ['checked' => true] : ['status' => 'pending', 'checked' => false, 'note' => 'Missing in the bucket: copied again']);
-    }
-
-    /** Make a photo at most $max bytes: 1600 px, JPEG quality 80 down to 60. Signatures (PNG) and other files stay. */
-    public static function smaller(string $bytes, string $path, int $max = 200 * 1024): string
-    {
-        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        if (strlen($bytes) <= $max || ! PhotoShrinker::available() || ! in_array($ext, ['jpg', 'jpeg', 'webp'], true)) {
-            return $bytes;
-        }
-        $info = @getimagesizefromstring($bytes);
-        if (! $info) {
-            return $bytes;
-        }
-        $src = @imagecreatefromstring($bytes);
-        if (! $src) {
-            return $bytes;
-        }
-        $src = PhotoShrinker::upright($src, PhotoShrinker::orientation($bytes));
-        $w = imagesx($src);
-        $h = imagesy($src);
-        $out = $bytes;
-        // 1600 px with quality 80 down to 60; still too big (a very busy photo): 1280 px, then 1024 px
-        foreach ([PhotoShrinker::MAX_SIDE, 1280, 1024] as $side) {
-            $scale = min(1, $side / max($w, $h));
-            $img = imagecreatetruecolor(max(1, (int) round($w * $scale)), max(1, (int) round($h * $scale)));
-            imagecopyresampled($img, $src, 0, 0, 0, 0, imagesx($img), imagesy($img), $w, $h);
-            foreach ([80, 75, 70, 65, 60] as $q) {
-                ob_start();
-                $ext === 'webp' && function_exists('imagewebp') ? imagewebp($img, null, $q) : imagejpeg($img, null, $q);
-                $out = (string) ob_get_clean();
-                if (strlen($out) <= $max) {
-                    break 2;
-                }
-            }
-            imagedestroy($img);
-            $img = null;
-            if ($scale < 1 && $side === 1024) {
-                break;
+        foreach (self::TAGALOG as $t) {
+            if ($p !== '' && str_contains($p, $t)) {
+                return 'tl';
             }
         }
-        $img && imagedestroy($img);
-        imagedestroy($src);
 
-        return $out !== '' && strlen($out) < strlen($bytes) ? $out : $bytes;
+        return 'en';
+    }
+
+    public static function render(string $text, array $vals): string
+    {
+        $out = $text;
+        foreach ($vals as $k => $v) {
+            $out = str_replace('{'.$k.'}', (string) $v, $out);
+        }
+
+        return Str::squish(preg_replace('/\{[a-z_]+\}/', '', $out));
+    }
+
+    /** How many SMS parts a text needs (160 / 153 plain, 70 / 67 with emojis or special letters). */
+    public static function parts(string $text): int
+    {
+        $gsm = preg_match('/^[\x{0A}\x{0D}\x{20}-\x{7E}£¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ¡ÄÖÑÜ§¿äöñüà€]*$/u', $text) === 1;
+        $len = mb_strlen($text);
+        [$one, $many] = $gsm ? [160, 153] : [70, 67];
+
+        return $len <= $one ? 1 : (int) ceil($len / $many);
+    }
+
+    /** The blanks used in a text. @return list<string> */
+    public static function blanksIn(string $text): array
+    {
+        preg_match_all('/\{[a-z_]+\}/', $text, $m);
+        $b = array_values(array_unique($m[0]));
+        sort($b);
+
+        return $b;
     }
 }
-DISPATCH_FILE_END_31
+DISPATCH_FILE_END_18
 
-# ---------------------------------------------------------------- app/Support/Photos/Storage/RoutedAdapter.php
-mkdir -p 'app/Support/Photos/Storage'
-cat > 'app/Support/Photos/Storage/RoutedAdapter.php' <<'DISPATCH_FILE_END_32'
-<?php
-
-namespace App\Support\Photos\Storage;
-
-use League\Flysystem\Config;
-use League\Flysystem\FileAttributes;
-use League\Flysystem\FilesystemAdapter as FlyAdapter;
-use League\Flysystem\UnableToReadFile;
-use League\Flysystem\UnableToRetrieveMetadata;
-use League\Flysystem\UnableToWriteFile;
-
-/**
- * The "public" and "box" disks: each file is on this server or in a bucket (Settings → Photo storage).
- * New files go where "New photos go to" points; reading looks up where the file is (photo_files).
- * When a bucket does not answer, the photo is saved on the server so nothing is lost.
- */
-class RoutedAdapter implements FlyAdapter
-{
-    public function __construct(protected string $disk, protected array $config) {}
-
-    protected function server()
-    {
-        return PhotoStore::server($this->disk);
-    }
-
-    /** [place, Laravel disk, key] for reading a file. */
-    protected function at(string $path): array
-    {
-        $place = PhotoStore::placeOf($this->disk, $path);
-
-        return $place === 'server' ? ['server', $this->server(), $path] : [$place, PhotoStore::fs($place), PhotoStore::key($this->disk, $path)];
-    }
-
-    public function fileExists(string $path): bool
-    {
-        [, $fs, $key] = $this->at($path);
-
-        return $fs->exists($key);
-    }
-
-    public function directoryExists(string $path): bool
-    {
-        return $this->server()->directoryExists($path);
-    }
-
-    public function write(string $path, string $contents, Config $config): void
-    {
-        $this->save($path, $contents, $config);
-    }
-
-    public function writeStream(string $path, $contents, Config $config): void
-    {
-        $this->save($path, $contents, $config);
-    }
-
-    /** @param  string|resource  $contents */
-    protected function save(string $path, $contents, Config $config): void
-    {
-        $place = PhotoStore::targetFor($this->disk, $path);
-        $options = array_filter(['visibility' => $config->get('visibility')]);
-        // new photos at most 200 KB (Settings → Photo storage), wherever they are saved
-        $max = PhotoStore::ready() && ! PhotoStore::skip($this->disk, $path) ? PhotoFolders::maxKb() : 0;
-        if ($max > 0 && in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), ['jpg', 'jpeg', 'webp'], true)) {
-            $contents = is_resource($contents) ? (string) stream_get_contents($contents) : $contents;
-            $contents = PhotoWork::smaller($contents, $path, $max * 1024);
-        }
-        if ($place !== 'server') {
-            $bytes = is_resource($contents) ? (string) stream_get_contents($contents) : $contents;
-            try {
-                PhotoStore::fs($place)->put(PhotoStore::key($this->disk, $path), $bytes);
-                // a copy left on the server from before would be found by mistake later
-                rescue(fn () => $this->server()->delete($path), null, false);
-                PhotoStore::record($this->disk, $path, $place, strlen($bytes));
-
-                return;
-            } catch (\Throwable $e) {
-                $this->server()->put($path, $bytes, $options) ?: throw UnableToWriteFile::atLocation($path, 'server');
-                PhotoStore::record($this->disk, $path, 'server', strlen($bytes), 'Bucket did not answer: '.PhotoStore::why($e));
-                report($e);
-
-                return;
-            }
-        }
-        $this->server()->put($path, $contents, $options) ?: throw UnableToWriteFile::atLocation($path, 'server');
-        PhotoStore::forget($this->disk, $path);
-    }
-
-    public function read(string $path): string
-    {
-        [, $fs, $key] = $this->at($path);
-        $out = $fs->get($key);
-
-        return $out ?? throw UnableToReadFile::fromLocation($path);
-    }
-
-    public function readStream(string $path)
-    {
-        [, $fs, $key] = $this->at($path);
-
-        return $fs->readStream($key) ?? throw UnableToReadFile::fromLocation($path);
-    }
-
-    public function delete(string $path): void
-    {
-        [$place, $fs, $key] = $this->at($path);
-        $fs->delete($key);
-        if ($place !== 'server') {
-            PhotoStore::forget($this->disk, $path);
-        }
-    }
-
-    public function deleteDirectory(string $path): void
-    {
-        $this->server()->deleteDirectory($path);
-    }
-
-    public function createDirectory(string $path, Config $config): void
-    {
-        $this->server()->makeDirectory($path);
-    }
-
-    public function setVisibility(string $path, string $visibility): void
-    {
-        if (PhotoStore::placeOf($this->disk, $path) === 'server') {
-            $this->server()->setVisibility($path, $visibility);
-        }
-    }
-
-    public function visibility(string $path): FileAttributes
-    {
-        [$place, $fs, $key] = $this->at($path);
-
-        return new FileAttributes($path, null, $place === 'server' ? $fs->getVisibility($key) : 'private');
-    }
-
-    public function mimeType(string $path): FileAttributes
-    {
-        [, $fs, $key] = $this->at($path);
-        $mime = $fs->mimeType($key) ?: throw UnableToRetrieveMetadata::mimeType($path);
-
-        return new FileAttributes($path, null, null, null, $mime);
-    }
-
-    public function lastModified(string $path): FileAttributes
-    {
-        [, $fs, $key] = $this->at($path);
-
-        return new FileAttributes($path, null, null, $fs->lastModified($key));
-    }
-
-    public function fileSize(string $path): FileAttributes
-    {
-        [, $fs, $key] = $this->at($path);
-
-        return new FileAttributes($path, $fs->size($key));
-    }
-
-    /** Only the files on this server are listed (photos in a bucket are found through photo_files). */
-    public function listContents(string $path, bool $deep): iterable
-    {
-        return $this->server()->getDriver()->listContents($path, $deep);
-    }
-
-    public function move(string $source, string $destination, Config $config): void
-    {
-        [$place, $fs, $key] = $this->at($source);
-        if ($place === 'server') {
-            $fs->move($key, $destination);
-
-            return;
-        }
-        $fs->move($key, PhotoStore::key($this->disk, $destination));
-        PhotoStore::forget($this->disk, $source);
-        PhotoStore::record($this->disk, $destination, $place);
-    }
-
-    public function copy(string $source, string $destination, Config $config): void
-    {
-        [$place, $fs, $key] = $this->at($source);
-        if ($place === 'server') {
-            $fs->copy($key, $destination);
-
-            return;
-        }
-        $fs->copy($key, PhotoStore::key($this->disk, $destination));
-        PhotoStore::record($this->disk, $destination, $place);
-    }
-
-    /** Called by Storage::disk(...)->url(): the server link, or a temporary bucket link. */
-    public function getUrl(string $path): string
-    {
-        $place = PhotoStore::placeOf($this->disk, $path);
-        if ($place !== 'server') {
-            return PhotoStore::link($place, PhotoStore::key($this->disk, $path));
-        }
-        $base = $this->config['url'] ?? null;
-
-        return $base ? rtrim($base, '/').'/'.ltrim($path, '/') : url('/storage/'.ltrim($path, '/'));
-    }
-
-    public function getTemporaryUrl(string $path, $expiration, array $options = []): string
-    {
-        return $this->getUrl($path);
-    }
-}
-DISPATCH_FILE_END_32
-
-# ---------------------------------------------------------------- database/migrations/2026_11_26_000051_photo_task_new_path.php
+# ---------------------------------------------------------------- database/migrations/2026_11_27_000052_delivery_signatures.php
 mkdir -p 'database/migrations'
-cat > 'database/migrations/2026_11_26_000051_photo_task_new_path.php' <<'DISPATCH_FILE_END_33'
+cat > 'database/migrations/2026_11_27_000052_delivery_signatures.php' <<'DISPATCH_FILE_END_19'
 <?php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-/** Part 41: old photos put in the new folders while they are copied or moved. */
+/**
+ * Part 44: a box handed over damaged, or with no paper receipt, is signed on the driver's phone.
+ * The signed receipt is the same receipt you print (only its blank lines filled in).
+ * Can't deliver: the next try is set by the reason; after 3 tries the office decides.
+ */
 return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasTable('photo_task_items') && ! Schema::hasColumn('photo_task_items', 'new_path')) {
-            Schema::table('photo_task_items', function (Blueprint $t) {
-                $t->string('new_path', 500)->nullable();   // the path in the new folders (null: keeps its path)
-                $t->string('tbl', 64)->nullable();         // the column whose path is changed after the copy
-                $t->string('col', 64)->nullable();
+        if (! Schema::hasTable('delivery_signatures')) {
+            Schema::create('delivery_signatures', function (Blueprint $t) {
+                $t->id();
+                $t->unsignedBigInteger('tripinvoice_id')->index();
+                $t->unsignedBigInteger('invoice_id')->nullable()->index();
+                $t->unsignedBigInteger('user_id')->nullable();        // the driver
+                $t->string('why', 20);                               // damaged | no_paper
+                $t->string('paper_reason', 40)->nullable();          // wet_torn | left_at_hub | no_more
+                $t->string('recipient_name', 120);
+                $t->string('relationship', 40)->nullable();
+                $t->json('damage')->nullable();                      // ['torn', 'crushed', …]
+                $t->string('damage_note', 300)->nullable();
+                $t->boolean('cant_sign')->default(false);
+                $t->string('signature', 500)->nullable();            // PNG on the public disk
+                $t->string('receipt_pdf', 500)->nullable();
+                $t->string('receipt_jpg', 500)->nullable();          // also in the delivery photos
+                $t->string('token', 16)->unique();                   // /r/{token}: the link in the SMS
+                $t->decimal('lat', 10, 7)->nullable();
+                $t->decimal('lng', 10, 7)->nullable();
+                $t->unsignedBigInteger('invoiceissue_id')->nullable();
+                $t->unsignedBigInteger('sms_message_id')->nullable();
+                $t->timestamp('signed_at')->nullable();
+                $t->timestamps();
+            });
+        }
+        if (Schema::hasTable('delivery_attempts') && ! Schema::hasColumn('delivery_attempts', 'next_try_on')) {
+            Schema::table('delivery_attempts', function (Blueprint $t) {
+                $t->date('next_try_on')->nullable();                 // when to try again (null: the office decides)
+                $t->boolean('needs_office')->default(false);
+                $t->timestamp('handled_at')->nullable();             // the office set a new date or closed it
+                $t->unsignedBigInteger('handled_by')->nullable();
             });
         }
     }
 
     public function down(): void
     {
-        if (Schema::hasColumn('photo_task_items', 'new_path')) {
-            Schema::table('photo_task_items', fn (Blueprint $t) => $t->dropColumn(['new_path', 'tbl', 'col']));
+        Schema::dropIfExists('delivery_signatures');
+        if (Schema::hasColumn('delivery_attempts', 'next_try_on')) {
+            Schema::table('delivery_attempts', fn (Blueprint $t) => $t->dropColumn(['next_try_on', 'needs_office', 'handled_at', 'handled_by']));
         }
     }
 };
-DISPATCH_FILE_END_33
+DISPATCH_FILE_END_19
+
+# ---------------------------------------------------------------- public/js/app/sign-pad.js
+mkdir -p 'public/js/app'
+cat > 'public/js/app/sign-pad.js' <<'DISPATCH_FILE_END_20'
+/*
+ * Part 44 · The receiver signs on the driver's phone (boards 70, 70b).
+ * x-data="dsSignPad(damaged)": draw with a finger; each stroke sends the signature (PNG) to the page.
+ */
+window.dsSignPad = function (damaged) {
+    return {
+        damaged: !!damaged,
+        empty: true,
+        init() {
+            const c = this.$refs.pad;
+            const ctx = c.getContext('2d');
+            const fit = () => {
+                const r = window.devicePixelRatio || 1;
+                const w = c.clientWidth || 320;
+                const h = c.clientHeight || 170;
+                if (c.width === Math.round(w * r)) return;
+                c.width = Math.round(w * r); c.height = Math.round(h * r);
+                ctx.setTransform(r, 0, 0, r, 0, 0);
+                ctx.lineWidth = 3.4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#0e2433';
+            };
+            fit();
+            let last = null;
+            const at = (e) => { const b = c.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; };
+            c.addEventListener('pointerdown', (e) => { e.preventDefault(); c.setPointerCapture(e.pointerId); last = at(e); ctx.beginPath(); ctx.arc(last.x, last.y, 1.2, 0, 7); ctx.fillStyle = '#0e2433'; ctx.fill(); });
+            c.addEventListener('pointermove', (e) => {
+                if (!last) return;
+                const p = at(e);
+                ctx.beginPath(); ctx.moveTo(last.x, last.y);
+                ctx.quadraticCurveTo(last.x, last.y, (last.x + p.x) / 2, (last.y + p.y) / 2); ctx.lineTo(p.x, p.y); ctx.stroke();
+                last = p; this.empty = false;
+            });
+            const end = () => {
+                if (!last) return;
+                last = null; this.empty = false;
+                this.$wire.set('signature', this.png());
+            };
+            c.addEventListener('pointerup', end);
+            c.addEventListener('pointercancel', end);
+            window.addEventListener('resize', fit);
+            // where it was signed (only when the phone allows it; never asks twice)
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition((p) => { this.$wire.set('signLat', p.coords.latitude, false); this.$wire.set('signLng', p.coords.longitude, false); }, () => {}, { maximumAge: 120000, timeout: 8000 });
+            }
+        },
+        /** A small PNG: the strokes on white, at most 600 px wide. */
+        png() {
+            const c = this.$refs.pad;
+            const k = Math.min(1, 600 / c.width);
+            const o = document.createElement('canvas');
+            o.width = Math.round(c.width * k); o.height = Math.round(c.height * k);
+            const x = o.getContext('2d');
+            x.fillStyle = '#fff'; x.fillRect(0, 0, o.width, o.height);
+            x.drawImage(c, 0, 0, o.width, o.height);
+            return o.toDataURL('image/png');
+        },
+        clear() {
+            const c = this.$refs.pad;
+            c.getContext('2d').clearRect(0, 0, c.width, c.height);
+            this.empty = true;
+            this.$wire.set('signature', null);
+        },
+    };
+};
+DISPATCH_FILE_END_20
 
 # ---------------------------------------------------------------- resources/css/filament/admin/theme.css
 mkdir -p 'resources/css/filament/admin'
-cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_34'
+cat > 'resources/css/filament/admin/theme.css' <<'DISPATCH_FILE_END_21'
 @import '../../../../vendor/filament/filament/resources/css/theme.css';
 
 /* The Archivo font comes with the app (no internet needed): pages open fast even on a slow connection. */
@@ -11277,6 +6412,19 @@ html[data-pwa-installable] .ds-sa__footlinks .ds-pwa-install { display: inline; 
 .ds-dr__proof b { position: absolute; left: 0.45rem; bottom: 0.45rem; padding: 0.05rem 0.5rem; border-radius: 999px; background: rgb(10 18 25 / 0.75); font-size: 0.7rem; }
 .ds-dr__proof button { position: absolute; right: 0.35rem; top: 0.35rem; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: rgb(10 18 25 / 0.7); color: #fff; font-size: 0.7rem; }
 .ds-dr__proof.is-small { width: 3.5rem; height: 3.5rem; aspect-ratio: auto; border-radius: 0.9rem; }
+/* Board 68: bigger proof photos (2 a row), tap to open full screen */
+.ds-dr__grid.is-big { grid-template-columns: repeat(2, 1fr); }
+.ds-dr__grid.is-big .ds-dr__proof, .ds-dr__grid.is-big .ds-dr__add { aspect-ratio: 4 / 3; }
+.ds-dr__proof img { cursor: zoom-in; }
+.ds-dr__proof em { position: absolute; right: 0.45rem; bottom: 0.45rem; padding: 0.15rem 0.55rem; border-radius: 999px; background: rgb(10 18 25 / 0.75); color: #fff; font-size: 0.72rem; font-style: normal; font-weight: 700; cursor: pointer; }
+.ds-dr__proof.is-small img { cursor: zoom-in; }
+.ds-dr__other { display: flex; align-items: center; gap: 0.5rem; padding: 0.65rem 0.75rem; border-radius: 1rem; background: rgb(255 196 61 / 0.14); box-shadow: inset 0 0 0 1px rgb(255 196 61 / 0.45); animation: sa-in .2s ease-out; }
+.ds-dr__other > span { flex: 1; display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.ds-dr__other b { font-size: 0.85rem; color: #ffd27a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-dr__other small { font-size: 0.75rem; color: var(--sa-text); opacity: 0.8; }
+.ds-dr__other button { padding: 0.45rem 0.8rem; border-radius: 999px; background: #ffc43d; color: #0a1219; font-weight: 800; font-size: 0.8rem; }
+.ds-dr__other button.is-x { padding: 0; width: 2rem; height: 2rem; background: rgb(255 255 255 / 0.1); color: #fff; }
+.ds-snap .ds-sa__shot { cursor: zoom-in; }
 .ds-dr__add { aspect-ratio: 1; border-radius: 1.1rem; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.35rem; background: rgb(255 255 255 / 0.05); box-shadow: inset 0 0 0 1.5px rgb(255 255 255 / 0.18); color: var(--sa-text); font-size: 0.8rem; font-weight: 600; }
 .ds-dr__add svg { width: 1.6rem; height: 1.6rem; }
 .ds-dr__chips { display: flex; flex-wrap: wrap; gap: 0.45rem; }
@@ -14012,361 +9160,1490 @@ button.ds-fu__tr:hover { background: rgb(0 0 0 / .025); }
 .ds-pst__fmap code { font-family: ui-monospace, monospace; color: #17895e; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dark .ds-pst__fmap > span { border-color: rgb(255 255 255 / .08); }
 @media (max-width: 900px) { .ds-pst__fmap { grid-template-columns: 1fr; } }
-DISPATCH_FILE_END_34
 
-# ---------------------------------------------------------------- resources/views/filament/photos/storage.blade.php
-mkdir -p 'resources/views/filament/photos'
-cat > 'resources/views/filament/photos/storage.blade.php' <<'DISPATCH_FILE_END_35'
+/* ───────── Part 44 · damaged delivery, receipt signed on the phone, next try (boards 69, 70, 70b) ───────── */
+.ds-sa__seg.is-2 { grid-template-columns: repeat(2, 1fr); }
+.ds-sa__seg.is-2 .ds-sa__segthumb { width: calc((100% - 8px) / 2); }
+.ds-sa__primary.is-red { background: var(--sa-bad); color: #fff; }
+.ds-dr__block { display: flex; flex-direction: column; gap: 0.55rem; padding: 0.8rem; border-radius: 1.1rem; background: rgb(255 255 255 / 0.035); box-shadow: inset 0 0 0 1px var(--sa-line); }
+.ds-dr__blocklabel { font-size: 0.74rem; font-weight: 800; color: var(--sa-muted); letter-spacing: 0.02em; }
+.ds-dr__hint { margin: 0; font-size: 0.8rem; line-height: 1.4; color: #c9d5dc; }
+.ds-dr__need { margin: 0; padding: 0.55rem 0.7rem; border-radius: 0.8rem; background: rgb(255 107 94 / 0.12); color: #ffb3aa; font-size: 0.8rem; font-weight: 700; }
+.ds-dr__need.is-done { background: rgb(52 195 143 / 0.12); color: #8fe3c2; }
+.ds-dr__chips.is-bad button.is-on { background: var(--sa-bad); color: #fff; }
+.ds-dr__chips.is-light button.is-on { background: var(--sa-text); color: #0a1219; }
+.ds-dr__field { display: flex; flex-direction: column; gap: 0.3rem; }
+.ds-dr__field > span { font-size: 0.74rem; font-weight: 800; color: var(--sa-muted); }
+.ds-dr__sign { position: relative; display: flex; flex-direction: column; gap: 0.35rem; }
+.ds-dr__signtext { margin: 0; font-size: 0.78rem; color: #c9d5dc; }
+.ds-dr__sign canvas { width: 100%; height: 170px; border-radius: 0.9rem; background: #fbfaf6; touch-action: none; box-shadow: inset 0 -2px 0 rgb(14 36 51 / 0.12); }
+.ds-dr__signhint { position: absolute; left: 0; right: 0; top: 50%; text-align: center; color: #8a96a0; font-size: 0.9rem; font-weight: 700; pointer-events: none; }
+.ds-dr__signbar { display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; }
+.ds-dr__signbar button { padding: 0.3rem 0.8rem; border-radius: 999px; background: rgb(255 255 255 / 0.08); color: var(--sa-text); font-weight: 700; }
+.ds-dr__signbar span { color: var(--sa-ok); font-weight: 800; }
+.ds-dr__cant { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; color: var(--sa-muted); }
+.ds-dr__cant input { width: 1.1rem; height: 1.1rem; accent-color: var(--sa-gold); }
+.ds-dr__receiptlink { display: inline-block; margin-top: 0.35rem; padding: 0.35rem 0.75rem; border-radius: 999px; background: var(--sa-gold); color: #0a1219; font-size: 0.78rem; font-weight: 800; }
+.ds-dr__next { display: flex; flex-direction: column; gap: 0.15rem; margin: 0; padding: 0.65rem 0.8rem; border-radius: 0.9rem; background: rgb(90 168 255 / 0.12); }
+.ds-dr__next b { font-size: 0.88rem; color: #bcdcff; }
+.ds-dr__next small { font-size: 0.75rem; color: #c9d5dc; }
+.ds-dr__next.is-office { background: rgb(240 169 59 / 0.14); }
+.ds-dr__next.is-office b { color: #f6cf8c; }
+.ds-dr__lasttry { display: flex; flex-direction: column; gap: 0.2rem; padding: 0.7rem 0.8rem; border-radius: 0.9rem; background: rgb(240 169 59 / 0.1); box-shadow: inset 3px 0 0 var(--sa-warn); font-size: 0.8rem; color: #e8d3ad; }
+.ds-dr__lasttry b { color: #f6cf8c; font-size: 0.8rem; }
+.ds-dr__lasttry q { font-style: italic; color: #d9e2e8; }
+.ds-dr__lasttry small { color: var(--sa-text); font-weight: 700; }
+.ds-dr__trybadge { align-self: flex-start; padding: 0.1rem 0.55rem; border-radius: 999px; background: var(--sa-warn); color: #0a1219; font-size: 0.7rem; font-weight: 900; }
+.ds-dr__cardtop em.is-try { background: rgb(240 169 59 / 0.18); color: #f6cf8c; }
+/* Part 44: a tall sheet (damaged + signature) scrolls inside itself, so its top is never cut off */
+.ds-sa__sheet { max-height: calc(100dvh - 0.75rem); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.ds-sa__sheet > * { flex-shrink: 0; }
+DISPATCH_FILE_END_21
+
+# ---------------------------------------------------------------- resources/js/sign-pad.js
+mkdir -p 'resources/js'
+cat > 'resources/js/sign-pad.js' <<'DISPATCH_FILE_END_22'
+/*
+ * Part 44 · The receiver signs on the driver's phone (boards 70, 70b).
+ * x-data="dsSignPad(damaged)": draw with a finger; each stroke sends the signature (PNG) to the page.
+ */
+window.dsSignPad = function (damaged) {
+    return {
+        damaged: !!damaged,
+        empty: true,
+        init() {
+            const c = this.$refs.pad;
+            const ctx = c.getContext('2d');
+            const fit = () => {
+                const r = window.devicePixelRatio || 1;
+                const w = c.clientWidth || 320;
+                const h = c.clientHeight || 170;
+                if (c.width === Math.round(w * r)) return;
+                c.width = Math.round(w * r); c.height = Math.round(h * r);
+                ctx.setTransform(r, 0, 0, r, 0, 0);
+                ctx.lineWidth = 3.4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#0e2433';
+            };
+            fit();
+            let last = null;
+            const at = (e) => { const b = c.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; };
+            c.addEventListener('pointerdown', (e) => { e.preventDefault(); c.setPointerCapture(e.pointerId); last = at(e); ctx.beginPath(); ctx.arc(last.x, last.y, 1.2, 0, 7); ctx.fillStyle = '#0e2433'; ctx.fill(); });
+            c.addEventListener('pointermove', (e) => {
+                if (!last) return;
+                const p = at(e);
+                ctx.beginPath(); ctx.moveTo(last.x, last.y);
+                ctx.quadraticCurveTo(last.x, last.y, (last.x + p.x) / 2, (last.y + p.y) / 2); ctx.lineTo(p.x, p.y); ctx.stroke();
+                last = p; this.empty = false;
+            });
+            const end = () => {
+                if (!last) return;
+                last = null; this.empty = false;
+                this.$wire.set('signature', this.png());
+            };
+            c.addEventListener('pointerup', end);
+            c.addEventListener('pointercancel', end);
+            window.addEventListener('resize', fit);
+            // where it was signed (only when the phone allows it; never asks twice)
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition((p) => { this.$wire.set('signLat', p.coords.latitude, false); this.$wire.set('signLng', p.coords.longitude, false); }, () => {}, { maximumAge: 120000, timeout: 8000 });
+            }
+        },
+        /** A small PNG: the strokes on white, at most 600 px wide. */
+        png() {
+            const c = this.$refs.pad;
+            const k = Math.min(1, 600 / c.width);
+            const o = document.createElement('canvas');
+            o.width = Math.round(c.width * k); o.height = Math.round(c.height * k);
+            const x = o.getContext('2d');
+            x.fillStyle = '#fff'; x.fillRect(0, 0, o.width, o.height);
+            x.drawImage(c, 0, 0, o.width, o.height);
+            return o.toDataURL('image/png');
+        },
+        clear() {
+            const c = this.$refs.pad;
+            c.getContext('2d').clearRect(0, 0, c.width, c.height);
+            this.empty = true;
+            this.$wire.set('signature', null);
+        },
+    };
+};
+DISPATCH_FILE_END_22
+
+# ---------------------------------------------------------------- resources/views/filament/deliveries/redelivery.blade.php
+mkdir -p 'resources/views/filament/deliveries'
+cat > 'resources/views/filament/deliveries/redelivery.blade.php' <<'DISPATCH_FILE_END_23'
+{{-- Part 44 (board 69): boxes that could not be delivered, so none is forgotten. --}}
 <x-filament-panels::page>
-@php
-    $pl = \App\Support\Photos\Storage\PhotoStore::PLACES;
-    $prov = \App\Support\Photos\Storage\PhotoStore::PROVIDERS;
-    $ago = fn ($ts) => $ts ? \Illuminate\Support\Carbon::createFromTimestamp($ts)->diffForHumans() : 'never';
-    $checks = [
-        ['S3 driver', $driver, $driver ? 'Installed on the server' : 'Run once: composer require league/flysystem-aws-s3-v3'],
-        ['Background worker', $worker || $scheduler || $runHere, $worker ? 'Running' : ($scheduler ? 'Scheduler runs (every minute)' : ($runHere ? 'Running in this tab' : 'Not running: see the Workers tab'))],
-        ['Bucket tested', $usable['tmp'] || $usable['real'], $usable['tmp'] || $usable['real'] ? ($tmp->bucket ?: $real->bucket).': upload, read, delete ok' : 'Put a bucket and press Test connection'],
-        ['Old system found', (bool) ($find['found'] ?? false), ($find['found'] ?? false) ? basename($find['dir'] ?? 'old site').' · read-only' : 'Not found on this server (Copy tab, step 1)'],
-    ];
-@endphp
-<div class="ds-pst" @if ($runHere) wire:poll.4s="tick" @elseif ($active) wire:poll.10s @endif>
-    <span class="ds-pst__title"><h1>Photo storage</h1><small>Where every photo is saved: box photos, unload, POD, pick-up, from the scan app, the driver app and the panels. Put your bucket here: nothing to set in the server files.</small></span>
+    <div class="flex flex-col gap-4">
+        <p class="m-0 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
+            Boxes that came back. The reason sets the next try: no one home → the next working day, asked for another day → the day they picked,
+            wrong address, phone, refused or damaged → the office first. After {{ \App\Support\Deliveries\NextTry::MAX_TRIES }} tries the office decides.
+        </p>
 
-    <section class="ds-pst__card">
-        <span class="ds-pst__row"><b class="ds-pst__h">Setup checklist</b><small class="ds-pst__mute">Everything needs a ✓ before photos go to the bucket.</small></span>
-        <span class="ds-pst__grid4">
-            @foreach ($checks as [$name, $ok, $text])
-                <span @class(['ds-pst__chk', 'is-ok' => $ok])><b>{{ $ok ? '✓' : '✗' }} {{ $name }}</b><small>{{ $text }}</small></span>
+        <div class="flex flex-wrap gap-2" role="tablist" aria-label="Which boxes">
+            @foreach ($tabs as $k => $label)
+                <button type="button" role="tab" wire:click="setTab('{{ $k }}')" aria-selected="{{ $tab === $k ? 'true' : 'false' }}"
+                    @class([
+                        'inline-flex h-9 items-center gap-2 rounded-full px-4 text-sm font-bold transition',
+                        'bg-gray-900 text-white dark:bg-white dark:text-gray-900' => $tab === $k,
+                        'bg-white text-gray-800 ring-1 ring-gray-950/10 hover:bg-gray-50 dark:bg-white/5 dark:text-gray-200 dark:ring-white/10' => $tab !== $k,
+                    ])>
+                    {{ $label }}
+                    <span @class([
+                        'rounded-full px-1.5 text-xs tabular-nums',
+                        'bg-amber-400 text-gray-900' => $counts[$k] > 0 && in_array($k, ['today', 'overdue', 'office'], true),
+                        'bg-gray-100 text-gray-500 dark:bg-white/10 dark:text-gray-400' => ! ($counts[$k] > 0 && in_array($k, ['today', 'overdue', 'office'], true)),
+                    ])>{{ $counts[$k] }}</span>
+                </button>
             @endforeach
-        </span>
-    </section>
+        </div>
 
-    <span class="ds-pst__tabs">
-        @foreach (['old' => 'Copy from the old system', 'bucket' => 'Bucket', 'work' => 'Workers'] as $id => $name)
-            <button type="button" wire:click="setTab('{{ $id }}')" @class(['is-on' => $tab === $id])>{{ $name }}</button>
-        @endforeach
-    </span>
-
-    {{-- ─────────────── Bucket ─────────────── --}}
-    @if ($tab === 'bucket')
-        @if ($usable['real'] && ($target !== 'real' || ($switch && $switch->status !== 'done') || ($switch && $switch->finished_at?->gt(now()->subDay()))))
-            @php $sw = $switch && in_array($switch->status, ['running', 'paused', 'done']) && $switch->created_at->gt(now()->subDays(3)) ? $switch : null; @endphp
-            <section class="ds-pst__switch">
-                <span class="ds-pst__row">
-                    <span class="ds-pst__col"><b>{{ $sw?->status === 'done' ? '✓ Switched to the real bucket' : ($sw ? 'Switching to the real bucket…' : 'Switch to the real bucket') }}</b>
-                        <small>{{ $sw?->status === 'done' ? 'All photos are in '.$real->bucket.'. '.($sw->opt('auto_off') ? 'Temporary was turned off by itself; its files stay as a backup.' : 'Press Turn off on the Temporary card when you are ready.') : ($sw ? 'Runs in the background, you can close this page. Every photo keeps opening while it moves.' : 'One press: new photos go to Real, the photos in Temporary move there, it is checked, then Temporary turns off.') }}</small></span>
-                    @if (! $sw)
-                        <button type="button" class="ds-pst__go is-yellow" wire:click="startSwitch">Switch to Real bucket</button>
-                    @elseif ($sw->status === 'paused')
-                        <button type="button" class="ds-pst__go is-yellow" wire:click="resume({{ $sw->id }})">Go on</button>
-                    @elseif ($sw->status === 'running')
-                        <button type="button" class="ds-pst__go" wire:click="pause({{ $sw->id }})">Pause</button>
-                    @endif
-                </span>
-                <span class="ds-pst__grid4">
-                    @foreach ([['New photos → Real', 'right away', (bool) $sw], ['Move Temporary → Real', $sw ? number_format($sw->done + $sw->skipped).' of '.number_format($sw->total) : number_format($inTmp).' photos', $sw?->status === 'done' ? true : ($sw ? 'on' : false)], ['Check', '0 left, same size', $sw?->status === 'done'], ['Turn off Temporary', $autoOff ? 'by itself' : 'you press it', $sw?->status === 'done' && $tmp->is_off]] as [$n, $t, $st])
-                        <span class="ds-pst__sstep"><b @class(['is-ok' => $st === true, 'is-on' => $st === 'on'])>{{ $st === true ? '✓' : ($st === 'on' ? '…' : '○') }} {{ $n }}</b><small>{{ $t }}</small></span>
-                    @endforeach
-                </span>
-                <span class="ds-pst__bar is-dark"><i style="width: {{ $sw ? $sw->pct() : 0 }}%"></i></span>
-                @unless ($sw)
-                    <label class="ds-pst__tog is-dark"><input type="checkbox" wire:model.live="autoOff"><span><b>Turn off Temporary by itself when it is empty</b><small>Off: you press Turn off on the Temporary card yourself.</small></span></label>
-                @endunless
-            </section>
+        @if ($rows->isEmpty())
+            <div class="rounded-2xl bg-white px-6 py-12 text-center ring-1 ring-gray-950/5 dark:bg-white/5 dark:ring-white/10">
+                <p class="m-0 text-lg font-bold">Nothing here</p>
+                <p class="m-0 mt-1 text-sm text-gray-500">{{ ['today' => 'No box is due for another try today.', 'overdue' => 'No box missed its next try.', 'hold' => 'No box waits for a later day.', 'office' => 'No box needs the office.'][$tab] }}</p>
+            </div>
+        @else
+            <div class="overflow-x-auto rounded-2xl bg-white ring-1 ring-gray-950/5 dark:bg-white/5 dark:ring-white/10">
+                <table class="w-full min-w-[56rem] text-left text-sm">
+                    <thead class="text-xs text-gray-500 dark:text-gray-400">
+                        <tr class="border-b border-gray-950/5 dark:border-white/10">
+                            <th class="px-4 py-3 font-semibold">Box</th>
+                            <th class="px-4 py-3 font-semibold">Receiver · area</th>
+                            <th class="px-4 py-3 font-semibold">Tries</th>
+                            <th class="px-4 py-3 font-semibold">Last reason</th>
+                            <th class="px-4 py-3 font-semibold">Next try</th>
+                            <th class="px-4 py-3"><span class="sr-only">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach ($rows as $a)
+                            @php($n = (int) ($tries[$a->invoice_id] ?? 1))
+                            <tr class="border-b border-gray-950/5 align-top last:border-0 dark:border-white/5" wire:key="rd-{{ $a->id }}">
+                                <td class="px-4 py-3"><b class="font-mono text-[0.95rem]">{{ $a->invoice?->invoice }}</b><br><small class="text-gray-500">Trip {{ $a->deliverylog?->trip_number ?? '—' }}</small></td>
+                                <td class="px-4 py-3">
+                                    <span class="font-semibold">{{ \Illuminate\Support\Str::title($a->invoice?->receiver_name) }}</span><br>
+                                    <small class="text-gray-500">{{ collect([$a->invoice?->receiver_barangay, $a->invoice?->receiver_city])->filter()->map(fn ($x) => \Illuminate\Support\Str::title($x))->join(', ') }}</small>
+                                    @if ($a->invoice?->receiver_mobile_no)<br><a class="text-xs font-semibold text-primary-600" href="tel:{{ preg_replace('/[^0-9+]/', '', $a->invoice->receiver_mobile_no) }}">📞 {{ $a->invoice->receiver_mobile_no }}</a>@endif
+                                </td>
+                                <td class="px-4 py-3">
+                                    <span @class(['inline-flex rounded-full px-2 py-0.5 text-xs font-bold', 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300' => $n >= \App\Support\Deliveries\NextTry::MAX_TRIES, 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300' => $n < \App\Support\Deliveries\NextTry::MAX_TRIES])>{{ $n }} of {{ \App\Support\Deliveries\NextTry::MAX_TRIES }}</span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <span class="font-semibold">{{ $a->reason->getLabel() }}</span><br>
+                                    <small class="text-gray-500">{{ $a->created_at->format('M j, g:i A') }}{{ filled($a->user?->full_name) ? ' · '.$a->user->full_name : '' }}</small>
+                                    @if ($a->note)<br><q class="text-xs italic text-gray-600 dark:text-gray-300">{{ \Illuminate\Support\Str::limit($a->note, 90) }}</q>@endif
+                                </td>
+                                <td class="px-4 py-3">
+                                    @if ($a->needs_office || ! $a->next_try_on)
+                                        <span class="inline-flex rounded-full bg-amber-400 px-2 py-0.5 text-xs font-extrabold text-gray-900">Office decides</span>
+                                    @else
+                                        @php($d = \Carbon\Carbon::parse($a->next_try_on))
+                                        <span @class(['font-bold', 'text-red-600' => $d->lt(today()), 'text-emerald-600' => $d->isToday()])>{{ $d->isToday() ? 'Today' : $d->format('D M j') }}</span>
+                                        @if ($d->lt(today()))<br><small class="text-red-600">{{ $d->diffInDays(today()) }} {{ str('day')->plural($d->diffInDays(today())) }} late</small>@endif
+                                    @endif
+                                </td>
+                                <td class="px-4 py-3">
+                                    <div class="flex flex-wrap justify-end gap-1.5" x-data="{ open: false }">
+                                        <button type="button" x-on:click="open = ! open" class="h-8 rounded-lg bg-gray-900 px-3 text-xs font-bold text-white dark:bg-white dark:text-gray-900">Set next try</button>
+                                        @if (! $a->needs_office)
+                                            <button type="button" wire:click="toOffice({{ $a->id }})" class="h-8 rounded-lg px-3 text-xs font-bold ring-1 ring-gray-950/10 dark:ring-white/15">To office</button>
+                                        @endif
+                                        <button type="button" wire:click="close({{ $a->id }})" wire:confirm="Take {{ $a->invoice?->invoice }} off the redelivery list? (returned to the sender, picked up or cancelled)" class="h-8 rounded-lg px-3 text-xs font-bold text-gray-500 hover:text-red-600">Close</button>
+                                        <div class="flex w-full flex-wrap justify-end gap-1.5" x-show="open" x-cloak>
+                                            @foreach ($choices as $day => $label)
+                                                <button type="button" wire:click="setDay({{ $a->id }}, '{{ $day }}')" x-on:click="open = false" class="h-8 rounded-full bg-gray-100 px-3 text-xs font-semibold hover:bg-amber-100 dark:bg-white/10">{{ $label }}</button>
+                                            @endforeach
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
         @endif
+    </div>
+</x-filament-panels::page>
+DISPATCH_FILE_END_23
 
-        <section class="ds-pst__card">
-            <b class="ds-pst__h">New photos go to</b>
-            <span class="ds-pst__where">
-                @foreach ($pl as $id => $name)
-                    <button type="button" wire:click="setTarget('{{ $id }}')" @class(['is-on' => $target === $id]) @disabled(! $usable[$id])>
-                        <b>{{ $name }}</b><small>{{ $id === 'server' ? 'Like before (this server\'s disk)' : (${$id}->is_off ? 'Turned off' : ($usable[$id] ? ${$id}->bucket : 'Put and test it first')) }}</small>
-                    </button>
-                @endforeach
-            </span>
-            <small class="ds-pst__mute">Old photos keep working: each photo remembers where it is saved (server, temporary or real) until you move it. Logos and app icons always stay on the server.</small>
-        </section>
+# ---------------------------------------------------------------- resources/views/filament/delivery/pages/driver-app.blade.php
+mkdir -p 'resources/views/filament/delivery/pages'
+cat > 'resources/views/filament/delivery/pages/driver-app.blade.php' <<'DISPATCH_FILE_END_24'
+@php
+    $ring = fn (int $done, int $total, int $len = 289) => $len - ($total > 0 ? round($len * min($done, $total) / $total) : 0);
+    $p = $progress ?? ['total' => 0, 'delivered' => 0, 'notDelivered' => 0, 'left' => 0];
+    $user = auth()->user();
+    $initials = mb_strtoupper(mb_substr($user?->first_name ?? '', 0, 1).mb_substr($user?->last_name ?? '', 0, 1)) ?: '·';
+    $photoJs = "{ busy: false, failed: false, pct: 0,
+        view(i, urls) { window.dsPhotoViewer && window.dsPhotoViewer.open(urls, i, { onDelete: (k) => \$wire.removePhoto(k), onRetake: (k) => \$wire.removePhoto(k).then(() => this.take()) }) },
+        take() { this.failed = false; window.dispatchEvent(new CustomEvent('ds-scanner', { detail: { release: true } })); this.\$refs.file.value = ''; this.\$refs.file.click() },
+        async send(e) {
+            const files = [...e.target.files]; if (! files.length) return;
+            for (const file of files) {
+                this.busy = true; this.pct = 0; let out = file;
+                out = window.dsShrinkPhoto ? await window.dsShrinkPhoto(file) : file;
+                await new Promise(done => \$wire.upload('upload', out, () => \$wire.savePhoto().then(done), () => { this.failed = true; done() }, (ev) => { this.pct = ev.detail.progress }));
+            }
+            this.busy = false;
+        } }";
+@endphp
+<x-filament-panels::page>
+<div class="ds-sa ds-dr" x-data x-on:driver-app-buzz.window="if (navigator.vibrate) navigator.vibrate($event.detail.ok ? 60 : [80, 60, 80])">
+    {{-- Signal bar: drawn by driver-offline.js (shows "No signal", "waiting to send", "needs attention"). --}}
+    <div id="ds-net" class="dso-net" wire:ignore aria-live="polite"></div>
 
-        <div class="ds-pst__two">
-            @foreach (['tmp' => $tmp, 'real' => $real] as $slot => $b)
-                @php $f = $form[$slot]; $set = $b->exists && $b->isSet(); @endphp
-                <section @class(['ds-pst__card', 'is-off' => $b->is_off]) wire:key="slot-{{ $slot }}">
-                    <span class="ds-pst__row"><span class="ds-pst__col"><b class="ds-pst__h">{{ $slot === 'tmp' ? 'Temporary bucket' : 'Real bucket' }}</b><small class="ds-pst__mute">{{ $slot === 'tmp' ? 'Now: used on production for a while' : 'Later: your real bucket' }}</small></span>
-                        <span @class(['ds-pst__pill', 'is-ok' => $set && $b->test_ok && ! $b->is_off, 'is-warn' => $set && ! $b->test_ok])>{{ $b->is_off ? 'Turned off' : (! $set ? 'Not set' : ($b->test_ok ? 'Connected' : 'Not tested')) }}</span></span>
-                    <span class="ds-pst__chips"><small class="ds-pst__lbl">Provider</small>
-                        @foreach ($prov as $id => $name)
-                            <button type="button" wire:click="setProvider('{{ $slot }}', '{{ $id }}')" @class(['is-on' => $f['provider'] === $id])>{{ $name }}</button>
-                        @endforeach
-                    </span>
-                    @if ($editing[$slot])
-                        <span class="ds-pst__fields">
-                            @if ($f['provider'] === 'r2')
-                                <label><small class="ds-pst__lbl">Account ID</small><input wire:model="form.{{ $slot }}.account_id" placeholder="from the S3 API link"></label>
-                            @elseif ($f['provider'] === 's3')
-                                <label><small class="ds-pst__lbl">Region</small><input wire:model="form.{{ $slot }}.region" placeholder="ap-southeast-1"></label>
-                            @else
-                                <label><small class="ds-pst__lbl">Endpoint URL</small><input wire:model="form.{{ $slot }}.endpoint" placeholder="https://…"></label>
-                                <label><small class="ds-pst__lbl">Region</small><input wire:model="form.{{ $slot }}.region" placeholder="us-east-1"></label>
-                            @endif
-                            <label><small class="ds-pst__lbl">Bucket name</small><input wire:model="form.{{ $slot }}.bucket"></label>
-                            <label><small class="ds-pst__lbl">Access key ID</small><input wire:model="form.{{ $slot }}.access_key" autocomplete="off"></label>
-                            <label><small class="ds-pst__lbl">Secret access key</small><input type="password" wire:model="form.{{ $slot }}.secret" autocomplete="new-password" placeholder="{{ $b->secret ? '•••••••• saved (leave empty to keep)' : '' }}"></label>
-                        </span>
-                    @else
-                        <span class="ds-pst__fields is-read">
-                            @foreach (array_filter([
-                                $b->provider === 'r2' ? ['Account ID', $b->account_id] : null,
-                                $b->provider !== 'r2' && $b->provider !== 's3' ? ['Endpoint URL', $b->endpoint] : null,
-                                $b->provider !== 'r2' ? ['Region', $b->region] : null,
-                                ['Bucket name', $b->bucket], ['Access key ID', $b->access_key ? Str::mask($b->access_key, '•', 4, max(0, strlen($b->access_key) - 8)) : '—'], ['Secret access key', $b->secret ? '••••••••  saved' : '—'],
-                            ]) as [$l, $v])
-                                <span><small class="ds-pst__lbl">{{ $l }}</small><span class="ds-pst__in">{{ $v ?: '—' }}</span></span>
-                            @endforeach
-                        </span>
-                    @endif
-                    <small @class(['ds-pst__mute', 'is-warn' => $f['provider'] === 's3'])>{{ match ($f['provider']) { 'r2' => 'Endpoint made from the Account ID'.($b->endpointUrl() ? ': '.$b->endpointUrl() : '').' · region auto · downloads free', 's3' => 'No endpoint needed (made from the region). Amazon charges for downloads (about $0.09 per GB opened), R2 does not.', default => 'Wasabi, DigitalOcean Spaces, Backblaze B2 and others: put the endpoint from the provider.' } }}</small>
-                    <span class="ds-pst__acts">
-                        @if ($editing[$slot])
-                            <button type="button" class="ds-pst__go" wire:click="saveBucket('{{ $slot }}')">Save and test</button>
-                        @else
-                            <button type="button" class="ds-pst__go" wire:click="testBucket('{{ $slot }}')" @disabled(! $set)><span wire:loading.remove wire:target="testBucket('{{ $slot }}')">Test connection</span><span wire:loading wire:target="testBucket('{{ $slot }}')">Testing…</span></button>
-                            <button type="button" class="ds-pst__btn" wire:click="editBucket('{{ $slot }}')">{{ $set ? 'Edit' : 'Put a bucket' }}</button>
-                        @endif
-                        @if ($slot === 'tmp' && $b->exists)
-                            @if ($b->is_off)
-                                <button type="button" class="ds-pst__btn" wire:click="turnOn('tmp')">Turn on again</button>
-                            @else
-                                <button type="button" class="ds-pst__btn is-red" wire:click="turnOff('tmp')">Turn off</button>
-                            @endif
-                        @endif
-                    </span>
-                    @php $m = $msg[$slot] ?? ($b->test_message ? (($b->test_ok ? '✓ ' : '✗ ').$b->test_message) : ''); @endphp
-                    @if ($m)<small @class(['ds-pst__res', 'is-ok' => str_starts_with($m, '✓'), 'is-bad' => str_starts_with($m, '✗') || str_starts_with($m, 'Not yet')])>{{ $m }}</small>@endif
-                </section>
-            @endforeach
-        </div>
+    {{-- Truck tracking: location during trips, after the driver agrees once. --}}
+    @include('filament.delivery.partials.tracking', ['tracking' => $tracking])
 
-        <section class="ds-pst__card">
-            <span class="ds-pst__row"><b class="ds-pst__h">Folders</b><small class="ds-pst__mute">New photos: kind / year / month / invoice, the same on this server and in the bucket · at most {{ $maxKb }} KB each</small></span>
-            <span class="ds-pst__fmap">
-                @foreach ($folderMap as [$n, $f])
-                    <span><b>{{ $n }}</b><code>{{ $f }}</code></span>
-                @endforeach
-            </span>
-            <small class="ds-pst__mute">Old photos keep their folder and keep opening. Move and Copy can put them in these folders (the path in the database is changed after each copy is checked). Logos, app icons and issue e-mail attachments stay on the server.</small>
-        </section>
-
-        <div class="ds-pst__two">
-            <section class="ds-pst__card">
-                <b class="ds-pst__h">Last 7 days</b>
-                <span class="ds-pst__grid3">
-                    <span class="ds-pst__stat is-ok"><b>{{ number_format($stats['bucket']) }}</b><small>saved to a bucket</small></span>
-                    <span class="ds-pst__stat is-warn"><b>{{ number_format($stats['server']) }}</b><small>stayed on the server (bucket did not answer)</small></span>
-                    <span class="ds-pst__stat"><b>{{ number_format($inTmp) }}</b><small>in the Temporary bucket now</small></span>
+    {{-- ============================== today ============================== --}}
+    @if ($screen === 'home')
+        <section class="ds-sa__screen" wire:key="home">
+            <header class="ds-sa__hello">
+                <span>
+                    <small>{{ $trip ? 'Trip '.$trip->trip_number.($trip->truck?->plate_no ? ' · Truck '.$trip->truck->plate_no : '') : now()->format('l, F j') }}</small>
+                    <strong>{{ $greeting }}, {{ $user?->first_name }}</strong>
                 </span>
-                <small class="ds-pst__mute">Photos from every app: scan app, driver app and the panels. When a bucket does not answer, the photo is saved on the server: nothing is lost.</small>
-            </section>
-            <section class="ds-pst__card">
-                <span class="ds-pst__row"><b class="ds-pst__h">Move photos</b><small class="ds-pst__mute">Copies each photo, checks it, then deletes the old copy. Runs in the background.</small></span>
-                <span class="ds-pst__mv">
-                    <b>Server → {{ $target === 'server' ? 'a bucket' : $pl[$target] }}</b>
-                    <span class="ds-pst__col"><small>{{ number_format($serverCount) }} photos still on this server</small></span>
-                    <button type="button" class="ds-pst__go" wire:click="startMove" @disabled($target === 'server' || $active || ! $serverCount)>Start</button>
-                </span>
-                <label class="ds-pst__tog"><input type="checkbox" wire:model.live="tidyMove"><span><b>Put them in the new folders</b><small>delivery/2025/08/0144033/… · the path in the database is changed after each copy is checked</small></span></label>
-                @foreach ($moves as $m)
-                    <span class="ds-pst__mv" wire:key="mv-{{ $m->id }}">
-                        <b>{{ $pl[$m->from_place] ?? $m->from_place }} → {{ $pl[$m->to_place] ?? $m->to_place }}</b>
-                        <span class="ds-pst__col"><small>{{ $m->status === 'done' ? '✓ Done · '.number_format($m->done).' moved' : number_format($m->done + $m->skipped).' of '.number_format($m->total).($m->failed ? ' · '.$m->failed.' failed' : '') }} · {{ $m->created_at->diffForHumans() }}</small><span class="ds-pst__bar"><i style="width: {{ $m->pct() }}%"></i></span></span>
-                        @if ($m->status === 'running')
-                            <button type="button" class="ds-pst__btn" wire:click="pause({{ $m->id }})">Pause</button>
-                        @elseif ($m->status === 'paused')
-                            <button type="button" class="ds-pst__go" wire:click="resume({{ $m->id }})">Go on</button>
-                        @else
-                            <span class="ds-pst__pill is-ok">Done</span>
-                        @endif
-                    </span>
-                @endforeach
-            </section>
-        </div>
-    @endif
+                <button type="button" class="ds-sa__help" x-on:click="$dispatch('open-help')" aria-label="Help">?</button>
+                <span class="ds-sa__avatar is-green">{{ $initials }}</span>
+            </header>
 
-    {{-- ─────────────── Workers ─────────────── --}}
-    @if ($tab === 'work')
-        @foreach ([['Background worker (Supervisor)', $worker, 'sudo bash setup-worker.sh', 'Last job '.$ago($queueSeen).' · copy and move run here even with the page closed', 'Run this once on the server as root (SSH, or Plesk → SSH Terminal), in the wmsv2 folder:'], ['Scheduler (cron)', $scheduler, 'Plesk → wmsv2 → Laravel → Scheduled Tasks → On', 'Ran '.$ago($scheduleSeen).' · goes on with moves every minute', 'Turn it on once in Plesk:']] as [$name, $on, $how, $okText, $offText])
-            <section class="ds-pst__card ds-pst__runner">
-                <span @class(['ds-pst__dot', 'is-ok' => $on])></span>
-                <span class="ds-pst__col"><b class="ds-pst__h">{{ $name }}: {{ $on ? 'running' : 'not running' }}</b><small class="ds-pst__mute">{{ $on ? $okText : $offText }}</small></span>
-                @unless ($on)<code class="ds-pst__in">{{ $how }}</code>@endunless
-            </section>
-        @endforeach
-        <section class="ds-pst__card">
-            <span class="ds-pst__row"><span class="ds-pst__col"><b class="ds-pst__h">No worker? Run here</b><small class="ds-pst__mute">This page does the work itself, a few photos every few seconds, while the tab stays open. Slower than the worker, nothing to set up. Close the tab and it stops; press again and it goes on.</small></span>
-                <button type="button" @class(['ds-pst__go', 'is-purple' => ! $runHere, 'is-redbg' => $runHere]) wire:click="toggleRunHere">{{ $runHere ? 'Stop' : 'Run here' }}</button></span>
-            <span class="ds-pst__bar is-purple"><i style="width: {{ $active ? $active->pct() : 0 }}%"></i></span>
-            <small class="ds-pst__mute">{{ $active ? ($runHere ? 'Running in this tab · ' : 'Waiting for a worker · ').number_format($active->done + $active->skipped).' of '.number_format($active->total) : 'Nothing to move or copy right now.' }}</small>
-        </section>
-        <small class="ds-pst__mute">Supervisor and cron are set on the server, not from this page: the website does not run as root, on purpose. Use one worker way, not both Supervisor and the Plesk queue.</small>
-    @endif
-
-    {{-- ─────────────── Copy from the old system ─────────────── --}}
-    @if ($tab === 'old')
-        @php
-            $copyDone = $task && $task->status === 'done';
-            $stepNames = [['Find the old system', 'its folder · same database?'], ['Scan', 'folders + database paths'], ['Review', 'where each file is'], ['Try 50', 'look before you copy'], ['Copy', 'new only, smaller'], ['Check', 'everything is there'], ['New photos', 'wmsv2 to the bucket'], ['Clean the old server', 'checklist, by you']];
-            $doneTo = ! ($find['found'] ?? false) ? 0 : (! $task ? 1 : ($copyDone ? 6 : ($task->done ? 4 : 3)));
-        @endphp
-        <div class="ds-pst__steps">
-            <section class="ds-pst__card ds-pst__nav">
-                <small class="ds-pst__lbl">Old system → bucket</small>
-                @foreach ($stepNames as $i => [$n, $s])
-                    @php $k = $i + 1; @endphp
-                    <button type="button" wire:click="setStep({{ $k }})" @class(['is-on' => $step === $k])><span @class(['ds-pst__num', 'is-ok' => $k <= $doneTo && $step !== $k, 'is-on' => $step === $k])>{{ $k <= $doneTo && $step !== $k ? '✓' : $k }}</span><span class="ds-pst__col"><b>{{ $n }}</b><small>{{ $s }}</small></span></button>
-                @endforeach
-                <small class="ds-pst__mute">Nothing on the old site is ever changed or deleted from here. Any step can be pressed again: it only does what is missing.</small>
-            </section>
-
-            <section class="ds-pst__card ds-pst__body">
-                @if ($step === 1)
-                    <span class="ds-pst__row"><span class="ds-pst__col"><b class="ds-pst__h2">1 · Find the old system</b><small class="ds-pst__mute">Looks for the old site's folder on this server and checks if it uses the same database.</small></span><span @class(['ds-pst__pill', 'is-ok' => $find['found'] ?? false])>{{ ($find['found'] ?? false) ? (($find['same'] ?? false) ? '✓ Same database' : '✓ Found') : 'Not found' }}</span></span>
-                    <span class="ds-pst__acts"><input class="ds-pst__inp" wire:model="oldFolder" aria-label="Old site folder"><button type="button" class="ds-pst__btn" wire:click="saveFolder">Find</button></span>
-                    @if ($find['found'] ?? false)
-                        <span class="ds-pst__grid3">
-                            <span class="ds-pst__chk is-ok"><b>✓ Found {{ basename($find['dir']) }}</b><small>{{ $find['laravel'] ? 'Laravel site' : 'a folder' }} · {{ $find['storage'] ? 'storage/app/public' : 'no storage folder' }}{{ $find['uploads'] ? ' + public/uploads' : '' }}</small></span>
-                            <span @class(['ds-pst__chk', 'is-ok' => $find['same']])><b>{{ $find['same'] ? '✓ Same database as wmsv2' : 'Another database' }}</b><small>{{ $find['same'] ? 'one list of photos: no matching needed' : 'the files are copied under wms-v1/ (not linked to boxes)' }}</small></span>
-                            <span class="ds-pst__chk is-ok"><b>✓ {{ number_format(collect($columns)->sum('n')) }} photo paths</b><small>in {{ count($columns) }} columns</small></span>
-                        </span>
-                        @if ($columns)
-                            <small class="ds-pst__lbl">Columns that hold photo paths (found by themselves)</small>
-                            @foreach ($columns as $c)
-                                <span class="ds-pst__tr4"><b class="ds-pst__mono">{{ $c['table'] }}.{{ $c['column'] }}</b><span>{{ number_format($c['n']) }} paths</span><span class="ds-pst__mono ds-pst__mute ds-pst__cut">{{ $c['example'] }}</span><b class="ds-pst__ok">✓ Use</b></span>
-                            @endforeach
-                        @endif
-                    @else
-                        <small class="ds-pst__res is-bad">No old site at {{ $find['dir'] ?? 'the usual place' }}. Put the folder of wms.icargoxpress.net above and press Find.</small>
-                    @endif
-                    <span class="ds-pst__acts"><button type="button" class="ds-pst__go" wire:click="scan" @disabled(! ($find['found'] ?? false))><span wire:loading.remove wire:target="scan">Next: Scan</span><span wire:loading wire:target="scan">Scanning…</span></button></span>
-
-                @elseif ($step === 2)
-                    <span class="ds-pst__row"><span class="ds-pst__col"><b class="ds-pst__h2">2 · Scan old + new</b><small class="ds-pst__mute">Every folder with photos in both sites, and where the file of each path really is.</small></span><span class="ds-pst__pill">{{ $task?->opt('scanned_at') ? 'Scanned '.\Illuminate\Support\Carbon::parse($task->opt('scanned_at'))->diffForHumans() : 'Not scanned yet' }}</span></span>
-                    @php $folders = $task?->opt('folders', []) ?? []; $same = collect($folders)->filter(fn ($f) => isset($f['old'], $f['new']))->count(); @endphp
-                    @if ($folders)
-                        <span class="ds-pst__row"><small class="ds-pst__lbl">Folder structure: old vs new</small><span class="ds-pst__pill is-blue">{{ $same }} of {{ count($folders) }} folders are in both</span></span>
-                        <span class="ds-pst__tr4 is-head"><span>Folder</span><span>wms (old)</span><span>wmsv2 (new)</span><span></span></span>
-                        @foreach (array_slice($folders, 0, 14, true) as $path => $f)
-                            <span class="ds-pst__tr4"><span class="ds-pst__mono">{{ $path }}</span><span>{{ isset($f['old']) ? number_format($f['old'][0]).' · '.$mb($f['old'][1]) : '—' }}</span><span>{{ isset($f['new']) ? number_format($f['new'][0]).' · '.$mb($f['new'][1]) : '—' }}</span>
-                                <b @class(['ds-pst__pill', 'is-ok' => isset($f['old'], $f['new']), 'is-blue' => ! isset($f['old']), 'is-warn' => ! isset($f['new'])])>{{ isset($f['old'], $f['new']) ? '✓ Same in both' : (isset($f['new']) ? 'Only in the new' : '⚠ Only in the old') }}</b></span>
-                        @endforeach
-                    @endif
-                    <small class="ds-pst__lbl">The database paths against the files</small>
-                    <span class="ds-pst__grid4">
-                        @foreach (['wmsv2' => ['✓ In the wmsv2 folder', 'Copied from wmsv2', 'is-ok'], 'wms' => ['✓ In the wms folder', 'Copied from the old site', 'is-ok'], 'both' => ['⚠ Different file in both', 'Same path, two photos: pick one', 'is-warn'], 'missing' => ['✗ Missing', 'In the database, no file anywhere', 'is-bad']] as $g => [$n, $t, $c])
-                            <span class="ds-pst__stat {{ $c }}"><b>{{ number_format($groups[$g] ?? 0) }}</b><b class="ds-pst__sm">{{ $n }}</b><small>{{ $t }}</small></span>
-                        @endforeach
-                    </span>
-                    <span class="ds-pst__acts"><button type="button" class="ds-pst__btn" wire:click="scan"><span wire:loading.remove wire:target="scan">Scan old + new again</span><span wire:loading wire:target="scan">Scanning…</span></button><button type="button" class="ds-pst__go" wire:click="setStep(3)" @disabled(! $task)>Next: Review</button></span>
-
-                @elseif ($step === 3)
-                    <span class="ds-pst__row"><span class="ds-pst__col"><b class="ds-pst__h2">3 · Review</b><small class="ds-pst__mute">Each path from the database, which folder has the file, and a link to open it.</small></span><span class="ds-pst__pill">{{ number_format($groups->sum()) }} paths</span></span>
-                    <span class="ds-pst__acts">
-                        @foreach (['wmsv2' => '✓ wmsv2 folder', 'wms' => '✓ wms folder', 'both' => '⚠ Different in both', 'missing' => '✗ Missing'] as $g => $n)
-                            <button type="button" wire:click="$set('rt', '{{ $g }}')" @class(['ds-pst__chip', 'is-on' => $rt === $g])>{{ $n }} {{ number_format($groups[$g] ?? 0) }}</button>
-                        @endforeach
-                        <input class="ds-pst__inp is-short" wire:model.live.debounce.400ms="search" placeholder="Search path or record…">
-                        <button type="button" class="ds-pst__btn" wire:click="csv('report')">Download report (CSV)</button>
-                    </span>
-                    <span class="ds-pst__tr4 is-head"><span>Path in the database</span><span>Record</span><span>File found in</span><span></span></span>
-                    @forelse ($rows as $r)
-                        <span class="ds-pst__tr4" wire:key="r-{{ $r->id }}"><span class="ds-pst__col"><span class="ds-pst__mono ds-pst__cut">{{ $r->path }}</span>@if ($r->new_path)<small class="ds-pst__mono ds-pst__cut ds-pst__ok">→ {{ $r->new_path }}</small>@endif</span><span class="ds-pst__mute ds-pst__cut">{{ $r->ref }}</span>
-                            <span @class(['ds-pst__cut', 'ds-pst__bad' => $r->found === 'missing', 'ds-pst__warn' => $r->found === 'both'])>{{ match ($r->found) { 'wmsv2' => 'wmsv2 folder', 'wms' => 'wms folder', 'both' => 'both · '.$mb((int) $r->size_before).' used, other kept', default => 'no file in either folder' } }}</span>
-                            <span>@if ($r->found === 'both')<button type="button" class="ds-pst__link" wire:click="pick({{ $r->id }})">Pick the other</button>@elseif ($r->found !== 'missing')<a class="ds-pst__link" href="{{ $openUrl($r) }}" target="_blank" rel="noopener">Open</a>@endif</span></span>
-                    @empty
-                        <small class="ds-pst__mute">Nothing here.</small>
-                    @endforelse
-                    <small class="ds-pst__mute">{{ ['wmsv2' => 'Copied from the wmsv2 folder, same path.', 'wms' => 'Copied from the old site\'s folder, same path: opens in wmsv2 right after.', 'both' => 'The newest file is used, the other is kept in the bucket under _other/. Pick the other to swap.', 'missing' => 'Nothing to copy: these records have no photo in either site.'][$rt] }}</small>
-                    <span class="ds-pst__acts"><button type="button" class="ds-pst__go" wire:click="setStep(4)">Next: Try 50</button></span>
-
-                @elseif ($step === 4)
-                    <span class="ds-pst__row"><span class="ds-pst__col"><b class="ds-pst__h2">4 · Try 50 first</b><small class="ds-pst__mute">Copies 50 photos (the biggest first), made smaller. Open the old and the new side by side.</small></span><span class="ds-pst__pill">{{ (int) ($triedSum->n ?? 0) }} tried</span></span>
-                    @if ($tried->isNotEmpty())
-                        <span class="ds-pst__grid3">
-                            @foreach ($tried->take(6) as $t)
-                                <span class="ds-pst__pair" wire:key="t-{{ $t->id }}">
-                                    <span class="ds-pst__two is-tight"><a href="{{ $oldUrl($t) }}" target="_blank" rel="noopener"><img src="{{ $oldUrl($t) }}" alt="Old" loading="lazy"><em>Old · {{ $mb((int) $t->size_before) }}</em></a><a href="{{ $openUrl($t) }}" target="_blank" rel="noopener"><img src="{{ $openUrl($t) }}" alt="New" loading="lazy"><em class="is-ok">New · {{ $mb((int) $t->size_after) }}</em></a></span>
-                                    <small class="ds-pst__cut">{{ $t->ref ?: $t->path }}</small>
-                                </span>
-                            @endforeach
-                        </span>
-                        <span class="ds-pst__res is-ok"><b>{{ (int) $triedSum->n }} tried:</b> {{ $mb((int) $triedSum->b) }} → {{ $mb((int) $triedSum->a) }} ({{ $triedSum->b ? round(100 - $triedSum->a * 100 / $triedSum->b) : 0 }}% smaller). Invoice numbers and signatures still clear? Look before you copy all.</span>
-                    @endif
-                    <span class="ds-pst__acts"><button type="button" class="ds-pst__btn" wire:click="tryFifty" @disabled(! $task)><span wire:loading.remove wire:target="tryFifty">{{ $tried->isEmpty() ? 'Try 50 first' : 'Try 50 others' }}</span><span wire:loading wire:target="tryFifty">Copying 50…</span></button><button type="button" class="ds-pst__go" wire:click="setStep(5)">Looks good: Next</button></span>
-
-                @elseif ($step === 5)
-                    <span class="ds-pst__row"><span class="ds-pst__col"><b class="ds-pst__h2">5 · Copy to the bucket</b><small class="ds-pst__mute">Runs in the background. Press it again any time: only what is missing is copied.</small></span><span @class(['ds-pst__pill', 'is-ok' => $copyDone])>{{ $copyDone ? '✓ Done' : ($task && in_array($task->status, ['running', 'checking']) ? 'Copying' : 'Ready') }}</span></span>
-                    @if ($task)
-                        <span class="ds-pst__two">
-                            @foreach (['small' => ['Make photos smaller (max 200 KB)', '1600 px, clear enough to read the invoice. Signatures and other files stay as they are.', true], 'keep' => ['Also keep the originals in the bucket', 'Full size under _original/ · a few cents a month · safe to delete the old server later', false], 'tidy' => ['Put them in the new folders', 'kind / year / month / invoice · the path in the database is changed after each copy is checked', true]] as $k => [$n, $t, $def])
-                                <button type="button" class="ds-pst__tog" wire:click="setOpt('{{ $k }}')"><span @class(['ds-pst__sw', 'is-on' => $task->opt($k, $def)])><i></i></span><span class="ds-pst__col"><b>{{ $n }}</b><small>{{ $t }}</small></span></button>
-                            @endforeach
-                        </span>
-                        @if ($task->opt('tidy', true) && ($find['same'] ?? false))
-                            <small class="ds-pst__res is-bad">The old site uses the same database: after a photo is put in the new folders, the old site can no longer show it (wmsv2 does). Turn this off while the old site is still used.</small>
-                        @endif
-                        @php $all = max(1, $task->total); @endphp
-                        <span class="ds-pst__col"><span class="ds-pst__row"><small>{{ $copyDone ? '✓ Done · '.number_format($task->done).' copied · '.number_format($task->skipped).' already there · '.$task->failed.' failed' : number_format($task->done + $task->skipped).' of '.number_format($task->total).' photos'.($task->failed ? ' · '.$task->failed.' failed' : '') }}</small><small class="ds-pst__mute">{{ $mb((int) $task->bytes_before) }} → {{ $mb((int) $task->bytes_after) }}</small></span><span class="ds-pst__bar is-blue"><i style="width: {{ $task->pct() }}%"></i></span></span>
-                        @if ($task->last_error && $task->failed)<small class="ds-pst__res is-bad">Last problem: {{ $task->last_error }}</small>@endif
-                        <span class="ds-pst__acts">
-                            @if (in_array($task->status, ['running', 'checking']))
-                                <button type="button" class="ds-pst__btn" wire:click="pause({{ $task->id }})">Pause</button>
-                            @else
-                                <button type="button" class="ds-pst__go is-blue" wire:click="copyNew" @disabled(! ($worker || $scheduler || $runHere))>{{ $task->done ? 'Copy new only' : 'Copy to the bucket' }}</button>
-                            @endif
-                            <button type="button" class="ds-pst__btn" wire:click="checkBucket">Check bucket</button>
-                            <button type="button" class="ds-pst__btn is-red" wire:click="copyAgain">{{ $sureAgain ? 'Press again to replace all' : 'Copy all again…' }}</button>
-                            @unless ($worker || $scheduler || $runHere)<small class="ds-pst__warn">No worker runs: start one, or press Run here on the Workers tab.</small>@endunless
-                        </span>
-                        <small class="ds-pst__lbl">Last copied: old link → new link</small>
-                        @foreach ($last as $i)
-                            <span class="ds-pst__tr5" wire:key="l-{{ $i->id }}"><a class="ds-pst__mono ds-pst__cut ds-pst__link" href="{{ $oldUrl($i) }}" target="_blank" rel="noopener">{{ $oldUrl($i) }}</a><span class="ds-pst__mute">→</span><a class="ds-pst__mono ds-pst__cut ds-pst__link" href="{{ $openUrl($i) }}" target="_blank" rel="noopener">{{ ($tmp->bucket && $target !== 'real' ? $tmp->bucket : $real->bucket).'/'.($i->new_path ?: $i->path) }}</a><span class="ds-pst__mute">{{ $i->size_after && $i->size_after !== $i->size_before ? $mb((int) $i->size_before).' → '.$mb((int) $i->size_after) : $mb((int) $i->size_before) }}</span><b @class(['ds-pst__ok' => $i->status === 'done', 'ds-pst__bad' => $i->status === 'failed'])>{{ ['done' => '✓ Copied', 'skipped' => 'Already there', 'failed' => '✗ '.Str::limit((string) $i->note, 40)][$i->status] ?? $i->status }}</b></span>
-                        @endforeach
-                        <small class="ds-pst__mute">Same path in the bucket as in the database, so every photo opens in wmsv2 right after. Copy new only: photos already in the bucket are skipped. A photo that changed on the old site is copied again after a new Scan.</small>
-                    @else
-                        <small class="ds-pst__res is-bad">Scan first (step 2).</small>
-                    @endif
-
-                @elseif ($step === 6)
-                    <span class="ds-pst__row"><span class="ds-pst__col"><b class="ds-pst__h2">6 · Check</b><small class="ds-pst__mute">Reads the bucket and compares with the list. A missing photo is copied again.</small></span><span @class(['ds-pst__pill', 'is-ok' => $copyDone])>{{ $task?->status === 'checking' ? 'Checking…' : ($task?->checked_at ? '✓ Checked '.$task->checked_at->diffForHumans() : 'Not checked yet') }}</span></span>
-                    <span class="ds-pst__grid3">
-                        <span class="ds-pst__stat is-ok"><b>{{ number_format($checkedN) }}</b><small>in the bucket and checked</small></span>
-                        <span class="ds-pst__stat"><b>{{ number_format(max(0, ($task?->done ?? 0) - $checkedN)) }}</b><small>copied, not checked yet</small></span>
-                        <span class="ds-pst__stat is-warn"><b>{{ number_format($missingN) }}</b><small>had no file on either site (Review → Missing)</small></span>
-                    </span>
-                    <span class="ds-pst__acts"><button type="button" class="ds-pst__btn" wire:click="checkBucket" @disabled(! $task)>Check again</button><button type="button" class="ds-pst__btn" wire:click="csv('list')" @disabled(! $task)>Download old → new list (CSV)</button><button type="button" class="ds-pst__go" wire:click="setStep(7)">Next</button></span>
-
-                @elseif ($step === 7)
-                    <b class="ds-pst__h2">7 · New photos of wmsv2</b>
-                    <span>Choose where <b>new</b> photos of wmsv2 go (Bucket tab), and move wmsv2's own photos from the server. The photos keep opening: each one remembers where it is.</span>
-                    <span class="ds-pst__acts"><button type="button" class="ds-pst__go" wire:click="setTab('bucket')">Open the Bucket tab</button><button type="button" class="ds-pst__btn" wire:click="setStep(8)">Next</button></span>
-
-                @else
-                    @php $days = $task?->finished_at ? (int) $task->finished_at->diffInDays(now()) : 0; @endphp
-                    <b class="ds-pst__h2">8 · Clean the old server</b>
-                    <span>When all of these have a ✓, you can delete the photos on the old server yourself. This page never deletes them.</span>
-                    @foreach ([[$copyDone && $task->checked_at, 'Copied and checked: 0 missing in the bucket', 'Step 6'], [(bool) $csvAt, 'Old → new list downloaded (CSV)', $csvAt ? 'on '.$csvAt : 'Step 6'], [($task?->opt('keep') ?? false) || $backup, 'Originals kept in the bucket, or a backup downloaded', $backup ? 'backup on '.$backup : 'Step 5, or the box below'], [$days >= 14, '14 days of using the new storage', $task?->finished_at ? $days.' days so far' : 'after the copy']] as [$ok, $t, $n])
-                        <span class="ds-pst__tr2"><b @class(['ds-pst__ok' => $ok])>{{ $ok ? '✓' : '○' }}</b><span>{{ $t }}</span><small class="ds-pst__mute">{{ $n }}</small></span>
-                    @endforeach
-                    <label class="ds-pst__tog"><input type="checkbox" @checked($backup) wire:click="markBackup"><span><b>I downloaded a backup of the old photos</b><small>For example with: tar -czf ~/wms-photos-original.tar.gz -C {{ $find['dir'] ?? '…' }}/storage/app public</small></span></label>
+            @if ($seaCard)
+                {{-- board 62: one trip for the truck, with every hub it carries --}}
+                <div class="ds-sea">
+                    <small>{{ $seaCard['code'] }} · {{ count($seaCard['hubs']) }} {{ \Illuminate\Support\Str::plural('trip', count($seaCard['hubs'])) }} · {{ $seaCard['total'] }} boxes</small>
+                    <b>To {{ $seaCard['to'] }}</b>
+                    <span class="ds-sea__hubs">@foreach ($seaCard['hubs'] as $h)<i>{{ $h['name'] }} {{ $h['n'] }}</i>@endforeach</span>
+                    <a href="{{ \App\Filament\Delivery\Pages\AtPort::getUrl() }}" class="ds-sa__primary ds-sea__btn">{{ $seaCard['counted'] !== null ? 'Counted '.$seaCard['counted'].' · change' : ($seaCard['lcl'] ? 'Arrived at the forwarder' : 'Arrived at port') }}</a>
+                    <small>{{ $seaCard['lcl'] ? 'Then: count the boxes, photo of the forwarder receipt and waybill.' : 'Then: count the boxes, photo of the port receipt.' }}</small>
+                </div>
+            @endif
+            @if ($roro)
+                {{-- board 62: our truck rides the ship and drops at each hub --}}
+                <div class="ds-fd__home ds-roro">
+                    <span aria-hidden="true">⛴️</span>
+                    <span><b>RoRo · {{ $roro['code'] }}</b><small>{{ $roro['now'] }}</small></span>
+                </div>
+                @if ($roro['next'])
+                    <button type="button" class="ds-sa__primary ds-roro__btn" wire:click="roroStep('{{ $roro['next'][0] }}')" wire:confirm="{{ $roro['next'][1] }}?">{{ $roro['next'][1] }}</button>
                 @endif
-            </section>
-        </div>
+            @endif
+            @if (\App\Support\Fuel\Fuel::ready())
+                <a href="{{ \App\Filament\Delivery\Pages\Fuel::getUrl() }}" class="ds-fd__home"><span aria-hidden="true">⛽</span><span><b>Add fuel</b><small>Photo of the receipt and the odometer</small></span><span class="ds-sa__chev">›</span></a>
+            @endif
+
+            @if (! $trip && $closedTrip)
+                <div class="ds-ts ds-ts--closed">
+                    <small>Trip {{ $closedTrip->trip_number }} done · truck released</small>
+                    <strong>{{ $closedDelivered ? 'All '.$closedDelivered.' boxes delivered' : 'Trip closed' }}</strong>
+                    <span>Every box is delivered or returned. Thank you! Your next trip shows here when the office makes it.</span>
+                </div>
+            @elseif (! $trip)
+                <div class="ds-sa__empty">
+                    <span class="ds-sa__empty-icon">@include('filament.scan.icon', ['name' => 'truck'])</span>
+                    <strong>You're not on a trip right now</strong>
+                    <p>When the office puts you on a truck, today's boxes show up here. Pull down or reopen the app to refresh.</p>
+                </div>
+            @else
+                @if ($stageCard)
+                        <div class="ds-ts ds-ts--{{ $stage }}">
+                            <small>{{ $stageCard[0] }}</small>
+                            <strong>Trip {{ $trip->trip_number }}</strong>
+                            <span>{{ $stageCard[1] }}</span>
+                            @if ($canTake)
+                                <button type="button" class="ds-sa__primary" wire:click="takeTrip" wire:confirm="Take trip {{ $trip->trip_number }} with {{ $p['total'] }} boxes?">I take the trip · {{ $p['total'] }} boxes</button>
+                            @endif
+                        </div>
+                @endif
+                @if ($nextTrip)
+                    <div class="ds-ts ds-ts--next">
+                        <small>Next trip waiting for this truck</small>
+                        <strong>Trip {{ $nextTrip->trip_number }}</strong>
+                        <span>It shows here as soon as trip {{ $trip->trip_number }} is closed.</span>
+                    </div>
+                @endif
+                @if ($finished)
+                    <div class="ds-dr__celebrate">
+                        <span class="ds-sa__ring is-big"><svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="48" class="is-track"/><circle cx="55" cy="55" r="48" class="is-fill is-ok" style="stroke-dasharray: 302; stroke-dashoffset: 0"/></svg><span><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></i></span></span>
+                        <strong>All {{ $p['total'] }} boxes delivered</strong>
+                        <p>Great work. The office can see every delivery and photo.</p>
+                    </div>
+                @else
+                    <div class="ds-sa__today">
+                        <span class="ds-sa__ring is-mid">
+                            <svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill is-green" style="stroke-dashoffset: {{ $ring($p['delivered'], $p['total']) }}"/></svg>
+                            <span><strong>{{ $p['delivered'] }}</strong><small>of {{ $p['total'] }} delivered</small></span>
+                        </span>
+                        <dl>
+                            <dt>Delivered</dt><dd class="is-ok">{{ $p['delivered'] }}</dd>
+                            <dt>Still on the truck</dt><dd>{{ $p['left'] }} left</dd>
+                            <dt>Not delivered</dt><dd class="is-warn">{{ $p['notDelivered'] }}</dd>
+                        </dl>
+                    </div>
+
+                    <button type="button" class="ds-sa__primary ds-dr__scanbtn" wire:click="go('scan')" x-on:click="window.dsWarmCamera && window.dsWarmCamera()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
+                        Scan a box to deliver
+                    </button>
+                    @if ($stage === 'road')
+                        <button type="button" class="ds-sa__secondary" wire:click="backAtHub" wire:confirm="Back at the hub? Boxes not delivered ({{ $p['left'] }}) are given to the hub and scanned back.">Back at the hub</button>
+                    @endif
+                @endif
+
+                @if ($priority->isNotEmpty())
+                    <p class="ds-sa__label">Priority boxes</p>
+                    <div class="ds-sa__list">
+                        @foreach ($priority as $b)
+                            <button type="button" class="ds-sa__row" wire:click="scan(@js($b['invoice']))"><span class="ds-sa__rowtext"><strong>{{ $b['invoice'] }} · {{ $b['name'] }}</strong><small>{{ $b['address'] }}</small></span><span class="ds-sa__chev">›</span></button>
+                        @endforeach
+                    </div>
+                @endif
+
+                @if ($problems->isNotEmpty())
+                    <p class="ds-sa__label">Check before handing over</p>
+                    <div class="ds-sa__list is-warn">
+                        @foreach ($problems as $b)
+                            <button type="button" class="ds-sa__row" wire:click="scan(@js($b['invoice']))"><span class="ds-sa__rowtext"><strong>{{ $b['invoice'] }} · {{ $b['issue'] }}</strong><small>{{ $b['name'] }}{{ $b['remarks'] ? ' · '.$b['remarks'] : '' }}</small></span><span class="ds-sa__chev">›</span></button>
+                        @endforeach
+                    </div>
+                @endif
+
+                @if ($stops->isNotEmpty())
+                    @include('filament.delivery.partials.stops', ['stops' => $stops])
+                @elseif ($areas->isNotEmpty())
+                    <div class="ds-dr__labelrow"><p class="ds-sa__label">Where to go next</p><button type="button" wire:click="go('list')">All boxes ›</button></div>
+                    <div class="ds-sa__list">
+                        @foreach ($areas->take(6) as $a)
+                            <button type="button" class="ds-sa__row" wire:click="area(@js($a['barangay'] ?: $a['city']))">
+                                <span class="ds-sa__rowtext"><strong>{{ $a['barangay'] ? $a['barangay'].', ' : '' }}{{ $a['city'] }}</strong><small>{{ $a['boxes'] }} {{ str('box')->plural($a['boxes']) }} · {{ $a['stops']->count() }} {{ str('stop')->plural($a['stops']->count()) }}</small></span>
+                                <span class="ds-sa__chev">›</span>
+                            </button>
+                        @endforeach
+                    </div>
+                @endif
+
+                @if ($delivered->isNotEmpty())
+                    <p class="ds-sa__label">Delivered today</p>
+                    <div class="ds-sa__list">
+                        @foreach ($delivered as $d)
+                            <div class="ds-sa__row ds-dr__done">
+                                @if ($d['photo'])<img src="{{ $d['photo'] }}" alt="" class="ds-dr__thumb">@endif
+                                <span class="ds-sa__rowtext"><strong>{{ $d['invoice'] }} · {{ $d['name'] }}</strong><small>{{ $d['time'] }}</small></span>
+                                @if ($d['undoMinutesLeft'])
+                                    <button type="button" class="ds-dr__undo" wire:click="mountAction('undoDelivery', { tripinvoice: {{ $d['id'] }} })">Undo · {{ $d['undoMinutesLeft'] }} min left</button>
+                                @else
+                                    <span class="ds-dr__office">Office only</span>
+                                @endif
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+
+                @if ($crew->isNotEmpty())
+                    <div class="ds-dr__crew">
+                        @foreach ($crew as $c)
+                            <span><i>{{ mb_strtoupper(mb_substr($c['name'], 0, 2)) }}</i>With {{ $c['name'] }}{{ $c['role'] ? ' ('.strtolower($c['role']).')' : '' }}</span>
+                        @endforeach
+                    </div>
+                @endif
+            @endif
+
+            <footer class="ds-sa__foot">
+                <span class="ds-sa__online"><i></i>Online · every delivery is saved</span>
+                <span class="ds-sa__footlinks">
+                    <button type="button" class="ds-pwa-install" onclick="window.dsInstallApp && window.dsInstallApp()">Install app</button>
+                    <form method="POST" action="{{ filament()->getLogoutUrl() }}">@csrf<button type="submit">Sign out</button></form>
+                </span>
+            </footer>
+        </section>
+    @endif
+
+    {{-- ============================== boxes ============================== --}}
+    @if ($screen === 'list')
+        <section class="ds-sa__screen" wire:key="list">
+            <div class="ds-dr__listhead">
+                <button type="button" class="ds-sa__back" wire:click="go('home')" aria-label="Back">‹</button>
+                <strong>Boxes</strong>
+                <button type="button" class="ds-dr__scanmini" wire:click="go('scan')" x-on:click="window.dsWarmCamera && window.dsWarmCamera()" aria-label="Scan a box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></button>
+            </div>
+            <label class="ds-dr__search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                <input type="search" wire:model.live.debounce.350ms="search" placeholder="Name, box number or barangay" aria-label="Search boxes">
+            </label>
+            @php($tabs = ['todo' => 'To deliver', 'delivered' => 'Delivered', 'missed' => 'Not delivered'])
+            @php($ti = array_search($tab, array_keys($tabs), true) ?: 0)
+            <div class="ds-sa__seg is-3">
+                <span class="ds-sa__segthumb is-light" style="left: calc(4px + {{ $ti }} * (100% - 8px) / 3)"></span>
+                @foreach ($tabs as $k => $l)
+                    <button type="button" wire:click="setTab('{{ $k }}')" @class(['is-on' => $tab === $k])>{{ $l }} · {{ $counts[$k] ?? 0 }}</button>
+                @endforeach
+            </div>
+            <div class="ds-dr__rows">
+                @forelse ($rows as $r)
+                    @php($inv = $r->invdata)
+                    <div class="ds-dr__card" wire:key="r-{{ $r->id }}">
+                        <button type="button" class="ds-dr__cardmain" @if (! $r->is_delivered) wire:click="openBox({{ $r->id }})" @endif>
+                            <span class="ds-dr__cardtop"><strong>{{ $r->invoice }}</strong>
+                                @if ($r->is_delivered)
+                                    <em class="is-ok">{{ ($r->delivered_at ?? $r->updated_at)?->format('g:i A') }}</em>
+                                @elseif ($r->latestDeliveryAttempt && $r->latestDeliveryAttempt->tripinvoice_id === $r->id)
+                                    <em class="is-warn">{{ $r->latestDeliveryAttempt->reason->getLabel() }}</em>
+                                @elseif ($r->delivery_attempts_count > 0)
+                                    @php($n = $r->delivery_attempts_count + 1)
+                                    <em class="is-try">{{ $n === 2 ? '2nd' : ($n === 3 ? '3rd' : $n.'th') }} try{{ $n >= \App\Support\Deliveries\NextTry::MAX_TRIES ? ' · last' : '' }}</em>
+                                @else
+                                    <em>To deliver</em>
+                                @endif
+                            </span>
+                            <span class="ds-dr__name">{{ \Illuminate\Support\Str::title($inv?->receiver_name) }}</span>
+                            <small>{{ collect([$inv?->receiver_address, $inv?->receiver_barangay, $inv?->receiver_city])->filter()->map(fn ($x) => \Illuminate\Support\Str::title($x))->join(', ') }}</small>
+                        </button>
+                        @if ($inv?->receiver_mobile_no)
+                            <a class="ds-dr__call" href="tel:{{ preg_replace('/[^0-9+]/', '', $inv->receiver_mobile_no) }}" aria-label="Call {{ $inv->receiver_name }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg></a>
+                        @endif
+                    </div>
+                @empty
+                    <div class="ds-sa__note">{{ $search !== '' ? 'No boxes match “'.$search.'”.' : 'Nothing here.' }}</div>
+                @endforelse
+            </div>
+        </section>
+    @endif
+
+    {{-- ============================== scan ============================== --}}
+    @if ($screen === 'scan')
+        <section class="ds-sa__screen ds-sa__scan" wire:key="scan">
+            <div class="ds-sa__cam" wire:ignore
+                 x-data="barcodeScanner(@js(\App\Support\ScanModes::scanner('scan', 3000)))">
+                <video x-ref="video" playsinline muted autoplay></video>
+                <div class="ds-sa__frame" x-bind:class="{ 'is-hit': flash }"><i></i><i></i><i></i><i></i><span x-show="scanning" class="ds-sa__sweep"></span></div>
+                <p class="ds-sa__camtext" x-show="loading" x-cloak>Starting camera…</p>
+                <p class="ds-sa__camtext is-error" x-show="error" x-text="error" x-cloak></p>
+                <p class="ds-sa__camtext is-hint" x-show="hint && ! error" x-text="hint" x-cloak></p>
+                @include('filament.scan.cam-extras')
+                <div class="ds-sa__controls">
+                    <label class="ds-sa__type">
+                        <input type="text" x-model="manualCode" x-on:keydown.enter.prevent="submitManual()" placeholder="Type a box number" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go" aria-label="Box number">
+                        <button type="button" x-on:click="submitManual()" aria-label="Find">→</button>
+                    </label>
+                    <div class="ds-sa__buttons">
+                        <button type="button" class="ds-sa__round" x-show="torchSupported && scanning" x-on:click="toggleTorch()" x-bind:class="{ 'is-on': torchOn }" aria-label="Flashlight" x-cloak><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6l-1 6h-4zM10 8h4v12a2 2 0 0 1-4 0z"/></svg></button>
+                        <button type="button" class="ds-sa__shutter" x-on:click="toggle()" x-bind:aria-label="scanning ? 'Stop camera' : 'Start camera'"><span x-bind:class="{ 'is-live': scanning }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></span></button>
+                        <button type="button" class="ds-sa__round" x-show="scanning && cameras.length > 1" x-on:click.stop="listCameras(true).then(() => camList = ! camList)" x-bind:class="{ 'is-on': camList }" aria-label="Switch camera" x-cloak><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><path d="M9.5 12.5a2.6 2.6 0 0 1 4.6-1.4M14.5 14a2.6 2.6 0 0 1-4.6 1.4"/><path d="m14.4 9.6-.1 1.7-1.6-.2M9.6 16.4l.1-1.7 1.6.2"/></svg></button>
+                        <button type="button" class="ds-sa__round is-text" wire:click="go('list')" aria-label="Boxes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg></button>
+                    </div>
+                </div>
+            </div>
+
+            <header class="ds-sa__bar">
+                <button type="button" class="ds-sa__back" wire:click="go('home')" aria-label="Back">‹</button>
+                <span class="ds-sa__bartext"><small>Deliver</small><strong>{{ $trip ? 'Trip '.$trip->trip_number : 'No trip' }}</strong></span>
+                <span class="ds-sa__ring is-tiny"><svg viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" class="is-track"/><circle cx="55" cy="55" r="46" class="is-fill is-green" style="stroke-dashoffset: {{ $ring($p['delivered'], $p['total']) }}"/></svg></span>
+                <span class="ds-sa__count"><strong>{{ $p['delivered'] }}</strong><small>of {{ $p['total'] }}</small></span>
+            </header>
+
+            <span class="hidden" wire:key="pz-{{ $sheet ?? 'none' }}-{{ $boxId ?? 0 }}" x-init="$dispatch('ds-scanner', { paused: @js((bool) $sheet) })"></span>
+
+            @if ($just)
+                <div class="ds-dr__toast" wire:key="toast-{{ $just->id }}" x-data="{ left: {{ $justLink ? 60 : 15 }} }" x-init="const t = setInterval(() => { left--; if (left <= 0) { clearInterval(t); $wire.set('justDelivered', null) } }, 1000)">
+                    <span class="ds-sa__mark is-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
+                    <span><strong>{{ $just->invoice }} delivered</strong><small>{{ $justPhotos }} {{ str('photo')->plural($justPhotos) }} saved · undo for <span x-text="left"></span> s</small>@if ($justLink)<a class="ds-dr__receiptlink" href="{{ $justLink }}" target="_blank" rel="noopener">📄 Show the receipt to the receiver</a>@endif</span>
+                    <button type="button" wire:click="undoJust"><svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" class="is-track"/><circle cx="20" cy="20" r="18" class="is-fill"/></svg>Undo</button>
+                </div>
+            @endif
+
+            @if ($sheet === 'found' && $box)
+                @php($inv = $box->invdata)
+                @php($addr = collect([$inv?->receiver_address, $inv?->receiver_barangay, $inv?->receiver_city, $inv?->receiver_province])->filter()->map(fn ($x) => \Illuminate\Support\Str::title($x))->join(', '))
+                <div class="ds-sa__sheet" wire:key="found-{{ $box->id }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-dr__tags"><span class="ds-dr__ontruck">On your truck</span><strong>{{ $box->invoice }}</strong>@if ($inv?->boxtype)<em>{{ $inv->boxtype }}</em>@endif</div>
+                    <div class="ds-dr__receiver"><strong>{{ \Illuminate\Support\Str::title($inv?->receiver_name) }}</strong><span>{{ $addr }}</span></div>
+                    <div class="ds-dr__two">
+                        @if ($inv?->receiver_mobile_no)
+                            <a href="tel:{{ preg_replace('/[^0-9+]/', '', $inv->receiver_mobile_no) }}"><svg viewBox="0 0 24 24" fill="none" stroke="#34c38f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>Call</a>
+                        @endif
+                        <a href="https://www.google.com/maps/search/?api=1&query={{ urlencode($addr.', Philippines') }}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="#5aa8ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-8-8 18-2-8z"/></svg>Directions</a>
+                    </div>
+                    <span class="ds-dr__meta">From {{ \Illuminate\Support\Str::title($inv?->sender_name) ?: 'sender' }}@if ($household && $household['count'] > 1) · {{ $household['count'] }} boxes for this house, {{ $household['delivered'] }} delivered @endif</span>
+                    @if ($lastTry)
+                        <div class="ds-dr__lasttry">
+                            <span class="ds-dr__trybadge">{{ $tryNo === 2 ? '2nd' : ($tryNo === 3 ? '3rd' : $tryNo.'th') }} try{{ $tryNo >= \App\Support\Deliveries\NextTry::MAX_TRIES ? ' · last' : '' }}</span>
+                            <b>Last time · {{ $lastTry->created_at->format('M j, g:i A') }}{{ filled($lastTry->user?->full_name) ? ' · '.$lastTry->user->full_name : '' }}</b>
+                            <span>{{ $lastTry->reason->getLabel() }}</span>
+                            @if ($lastTry->note)<q>{{ $lastTry->note }}</q>@endif
+                            @if (in_array($lastTry->reason, [\App\Enums\FailedDeliveryReason::NoOneHome, \App\Enums\FailedDeliveryReason::PhoneUnreachable, \App\Enums\FailedDeliveryReason::Rescheduled], true) && $inv?->receiver_mobile_no)
+                                <small>📞 Call before you go.</small>
+                            @endif
+                        </div>
+                    @endif
+                    @if ($risk && $risk['score'] >= 50)
+                        <span class="ds-dr__risk"><b>Heads up · may not be delivered</b>{{ implode(' · ', $risk['reasons']) }}. {{ $inv?->receiver_mobile_no ? 'Call before you go.' : '' }}</span>
+                    @endif
+                    <button type="button" class="ds-sa__primary is-green" wire:click="startDeliver">Deliver this box</button>
+                    <button type="button" class="ds-sa__secondary" wire:click="startMiss">Can't deliver</button>
+                </div>
+            @endif
+
+            @if ($sheet === 'deliver' && $box)
+                <div class="ds-sa__sheet" wire:key="deliver-{{ $box->id }}">
+                    <span class="ds-sa__grab"></span>
+                    <span class="ds-dr__sheethead"><small>{{ $box->invoice }} · {{ \Illuminate\Support\Str::title($box->invdata?->receiver_name) }}</small><strong>Proof of delivery</strong><span>Take as many photos as you need: the house, the box at the door, the receiver.</span></span>
+                    @if ($otherCode)
+                        <div class="ds-dr__other" role="status"><span><b>Another box read: {{ $otherCode }}</b><small>This delivery stays open.</small></span><button type="button" wire:click="openOther">Open it</button><button type="button" class="is-x" wire:click="$set('otherCode', null)" aria-label="Stay on this box">✕</button></div>
+                    @endif
+                    <div class="ds-dr__grid is-big" x-data="{{ $photoJs }}">
+                        <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
+                        @foreach ($photoUrls as $i => $url)
+                            <span class="ds-dr__proof" wire:key="ph-{{ $i }}-{{ md5($url) }}"><img src="{{ $url }}" alt="Photo {{ $i + 1 }}" x-on:click="view({{ $i }}, @js(array_values($photoUrls)))"><b>{{ $i + 1 }} / {{ count($photoUrls) }}</b><em x-on:click="view({{ $i }}, @js(array_values($photoUrls)))">⤢ Open</em><button type="button" wire:click="removePhoto({{ $i }})" aria-label="Remove photo {{ $i + 1 }}">✕</button></span>
+                        @endforeach
+                        <button type="button" class="ds-dr__add" x-on:click="take()" x-bind:disabled="busy">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+                            <span x-show="! busy">{{ $photoUrls ? 'Add another' : 'Take photo' }}</span>
+                            <span x-show="busy" x-cloak>Saving… <span x-text="pct + '%'"></span></span>
+                        </button>
+                        <p class="ds-sa__err" x-show="failed" x-cloak>The photo did not upload. Try again.</p>
+                    </div>
+                    {{-- Part 44 (boards 69, 70b): box condition, then the paper receipt or a signature on this phone --}}
+                    @php($dmg = $condition === 'damaged')
+                    @php($signing = $dmg || $receipt === 'phone')
+                    <div class="ds-dr__block">
+                        <span class="ds-dr__blocklabel">Box condition</span>
+                        <div class="ds-sa__seg is-2" role="group" aria-label="Box condition">
+                            <span @class(['ds-sa__segthumb', 'is-damaged' => $dmg]) style="left: calc(4px + {{ $dmg ? 1 : 0 }} * (100% - 8px) / 2)"></span>
+                            <button type="button" wire:click="setCondition('good')" @class(['is-on' => ! $dmg])><i class="is-good"></i>Good</button>
+                            <button type="button" wire:click="setCondition('damaged')" @class(['is-on' => $dmg])><i class="is-damaged"></i>Damaged</button>
+                        </div>
+                        @if ($dmg)
+                            <p @class(['ds-dr__need', 'is-done' => count($photoUrls) >= 2])>{{ count($photoUrls) >= 2 ? '✓' : '⚠' }} Damaged: 2 photos needed · the whole box, and the damage up close ({{ min(2, count($photoUrls)) }} of 2)</p>
+                            <span class="ds-dr__blocklabel">What is damaged?</span>
+                            <div class="ds-dr__chips is-bad" role="group" aria-label="What is damaged">
+                                @foreach ($damageList as $k => $l)
+                                    <button type="button" wire:click="toggleDamage('{{ $k }}')" @class(['is-on' => in_array($k, $damage, true)]) aria-pressed="{{ in_array($k, $damage, true) ? 'true' : 'false' }}">{{ $l }}</button>
+                                @endforeach
+                            </div>
+                            <input type="text" class="ds-sa__note-in" wire:model.blur="damageNote" maxlength="290" placeholder="Anything else? (optional)" aria-label="Damage note">
+                        @endif
+                    </div>
+
+                    <div class="ds-dr__block">
+                        <span class="ds-dr__blocklabel">Delivery receipt</span>
+                        @if ($dmg)
+                            <p class="ds-dr__hint">Damaged: the receiver signs on this phone that they saw the damage. They get an SMS with the link to the signed receipt.</p>
+                        @else
+                            <div class="ds-sa__seg is-2" role="group" aria-label="Delivery receipt">
+                                <span class="ds-sa__segthumb is-light" style="left: calc(4px + {{ $receipt === 'phone' ? 1 : 0 }} * (100% - 8px) / 2)"></span>
+                                <button type="button" wire:click="setReceipt('paper')" @class(['is-on' => $receipt !== 'phone'])>📄 Paper receipt</button>
+                                <button type="button" wire:click="setReceipt('phone')" @class(['is-on' => $receipt === 'phone'])>✍ Sign on the phone</button>
+                            </div>
+                            @if ($receipt === 'phone')
+                                <span class="ds-dr__blocklabel">Why no paper?</span>
+                                <div class="ds-dr__chips" role="group" aria-label="Why no paper">
+                                    @foreach ($paperList as $k => $l)
+                                        <button type="button" wire:click="$set('paperWhy', '{{ $k }}')" @class(['is-on' => $paperWhy === $k])>{{ $l }}</button>
+                                    @endforeach
+                                </div>
+                            @else
+                                <p class="ds-dr__hint">The receiver signs your paper receipt, like today. Bring it back to the office.</p>
+                            @endif
+                        @endif
+
+                        @if ($signing)
+                            <label class="ds-dr__field"><span>Received by</span><input type="text" class="ds-sa__note-in" wire:model.blur="signName" maxlength="117" placeholder="Name of the person who received it" aria-label="Received by"></label>
+                            <div class="ds-dr__chips is-light" role="group" aria-label="Relationship">
+                                @foreach ($relList as $r)
+                                    <button type="button" wire:click="$set('signRel', '{{ $r }}')" @class(['is-on' => $signRel === $r])>{{ $r }}</button>
+                                @endforeach
+                            </div>
+                            <div class="ds-dr__sign" wire:ignore wire:key="sign-{{ $box->id }}-{{ $dmg ? 1 : 0 }}" x-data="dsSignPad(@js($dmg))" x-on:ds-sign-clear.window="clear()">
+                                <p class="ds-dr__signtext" x-text="damaged ? 'I received this box damaged. I saw the damage before I signed.' : 'I received this box in good condition.'"></p>
+                                <canvas x-ref="pad" aria-label="Sign here with your finger"></canvas>
+                                <span class="ds-dr__signhint" x-show="empty">✍ Sign here with your finger</span>
+                                <div class="ds-dr__signbar"><button type="button" x-on:click="clear()">Clear</button><span x-show="! empty" x-cloak>✓ Signed</span></div>
+                            </div>
+                            <label class="ds-dr__cant"><input type="checkbox" wire:model.live="cantSign"> The receiver can't sign (the receipt says so)</label>
+                        @endif
+                    </div>
+                    @php($need = $dmg ? 2 : 1)
+                    @php($ready = count($photoUrls) >= $need && (! $signing || (trim($signName) !== '' && ($signature || $cantSign) && ($dmg ? ($damage || trim($damageNote) !== '') : (bool) $paperWhy))))
+                    <button type="button" @class(['ds-sa__primary', 'is-green' => $ready && ! $dmg, 'is-red' => $ready && $dmg, 'is-off' => ! $ready]) wire:click="confirmDelivered" @disabled(! $ready)>
+                        @if (count($photoUrls) < $need)
+                            {{ $dmg ? 'Take 2 photos' : 'Take at least 1 photo' }}
+                        @elseif ($signing && ! $signature && ! $cantSign)
+                            Ask the receiver to sign
+                        @elseif (! $ready)
+                            {{ $dmg ? 'Tap what is damaged' : (trim($signName) === '' ? 'Type who received it' : 'Tap why there is no paper') }}
+                        @else
+                            Delivered{{ $dmg ? ' · damaged' : '' }}{{ $signing ? ' · signed' : '' }} · {{ count($photoUrls) }} {{ str('photo')->plural(count($photoUrls)) }}
+                        @endif
+                    </button>
+                    <button type="button" class="ds-dr__link" wire:click="backToBox">Back</button>
+                </div>
+            @endif
+
+            @if ($sheet === 'miss' && $box)
+                <div class="ds-sa__sheet is-warn" wire:key="miss-{{ $box->id }}">
+                    <span class="ds-sa__grab"></span>
+                    <span class="ds-dr__sheethead is-warn"><small>{{ $box->invoice }} · {{ \Illuminate\Support\Str::title($box->invdata?->receiver_name) }}</small><strong>Why couldn't you deliver it?</strong></span>
+                    <div class="ds-dr__chips" role="group" aria-label="Reason">
+                        @foreach ($reasons as $r)
+                            <button type="button" wire:click="$set('reason', '{{ $r->value }}')" @class(['is-on' => $reason === $r->value])>{{ $r->getLabel() }}</button>
+                        @endforeach
+                    </div>
+                    @if ($voiceOn)
+                        <div class="ds-dr__voice" x-data="{
+                            ok: !! (window.SpeechRecognition || window.webkitSpeechRecognition), on: false, busy: false, heard: '',
+                            start() {
+                                const R = window.SpeechRecognition || window.webkitSpeechRecognition; if (! R) return;
+                                const r = new R(); r.lang = 'fil-PH'; r.interimResults = true; r.continuous = false;
+                                this.heard = ''; this.on = true;
+                                r.onresult = (e) => { this.heard = Array.from(e.results).map(x => x[0].transcript).join(' ') };
+                                r.onerror = () => { this.on = false };
+                                r.onend = () => { this.on = false; if (this.heard.trim()) { this.busy = true; $wire.voiceFill(this.heard).then(() => this.busy = false) } };
+                                r.start(); this.rec = r;
+                            },
+                            stop() { this.rec && this.rec.stop() }
+                        }" x-show="ok" x-cloak>
+                            <button type="button" x-on:click="on ? stop() : start()" x-bind:class="{ 'is-on': on }" x-bind:disabled="busy" aria-label="Say what happened">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+                            </button>
+                            <span>
+                                <b x-text="on ? 'Listening… tap to stop' : (busy ? 'Filling in…' : 'Say what happened')"></b>
+                                <small x-text="heard || 'Tagalog, Bisaya or English. The reason and note are filled in for you.'"></small>
+                            </span>
+                        </div>
+                    @endif
+                    <input type="text" class="ds-sa__note-in" wire:model.blur="note" maxlength="500" placeholder="{{ $reasonCase?->notePrompt() ?? 'Note' }}{{ $reasonCase?->requiresNote() ? '' : ' (optional)' }}" aria-label="Note">
+                    @if ($otherCode)
+                        <div class="ds-dr__other" role="status"><span><b>Another box read: {{ $otherCode }}</b><small>This box stays open.</small></span><button type="button" wire:click="openOther">Open it</button><button type="button" class="is-x" wire:click="$set('otherCode', null)" aria-label="Stay on this box">✕</button></div>
+                    @endif
+                    <div class="ds-sa__photos" x-data="{{ $photoJs }}">
+                        <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
+                        @foreach ($photoUrls as $i => $url)
+                            <span class="ds-sa__shot ds-dr__proof is-small"><img src="{{ $url }}" alt="Photo {{ $i + 1 }}" x-on:click="view({{ $i }}, @js(array_values($photoUrls)))"><button type="button" wire:click="removePhoto({{ $i }})" aria-label="Remove photo">✕</button></span>
+                        @endforeach
+                        @if (count($photoUrls) < 3)
+                            <button type="button" class="ds-sa__addphoto" x-on:click="take()" x-bind:disabled="busy">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+                                <span x-show="! busy">{{ $reasonCase?->requiresPhoto() ? 'Add photo (needed)' : 'Add photo' }}</span><span x-show="busy" x-cloak>Saving…</span>
+                            </button>
+                        @endif
+                    </div>
+                    @if ($reasonCase === \App\Enums\FailedDeliveryReason::Rescheduled && $tryNo < \App\Support\Deliveries\NextTry::MAX_TRIES)
+                        <span class="ds-dr__blocklabel">Which day did they ask for?</span>
+                        <div class="ds-dr__chips" role="group" aria-label="Next try day">
+                            @foreach ($nextChoices as $d => $l)
+                                <button type="button" wire:click="$set('nextOn', '{{ $d }}')" @class(['is-on' => ($nextOn ?? array_key_first($nextChoices)) === $d])>{{ $l }}</button>
+                            @endforeach
+                        </div>
+                    @endif
+                    @if ($nextPlan)
+                        <p @class(['ds-dr__next', 'is-office' => $nextPlan['office']])><b>{{ $nextPlan['office'] ? '🏢' : '📅' }} {{ $nextPlan['text'] }}</b><small>{{ $tryNo > 1 ? 'Try '.$tryNo.' of '.\App\Support\Deliveries\NextTry::MAX_TRIES.' · ' : '' }}{{ $nextPlan['office'] ? 'The box goes on the office list (Redelivery → Needs office).' : 'The box goes on the redelivery list for that day.' }}</small></p>
+                    @endif
+                    <button type="button" class="ds-sa__primary is-amber" wire:click="saveMissed">Keep it on the truck</button>
+                    <button type="button" class="ds-dr__link" wire:click="backToBox">Back</button>
+                </div>
+            @endif
+
+            @if ($sheet === 'which' && $which)
+                {{-- board 57: two boxes with one number on the truck; pick the receiver on the sticker --}}
+                <div class="ds-sa__sheet ds-which" wire:key="which-{{ $whichCode }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-which__head"><span>{{ count($which) }}</span><span><strong>{{ count($which) }} boxes have number {{ $whichCode }}</strong><small>Which one? Look at the receiver on the sticker.</small></span></div>
+                    @foreach ($which as $w)
+                        <button type="button" class="ds-which__opt" wire:click="pickBox({{ $w['id'] }})" wire:key="w-{{ $w['id'] }}">
+                            <span><strong>{{ $w['name'] }}</strong>@if ($w['place'])<small>{{ $w['place'] }}</small>@endif @if ($w['sender'])<em>from {{ $w['sender'] }}</em>@endif</span><b>›</b>
+                        </button>
+                    @endforeach
+                    <button type="button" class="ds-sa__secondary" wire:click="closeSheet">Not this box · scan again</button>
+                </div>
+            @endif
+
+            @if ($sheet === 'wrong')
+                <div class="ds-sa__sheet is-bad" wire:key="wrong-{{ md5((string) $wrongText) }}">
+                    <span class="ds-sa__grab"></span>
+                    <div class="ds-sa__hit is-shake">
+                        <span class="ds-sa__mark is-bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
+                        <span><strong>Not this box</strong><small>Check the label</small></span>
+                    </div>
+                    <p class="ds-sa__msg">{{ $wrongText }}</p>
+                    <button type="button" class="ds-sa__secondary" wire:click="closeSheet">Scan another box</button>
+                </div>
+            @endif
+        </section>
     @endif
 </div>
+<x-filament-actions::modals />
 </x-filament-panels::page>
-DISPATCH_FILE_END_35
+DISPATCH_FILE_END_24
+
+# ---------------------------------------------------------------- resources/views/filament/partials/box-photo-thumb.blade.php
+mkdir -p 'resources/views/filament/partials'
+cat > 'resources/views/filament/partials/box-photo-thumb.blade.php' <<'DISPATCH_FILE_END_25'
+{{-- Board 71: one photo in a gallery row. Its width follows the photo (wide stays wide), caption on hover. --}}
+@php($tone = ['good' => 'ok', 'damaged' => 'bad', 'wet' => 'wet', 'open' => 'warn'][$i['condition'] ?? ''] ?? null)
+<figure data-tile wire:key="t-{{ $key }}" class="group relative m-0 h-40 min-w-28 overflow-hidden rounded-xl bg-(--bp-raised) [flex:133_1_12.5rem] sm:h-44"
+        x-bind:class="{ 'ring-3 ring-(--bp-gold) ring-offset-2 ring-offset-(--bp-surf)': isSel(@js($key)) || (open && cur === @js($key)) }">
+    <button type="button" class="block size-full cursor-zoom-in" x-on:click="show(@js($key))" aria-label="Open {{ $i['name'] }}">
+        <img src="{{ $i['url'] }}" alt="{{ $i['label'] }} · {{ $i['invoice'] }}" loading="lazy" decoding="async"
+             x-on:load="fit($event)" x-init="$el.complete && fit({ target: $el })"
+             class="size-full object-cover transition duration-300 group-hover:scale-[1.04]">
+    </button>
+    <span class="pointer-events-none absolute left-2 top-2 inline-flex max-w-[calc(100%-3rem)] items-center gap-1.5 truncate whitespace-nowrap rounded-full bg-black/55 px-2 py-0.5 text-[0.68rem] font-extrabold text-white backdrop-blur-sm">
+        @if ($tone)<i @class(['ds-bp__dot', 'is-'.$tone])></i>@endif
+        {{ $i['label'] }}{{ $tone && $tone !== 'ok' ? ' · '.(\App\Models\BoxPhoto::CONDITIONS[$i['condition']] ?? '') : '' }}
+    </span>
+    <button type="button" x-on:click.stop="toggle(@js($key))" aria-label="Select {{ $i['name'] }}" x-bind:aria-pressed="isSel(@js($key))"
+            class="absolute right-2 top-2 grid size-7 place-items-center rounded-full text-sm font-black transition"
+            x-bind:class="isSel(@js($key)) ? 'bg-(--bp-gold) text-[#0e2433] opacity-100' : 'bg-black/45 text-transparent ring-2 ring-white/90 ' + (picking ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100')">✓</button>
+    <figcaption class="pointer-events-none absolute inset-x-0 bottom-0 flex translate-y-[58%] flex-col gap-0.5 bg-linear-to-t from-black/85 via-black/55 to-transparent px-3 pb-2 pt-7 text-white transition duration-200 group-hover:translate-y-0">
+        <b class="truncate text-[0.8rem] font-extrabold">{{ $i['invoice'] }}{{ $i['who'] ? ' · '.$i['who'] : '' }}</b>
+        <small class="truncate text-[0.72rem] text-white/80">{{ $i['at']?->format('d M Y · g:i A') }}{{ $i['note'] ? ' · “'.\Illuminate\Support\Str::limit($i['note'], 40).'”' : '' }}</small>
+    </figcaption>
+</figure>
+DISPATCH_FILE_END_25
+
+# ---------------------------------------------------------------- resources/views/filament/shared/box-photos.blade.php
+mkdir -p 'resources/views/filament/shared'
+cat > 'resources/views/filament/shared/box-photos.blade.php' <<'DISPATCH_FILE_END_26'
+@php
+    $condColor = ['good' => 'ok', 'damaged' => 'bad', 'wet' => 'wet', 'open' => 'warn'];
+@endphp
+<x-filament-panels::page>
+    <div class="ds-bp" wire:key="bp-{{ md5($q.'|'.$place.'|'.$cond.'|'.implode(',', array_keys($viewer))) }}"
+         x-data="{
+            items: @js($viewer),
+            cur: null, open: false, zoom: 1, playing: null, picking: false,
+            sel: $wire.entangle('selected'),
+            isSel(k) { return this.sel.includes(k) },
+            toggle(k) { this.sel = this.isSel(k) ? this.sel.filter(x => x !== k) : [...this.sel, k] },
+            get it() { return this.items[this.cur] || null },
+            get strip() { const inv = this.it?.invoice; return Object.keys(this.items).filter(k => this.items[k].invoice === inv) },
+            get pos() { return this.strip.indexOf(this.cur) + 1 },
+            get selSize() { const b = this.sel.reduce((s, k) => s + (this.items[k]?.size || 0), 0); return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB' },
+            step(d) { const s = this.strip; const i = s.indexOf(this.cur); if (s.length) { this.cur = s[(i + d + s.length) % s.length]; this.zoom = 1 } },
+            show(k) { if (this.picking) { this.toggle(k); return } this.cur = k; this.zoom = 1; this.open = true },
+            close() { this.open = false; this.zoom = 1; this.play(false) },
+            play(on) { clearInterval(this.playing); this.playing = null; if (on) this.playing = setInterval(() => this.step(1), 3000) },
+            fit(e) { const i = e.target; if (i.naturalWidth && i.naturalHeight) { const r = Math.min(2.4, Math.max(0.5, i.naturalWidth / i.naturalHeight)); i.closest('[data-tile]').style.flex = Math.round(r * 100) + ' 1 ' + Math.round(r * 9.5) + 'rem' } },
+         }"
+         x-on:keydown.arrow-right.window="open && step(1)" x-on:keydown.arrow-left.window="open && step(-1)" x-on:keydown.escape.window="open && close()">
+
+        <header class="ds-bp__head">
+            <div>
+                <h1>Box Photos</h1>
+                <p>Every photo of every box, from container to doorstep.</p>
+            </div>
+            <div class="ds-bp__stats">
+                <span><strong>{{ number_format($stats['week']) }}</strong><small>photos this week</small></span>
+                <span class="is-bad"><strong>{{ $stats['damaged'] }}</strong><small>damaged</small></span>
+                <span class="is-wet"><strong>{{ $stats['wet'] }}</strong><small>wet</small></span>
+            </div>
+        </header>
+
+        <label class="ds-bp__search">
+            <x-filament::icon icon="heroicon-o-magnifying-glass" class="h-5 w-5" />
+            <input type="search" wire:model.live.debounce.400ms="q" placeholder="Invoice, container or trip number…" autocomplete="off" autofocus aria-label="Search box photos">
+            @if ($q !== '')
+                <button type="button" wire:click="clearSearch" class="ds-bp__clear" aria-label="Clear search">✕</button>
+            @endif
+            <span class="ds-bp__hint">Type or scan</span>
+        </label>
+
+        @if (trim($q) === '')
+            <section class="ds-bp__empty">
+                <span class="ds-bp__empty-icon"><x-filament::icon icon="heroicon-o-magnifying-glass" class="h-8 w-8" /></span>
+                <h2>Search a box to see its photos</h2>
+                <p>Type or scan an invoice number, a container number or a trip number. Photos stay hidden until you search.</p>
+                @if ($recent)
+                    <div class="ds-bp__recent">
+                        <span>Recent</span>
+                        @foreach ($recent as $r)
+                            <button type="button" wire:click="searchFor(@js($r))">{{ $r }}</button>
+                        @endforeach
+                    </div>
+                @endif
+            </section>
+
+            @if ($emails->isNotEmpty())
+                <section class="ds-bp__panel">
+                    <h3>Sent emails</h3>
+                    <ul class="ds-bp__mails">
+                        @foreach ($emails as $e)
+                            <li>
+                                <strong>{{ implode(', ', $e->recipients) }}</strong>
+                                <span>{{ count($e->photo_ids) }} photos · {{ $e->status === 'sent' ? 'Sent' : 'Not sent' }}</span>
+                                <small>{{ $e->user?->full_name }} · {{ $e->created_at->diffForHumans() }}</small>
+                            </li>
+                        @endforeach
+                    </ul>
+                </section>
+            @endif
+        @else
+            <div class="ds-bp__pills" role="group" aria-label="Filters">
+                <button type="button" wire:click="$set('place', '')" @class(['is-on' => $place === ''])>All places</button>
+                @foreach ($places as $key => $label)
+                    <button type="button" wire:click="$set('place', '{{ $key }}')" @class(['is-on' => $place === $key])>{{ $label }}</button>
+                @endforeach
+                <span class="ds-bp__sep" aria-hidden="true"></span>
+                <button type="button" wire:click="$set('cond', '')" @class(['is-on' => $cond === ''])>Any condition</button>
+                @foreach ($conditions as $key => $label)
+                    <button type="button" wire:click="$set('cond', '{{ $key }}')" @class(['is-on' => $cond === $key])><i @class(['ds-bp__dot', 'is-'.$condColor[$key]])></i>{{ $label }}</button>
+                @endforeach
+            </div>
+
+            @if ($boxes->isEmpty())
+                <section class="ds-bp__empty is-small">
+                    <h2>No photos found for “{{ $q }}”</h2>
+                    <p>Check the number, or clear the filters. Photos appear here when staff add them while scanning, and when drivers deliver.</p>
+                </section>
+            @else
+                {{-- Board 71: the photos as a gallery (rows that follow each photo), by box or all photos by day --}}
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <p class="ds-bp__count">{{ $boxes->count() }} {{ str('box')->plural($boxes->count()) }} · {{ $photoCount }} {{ str('photo')->plural($photoCount) }} · newest first</p>
+                    <div class="flex items-center gap-2">
+                        <span class="flex h-9 rounded-full bg-(--bp-surf) p-0.5 shadow-[inset_0_0_0_1px_var(--bp-line)]" role="group" aria-label="How to show the photos">
+                            <button type="button" wire:click="$set('arrange', 'box')" @class(['rounded-full px-4 text-[0.8rem] font-bold', 'bg-(--bp-pill-on) text-(--bp-pill-on-text)' => $arrange !== 'all', 'text-(--bp-text)' => $arrange === 'all'])>By box</button>
+                            <button type="button" wire:click="$set('arrange', 'all')" @class(['rounded-full px-4 text-[0.8rem] font-bold', 'bg-(--bp-pill-on) text-(--bp-pill-on-text)' => $arrange === 'all', 'text-(--bp-text)' => $arrange !== 'all'])>All photos</button>
+                        </span>
+                        <button type="button" x-on:click="picking = ! picking" class="h-9 rounded-full px-4 text-[0.8rem] font-extrabold transition"
+                                x-bind:class="picking ? 'bg-(--bp-gold) text-[#0e2433]' : 'bg-(--bp-surf) text-(--bp-text) shadow-[inset_0_0_0_1px_var(--bp-line)]'"
+                                x-text="picking ? 'Done' : '☑ Select'"></button>
+                    </div>
+                </div>
+
+                @if ($arrange === 'all')
+                    <div class="flex flex-col gap-5">
+                        @foreach ($days as $day => $list)
+                            <section class="flex flex-col gap-2" wire:key="day-{{ $day }}">
+                                <h3 class="m-0 flex items-baseline gap-2 text-[0.95rem] font-extrabold">{{ $day }} <small class="text-[0.78rem] font-semibold text-(--bp-muted)">{{ $list->count() }} {{ str('photo')->plural($list->count()) }}</small></h3>
+                                <div class="flex flex-wrap gap-2">
+                                    @foreach ($list as $i)
+                                        @include('filament.partials.box-photo-thumb', ['key' => $i['key'], 'i' => $i])
+                                    @endforeach
+                                    <span class="grow-[1000]" aria-hidden="true"></span>
+                                </div>
+                            </section>
+                        @endforeach
+                    </div>
+                @else
+                    <div class="flex flex-col gap-3.5">
+                        @foreach ($boxes as $b)
+                            @php($inv = $b['invoice'])
+                            @php($scan = $b['items']->where('kind', 'scan'))
+                            <article class="ds-bp__box" wire:key="box-{{ $inv->id }}">
+                                <button type="button" class="ds-bp__boxhead" x-on:click="show(@js($b['items']->keys()->last()))">
+                                    <span class="ds-bp__inv">{{ $inv->invoice }}</span>
+                                    @if ($b['worst'])
+                                        <span @class(['ds-bp__chip', 'is-'.$condColor[$b['worst']]])>{{ $conditions[$b['worst']] }}</span>
+                                    @endif
+                                    @if ($b['delivered'])
+                                        <span class="ds-bp__chip is-ok">Delivered</span>
+                                    @endif
+                                    <span class="ds-bp__n">{{ $b['items']->count() }} {{ str('photo')->plural($b['items']->count()) }}</span>
+                                    <span class="ds-bp__who">{{ collect([$inv->receiver_name, $inv->receiver_barangay, $inv->receiver_city])->filter()->map(fn ($p) => \Illuminate\Support\Str::title($p))->join(' · ') }}</span>
+                                </button>
+
+                                <ol class="ds-bp__journey" aria-label="Where this box has been">
+                                    @foreach ($b['journey'] as $j)
+                                        @php($tone = $j['kind'] === 'delivered' ? ($j['condition'] === 'damaged' ? 'bad' : 'ok') : ($j['kind'] === 'not_delivered' ? 'warn' : ($condColor[$j['condition']] ?? 'none')))
+                                        <li><i @class(['ds-bp__dot', 'is-'.$tone])></i>{{ $j['label'] }}{{ $j['kind'] === 'delivered' && $j['condition'] === 'damaged' ? ' · damaged' : '' }}</li>
+                                    @endforeach
+                                </ol>
+
+                                @if ($scan->isNotEmpty())
+                                    <div class="flex flex-col gap-2 rounded-2xl bg-(--bp-raised) p-2.5">
+                                        <span class="flex items-center gap-2 px-0.5 text-[0.82rem]"><b>Scan photos</b><small class="text-(--bp-muted)">{{ $scan->count() }} {{ str('photo')->plural($scan->count()) }} · warehouse and hub</small></span>
+                                        <div class="flex flex-wrap gap-2">
+                                            @foreach ($scan as $key => $i)
+                                                @include('filament.partials.box-photo-thumb', ['key' => $key, 'i' => $i])
+                                            @endforeach
+                                            <span class="grow-[1000]" aria-hidden="true"></span>
+                                        </div>
+                                    </div>
+                                @endif
+
+                                @foreach ($b['attempts'] as $a)
+                                    <div class="ds-bp__card is-warn">
+                                        <div class="ds-bp__cardhead">
+                                            <span class="ds-bp__badge">!</span>
+                                            <span><strong>Not delivered · {{ $a['reason'] }}</strong><small>{{ $a['at']?->format('d M Y · g:i A') }} · {{ $a['who'] ?? 'Driver' }}{{ $a['trip'] ? ' · Trip '.$a['trip'] : '' }}</small></span>
+                                            <em>{{ count($a['keys']) }} {{ str('photo')->plural(count($a['keys'])) }}</em>
+                                        </div>
+                                        @if ($a['note'])<p class="ds-bp__cardnote">“{{ $a['note'] }}”</p>@endif
+                                        @if ($a['keys'])
+                                            <div class="flex flex-wrap gap-2">
+                                                @foreach ($a['keys'] as $key)
+                                                    @include('filament.partials.box-photo-thumb', ['key' => $key, 'i' => $b['items'][$key]])
+                                                @endforeach
+                                                <span class="grow-[1000]" aria-hidden="true"></span>
+                                            </div>
+                                        @endif
+                                    </div>
+                                @endforeach
+
+                                @if ($d = $b['delivered'])
+                                    <div class="ds-bp__card is-ok">
+                                        <div class="ds-bp__cardhead">
+                                            <span class="ds-bp__badge">✓</span>
+                                            <span><strong>Delivered{{ ($d['signed']['damaged'] ?? false) ? ' · damaged' : '' }}</strong><small>{{ $d['at']?->format('d M Y · g:i A') }} · {{ $d['who'] ?? 'Driver' }}{{ $d['to'] ? ' · to '.\Illuminate\Support\Str::title($d['to']) : '' }}{{ $d['trip'] ? ' · Trip '.$d['trip'] : '' }}</small></span>
+                                            <em>{{ count($d['keys']) }} {{ str('photo')->plural(count($d['keys'])) }}</em>
+                                        </div>
+                                        @if ($sg = $d['signed'] ?? null)
+                                            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[0.8rem]">
+                                                <span>✍ Signed on the phone by <b>{{ \Illuminate\Support\Str::title($sg['by']) }}</b>{{ $sg['rel'] ? ' ('.strtolower($sg['rel']).')' : '' }}{{ $sg['cant'] ? ' · could not sign' : '' }}</span>
+                                                @if ($sg['damaged'])<span @class(['ds-bp__chip', 'is-bad'])>Damaged: {{ $sg['damage'] }}</span>@endif
+                                                @if ($sg['paper'])<span class="text-(--bp-muted)">No paper receipt: {{ strtolower($sg['paper']) }}</span>@endif
+                                                <a href="{{ $sg['link'] }}" target="_blank" rel="noopener" class="font-bold underline">📄 Signed receipt (PDF)</a>
+                                            </div>
+                                        @endif
+                                        @if ($d['keys'])
+                                            <div class="flex flex-wrap gap-2">
+                                                @foreach ($d['keys'] as $key)
+                                                    @include('filament.partials.box-photo-thumb', ['key' => $key, 'i' => $b['items'][$key]])
+                                                @endforeach
+                                                <span class="grow-[1000]" aria-hidden="true"></span>
+                                            </div>
+                                        @else
+                                            <p class="ds-bp__cardnote">No delivery photo was taken.</p>
+                                        @endif
+                                    </div>
+                                @endif
+                            </article>
+                        @endforeach
+                    </div>
+                @endif
+
+                {{-- Board 71 C: full-screen viewer with a strip of the box's photos, slideshow, zoom, download --}}
+                <div class="fixed inset-0 z-[60] flex flex-col bg-[#05090d] text-[#eef3f6]" x-show="open" x-cloak x-transition.opacity
+                     x-effect="document.documentElement.style.overflow = open ? 'hidden' : ''" role="dialog" aria-modal="true" aria-label="Photo">
+                    <div class="flex flex-wrap items-center gap-2 px-4 py-3 sm:px-6">
+                        <span class="flex min-w-0 flex-1 flex-col">
+                            <strong class="truncate text-[0.98rem]" x-text="it?.title"></strong>
+                            <small class="truncate text-[0.78rem] text-white/65" x-text="[it?.ref, it?.when, it?.who].filter(Boolean).join(' · ')"></small>
+                        </span>
+                        <span class="ds-bp__chip" x-show="it?.condLabel" x-text="it?.condLabel" x-bind:class="{ 'is-ok': it?.cond === 'good', 'is-bad': it?.cond === 'damaged', 'is-wet': it?.cond === 'wet', 'is-warn': it?.cond === 'open' }"></span>
+                        <span class="rounded-full bg-white/10 px-3 py-1 text-[0.75rem] font-extrabold tabular-nums" x-text="pos + ' / ' + strip.length"></span>
+                        <button type="button" class="grid size-10 place-items-center rounded-full bg-white/10 hover:bg-white/20" x-on:click="zoom = zoom >= 2.5 ? 1 : zoom + 0.75" aria-label="Zoom">🔍</button>
+                        <button type="button" class="h-10 rounded-full px-4 text-[0.8rem] font-extrabold" x-show="strip.length > 1" x-on:click="play(! playing)"
+                                x-bind:class="playing ? 'bg-(--bp-gold) text-[#0e2433]' : 'bg-white/10 hover:bg-white/20'" x-text="playing ? '❚❚ Pause' : '▶ Slideshow'"></button>
+                        <a class="grid size-10 place-items-center rounded-full bg-white/10 hover:bg-white/20" x-bind:href="it?.dl" x-bind:download="it?.name" aria-label="Download">⬇</a>
+                        <button type="button" class="h-10 rounded-full px-4 text-[0.8rem] font-extrabold" x-on:click="toggle(cur)"
+                                x-bind:class="isSel(cur) ? 'bg-(--bp-gold) text-[#0e2433]' : 'bg-white/10 hover:bg-white/20'" x-text="isSel(cur) ? '✓ Selected' : 'Select'"></button>
+                        <button type="button" class="grid size-10 place-items-center rounded-full bg-white/10 hover:bg-white/20" x-on:click="close()" aria-label="Close">✕</button>
+                    </div>
+                    <div class="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3 sm:px-16"
+                         x-data="{ sx: null }" x-on:touchstart="sx = $event.touches[0].clientX" x-on:touchend="if (sx !== null && zoom === 1) { const dx = $event.changedTouches[0].clientX - sx; if (Math.abs(dx) > 60) step(dx < 0 ? 1 : -1) } sx = null">
+                        <img x-bind:src="it?.src" x-bind:alt="it?.name" x-on:dblclick="zoom = zoom > 1 ? 1 : 2.5"
+                             class="max-h-full max-w-full select-none object-contain transition-transform duration-200" x-bind:style="'transform: scale(' + zoom + ')'" x-bind:class="zoom > 1 ? 'cursor-zoom-out' : 'cursor-zoom-in'">
+                        <button type="button" class="absolute left-3 top-1/2 grid size-12 -translate-y-1/2 place-items-center rounded-full bg-white/12 text-2xl hover:bg-white/25" x-show="strip.length > 1" x-on:click="step(-1)" aria-label="Previous photo">‹</button>
+                        <button type="button" class="absolute right-3 top-1/2 grid size-12 -translate-y-1/2 place-items-center rounded-full bg-white/12 text-2xl hover:bg-white/25" x-show="strip.length > 1" x-on:click="step(1)" aria-label="Next photo">›</button>
+                        <span class="absolute inset-x-0 bottom-0 h-1 bg-white/10" x-show="playing"><span class="block h-full w-full origin-left animate-pulse bg-(--bp-gold)"></span></span>
+                    </div>
+                    <blockquote class="mx-4 my-0 rounded-lg border-l-3 border-(--bp-gold) bg-white/6 px-3 py-2 text-[0.85rem] italic sm:mx-6" x-show="it?.note" x-text="it?.note"></blockquote>
+                    <div class="flex gap-2 overflow-x-auto px-4 py-3 sm:px-6" x-show="strip.length > 1">
+                        <template x-for="k in strip" x-bind:key="k">
+                            <button type="button" x-on:click="cur = k; zoom = 1" class="h-14 w-20 shrink-0 overflow-hidden rounded-md transition"
+                                    x-bind:class="k === cur ? 'opacity-100 ring-3 ring-(--bp-gold)' : 'opacity-45 hover:opacity-80'"><img x-bind:src="items[k].src" alt="" class="size-full object-cover" loading="lazy"></button>
+                        </template>
+                    </div>
+                    <div class="flex items-center justify-between gap-3 border-t border-white/10 px-4 py-2.5 text-[0.75rem] text-white/55 sm:px-6">
+                        <span class="truncate font-mono" x-text="it?.name"></span>
+                        <span class="hidden sm:inline">Swipe or ‹ › · double-tap or 🔍 to zoom · Esc to close</span>
+                        @if (auth()->user()?->hasRole('super_admin'))
+                            <button type="button" class="text-(--bp-bad) underline" x-show="it?.scan" x-on:click="close(); $wire.mountAction('delete', { key: cur })">Delete this photo</button>
+                        @endif
+                    </div>
+                </div>
+            @endif
+        @endif
+
+        <div class="ds-bp__dock" x-show="sel.length" x-cloak x-transition.opacity>
+            <span class="ds-bp__dockn" x-text="sel.length"></span>
+            <span class="ds-bp__docktext"><strong x-text="sel.length === 1 ? '1 photo selected' : sel.length + ' photos selected'"></strong><small x-text="'about ' + selSize"></small></span>
+            <button type="button" class="is-ghost" x-on:click="sel = []">Clear</button>
+            <button type="button" class="is-dark" wire:click="downloadSelected"><span x-text="sel.length > 1 ? '↓ Download ZIP' : '↓ Download'"></span></button>
+            {{ $this->emailAction }}
+        </div>
+    </div>
+
+    <x-filament-actions::modals />
+</x-filament-panels::page>
+DISPATCH_FILE_END_26
+
+# ---------------------------------------------------------------- resources/views/invoices/pdfinvoice.blade.php
+mkdir -p 'resources/views/invoices'
+cat > 'resources/views/invoices/pdfinvoice.blade.php' <<'DISPATCH_FILE_END_27'
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>{{ $invoice->invoice}} Delivery Receipt</title>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            font-weight:bold;
+            box-sizing: border-box;
+        }
+
+        .logo-left {
+            width: 150px;
+            height: 50px;
+            margin: 0px;
+            padding: 0px;
+        }
+
+        .logo-center {
+            width: 150px;
+            height: 50px;
+            margin: 0px;
+            padding: 0px;
+        }
+
+        .table-main,
+        .table-inner {
+            width: 100%;
+            border-collapse: collapse;
+
+        }
+
+        .table-main td,
+        .table-inner td {
+            /* border: 1px solid #ccc;  */
+            padding: 4px;
+            text-align: left;
+            /* vertical-align: top; */
+            vertical-align: middle;
+        }
+
+        /* Inner table column widths */
+        .table-inner.two-col td {
+            font-size: 12px;
+            font-weight: bold;
+            font-family: Arial, Helvetica, sans-serif;
+            width: 50%;
+        }
+
+        .td-head {
+            font-weight: bold;
+            margin-bottom: 4px;
+            /* space between head and content */
+        }
+
+        .table-inner.three-col td {
+            vertical-align:top;
+            width: 33.33%;
+        }
+
+        .table-inner.one-col td {
+            color: red;
+            width: 100%;
+        }
+
+        .half {
+            width: 100;
+            height: 50%;
+            /* border: 1px solid #000; just to see the border */
+            box-sizing: border-box;
+            padding: 15px;
+        }
+
+        .cut-guide {
+            /* position: absolute; */
+            top: 50%;
+            left: 0;
+            width: 100%;
+            border-top: 2px dashed #000;
+            text-align: center;
+            font-size: 12px;
+            color: #555;
+        }
+
+        .page-container {
+            width: 100%;
+            /* set the desired page width */
+            margin: 0 auto;
+            /* horizontally center */
+            background-color: #fff;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+          /* //  padding-top: 5px; */
+            /* optional padding */
+        }
+
+        .line {
+            display: inline-block;
+            width: 120px;
+            /* set underline length */
+            border-bottom: 1px solid #000;
+            margin-left: 5px;
+            text-align:left;
+        }
+    </style>
+</head>
+
+<body>
+
+    
+    <div class="page-container">
+        <!-- section 1 -->
+        <div class="half">
+            <table class="table-main">
+
+                <table class="table-inner three-col">
+                    <td>
+                        @if($consolidator?->logo)<img class="logo-left" src="{{ public_path('storage/'.$consolidator->logo) }}" alt="logo" />@endif<br>
+                        <span style="font-size:12px !important;"> {{$consolidator?->website }}<br>
+                            {{ $consolidator?->email }}<br>
+                           {{$consolidator?->mobile_no}}</span>
+                    </td>
+                    <td style="text-align:center;">
+                        <img class="logo-center" src="{{ public_path('storage/logo/icargologo.png') }}"
+                            alt="logo" /><br>
+                       <span style="font-size:18px;font-weight:bold;">DELIVERY RECEIPT</span>
+                       <br>
+                       <span style="font-size:15px;font-weight:bold;">TRACKING NO.<span style="font-size:25px;font-weight:bold;text-decoration:underline"> {{$invoice->invoice}}</span></span>
+                    </td>
+                    <td style="font-size:12px !important">
+                        www.icargoxpress.net<br>
+                        Unit D, Riverside, Tanzang Luma VI, Imus City, Cavite 4103 <br>
+                        046-8510819/09173142634<br>
+                        inquiries@icargoxpress.com</span>
+                        <div id="barcode" class="padding:10px">{!!  DNS1D::getBarcodeHTML("$invoice->invoice", 'C39',2,40, 'black',true) !!}</div>
+                    </td>
+                    </tr>
+                </table>
+
+            </table>
+            <table class="table-main">
+                <tr>
+                    <!-- First main td: split into 2 -->
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td class="td-head">SENDER INFORMATION</td>
+                            </tr>
+                        
+                                <td>NAME<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->sender_name ?? '' }}</span></td>
+                            </tr>
+                            {{-- <tr>
+                                <td>TRACKING NO<span class="line">{{ $invoice->invoice ?? '' }}</span></td>
+                            </tr> --}}
+                            <tr>
+                                <td>ORIGIN<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{$consolidator?->company_name ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>BATCH NO<span class="line">{{ $invoice->batchno ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>BOX TYPE<span class="line">{{ $invoice->boxtype ?? '' }}</span> </td>
+                            </tr>
+                        </table>
+                    </td>
+
+                    <!-- Second main td: split into 2 -->
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td class="td-head">RECEIVER INFORMATION</td>
+                            </tr>
+                            <tr>
+                                <td>NAME<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_name ?? '' }}</span></td>
+                            </tr>               
+                            <tr>
+                                 <td colspan="2">ADDRESS<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_address ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>PROVINCE <span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_province ?? '' }}</span></td>
+                                <td>CITY:<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_city ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>BARANGAY<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_barangay ?? '' }}</span></td>
+                                <td>POSTALCODE<span class="line">{{ $invoice->receiver_postalcode ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>EMAIL<span class="line">{{ $invoice->receiver_email ?? '' }}</span></td>
+                                <td>PHONE <span class="line">{{ $invoice->receiver_mobile_no ?? '' }}</span></td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+
+            <table class="table-main">
+                <br>
+                <span>Acknowledgement Receipt</span>
+                <p style="text-align:justify; font-size:12px;">
+                    This is to formally acknowledge that I have received the box/item(s) delivered by iCargoxpress
+                    Delivery Inc.,
+                    or picked up from our warehouse, in good condition. The package has been inspected upon delivery and
+                    found
+                    free of visible damage. By signing below, I confirm that the delivery was completed satisfactorily.
+                </p>
+            </table>
+            <table class="table-main">
+                <tr>
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td class="td-head">STATUS OF THE BOX UPON DELIVERY</td>
+                            </tr>
+                            <tr>
+                                <td><input type="checkbox" id="sixside" name="sixside" @if (! empty($signed)) checked @endif />
+                                    <label for="sixside">SIX SIDE INSPECTED</label>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><input type="checkbox" id="good" name="good" @if (! empty($signed) && empty($signed['damaged'])) checked @endif />
+                                    <label for="good">IN GOOD CONDITION</label>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td>
+
+                                    <textarea id="story" name="story" rows="5" cols="75">
+REMARKS
+{{ $signed['remarks'] ?? '' }}</textarea>
+                                </td>
+
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+
+
+            <table class="table-main">
+                <tr>
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td>DRIVER NAME<span class="line">{{ $driver->full_name ?? '' }}</span></td>
+                                <td>ASSISTANT<span class="line">{{ $leadman->full_name ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>DELIVERY DATE<span class="line">{{ $signed['date'] ?? '' }}</span></td>
+                                <td>PLATE NO<span class="line">{{ $truck->plate_no ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>TIME<span class="line">{{ $signed['time'] ?? '' }}</span></td>
+                                <td>TRUCK<span class="line">{{ $signed['truck'] ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td colspan="2">SIGNATURE<span class="line"></span></td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td colspan="2">RECIPIENT NAME<span class="line">{{ $signed['name'] ?? '' }}</span></td>
+
+                            </tr>
+                            <tr>
+                                <td colspan="2">RELATIONSHIP TO SENDER <span class="line">{{ $signed['relationship'] ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>ID TYPE<span class="line"></span></td>
+                                <td>ID NUMBER <span class="line"></span></td>
+                            </tr>
+                            <tr>
+                                <td colspan="2">SIGNATURE <span class="line">@if (! empty($signed['sig']))<img src="{{ $signed['sig'] }}" alt="" style="height: 34px; vertical-align: bottom;">@endif</span></td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        {{-- secton 2 --}}
+        <br>
+        <div class="cut-guide"></div>
+        <br>
+        <div class="half">
+            <table class="table-main">
+
+                <table class="table-inner three-col">
+                    <td>
+                        @if($consolidator?->logo)<img class="logo-left" src="{{ public_path('storage/'.$consolidator->logo) }}" alt="logo" />@endif<br>
+                        <span style="font-size:12px !important;"> {{$consolidator?->website }}<br>
+                            {{ $consolidator?->email }}<br>
+                           {{$consolidator?->mobile_no}}</span>
+                    </td>
+                    <td>
+                        <img class="logo-center" src="{{ public_path('storage/logo/icargologo.png') }}"
+                            alt="logo" /><br>
+                        <span style="font-size:18px;font-weight:bold;">DELIVERY RECEIPT</span>
+                         <br>
+                       <span style="font-size:15px;font-weight:bold;">TRACKING NO.<span style="font-size:25px;font-weight:bold;text-decoration:underline"> {{$invoice->invoice}}</span></span>
+                    </td>
+                    <td style="font-size:12px !important" >
+                         www.icargoxpress.net<br>
+                        Unit D, Riverside, Tanzang Luma VI, Imus City, Cavite 4103<br>
+                        046-8510819/09173142634<br>
+                        inquiries@icargoxpress.com
+                        <div id="barcode" class="padding:10px">{!!  DNS1D::getBarcodeHTML("$invoice->invoice", 'C39',2,40, 'black',true) !!}</div>
+                    </td>
+                    </tr>
+                </table>
+
+            </table>
+            <table class="table-main">
+                <tr>
+                    <!-- First main td: split into 2 -->
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td class="td-head">SENDER INFORMATION</td>
+                            </tr>
+                        
+                                <td>NAME<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->sender_name ?? '' }}</span></td>
+                            </tr>
+                            {{-- <tr>
+                                <td>TRACKING NO<span class="line">{{ $invoice->invoice ?? '' }}</span></td>
+                            </tr> --}}
+                            <tr>
+                                <td>ORIGIN<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{$consolidator?->company_name ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>BATCH NO<span class="line">{{ $invoice->batchno ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>BOX TYPE<span class="line">{{ $invoice->boxtype ?? '' }}</span> </td>
+                            </tr>
+                        </table>
+                    </td>
+
+                    <!-- Second main td: split into 2 -->
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td class="td-head">RECEIVER INFORMATION</td>
+                            </tr>
+                            <tr>
+                                <td>NAME<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_name ?? '' }}</span></td>
+                            </tr>               
+                            <tr>
+                                 <td colspan="2">ADDRESS<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_address ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>PROVINCE <span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_province ?? '' }}</span></td>
+                                <td>CITY:<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_city ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>BARANGAY<span style="text-align:center; margin-left:5px;border-bottom: 1px solid #000;">{{ $invoice->receiver_barangay ?? '' }}</span></td>
+                                <td>POSTALCODE<span class="line">{{ $invoice->receiver_postalcode ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>EMAIL<span class="line">{{ $invoice->receiver_email ?? '' }}</span></td>
+                                <td>PHONE <span class="line">{{ $invoice->receiver_mobile_no ?? '' }}</span></td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+
+            <table class="table-main">
+                <br>
+                <span>Acknowledgement Receipt</span>
+                <p style="text-align:justify; font-size:12px;">
+                    This is to formally acknowledge that I have received the box/item(s) delivered by iCargoxpress
+                    Delivery Inc.,
+                    or picked up from our warehouse, in good condition. The package has been inspected upon delivery and
+                    found
+                    free of visible damage. By signing below, I confirm that the delivery was completed satisfactorily.
+                </p>
+            </table>
+            <table class="table-main">
+                <tr>
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td class="td-head">STATUS OF THE BOX UPON DELIVERY</td>
+                            </tr>
+                            <tr>
+                                <td><input type="checkbox" id="sixside" name="sixside" @if (! empty($signed)) checked @endif />
+                                    <label for="sixside">SIX SIDE INSPECTED</label>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><input type="checkbox" id="good" name="good" @if (! empty($signed) && empty($signed['damaged'])) checked @endif />
+                                    <label for="good">IN GOOD CONDITION</label>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td>
+
+                                    <textarea id="story" name="story" rows="5" cols="75">
+REMARKS
+{{ $signed['remarks'] ?? '' }}</textarea>
+                                </td>
+
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+
+
+            <table class="table-main">
+                <tr>
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td>DRIVER NAME<span class="line">{{ $driver->full_name ?? '' }}</span></td>
+                                <td>ASSISTANT<span class="line">{{ $leadman->full_name ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>DELIVERY DATE<span class="line">{{ $signed['date'] ?? '' }}</span></td>
+                                <td>PLATE NO<span class="line">{{ $truck->plate_no ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>TIME<span class="line">{{ $signed['time'] ?? '' }}</span></td>
+                                <td>TRUCK<span class="line">{{ $signed['truck'] ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td colspan="2">SIGNATURE<span class="line"></span></td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td>
+                        <table class="table-inner two-col">
+                            <tr>
+                                <td colspan="2">RECIPIENT NAME<span class="line">{{ $signed['name'] ?? '' }}</span></td>
+
+                            </tr>
+                            <tr>
+                                <td colspan="2">RELATIONSHIP TO SENDER <span class="line">{{ $signed['relationship'] ?? '' }}</span></td>
+                            </tr>
+                            <tr>
+                                <td>ID TYPE<span class="line"></span></td>
+                                <td>ID NUMBER<span class="line"></span></td>
+                            </tr>
+                            <tr>
+                                <td colspan="2">SIGNATURE<span class="line">@if (! empty($signed['sig']))<img src="{{ $signed['sig'] }}" alt="" style="height: 34px; vertical-align: bottom;">@endif</span></td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        </div>
+    </div>
+</body>
+
+</html>
+DISPATCH_FILE_END_27
 
 # ---------------------------------------------------------------- routes/web.php
 mkdir -p 'routes'
-cat > 'routes/web.php' <<'DISPATCH_FILE_END_36'
+cat > 'routes/web.php' <<'DISPATCH_FILE_END_28'
 <?php
 
 use App\Http\Controllers\AiChatController;
@@ -14470,144 +10747,55 @@ if (app()->environment('local') && env('PHOTOS_FAKE_BUCKETS')) {
         return response(\App\Support\Photos\Storage\PhotoStore::fs($slot)->get($key) ?? abort(404), 200, ['Content-Type' => 'image/jpeg']);
     })->where('key', '.*');
 }
-DISPATCH_FILE_END_36
 
-# ---------------------------------------------------------------- setup-worker.sh
-cat > 'setup-worker.sh' <<'DISPATCH_FILE_END_37'
-#!/usr/bin/env bash
-# Part 40 · Settings → Photo storage: a background worker with Supervisor.
-# Run once on the server as root, in the wmsv2 folder:   sudo bash setup-worker.sh
-# Safe to run again: it only fixes what is missing. Nothing in the app files is changed
-# (only QUEUE_CONNECTION in .env when it is not "database", with a backup first).
-set -euo pipefail
+// Part 44: the signed delivery receipt, from the link in the receiver's SMS (no sign-in; the 10-letter code is the key).
+Route::get('/r/{token}', function (string $token) {
+    $s = \App\Models\DeliverySignature::where('token', strtolower($token))->firstOrFail();
+    if (! $s->receipt_pdf || ! \Illuminate\Support\Facades\Storage::disk('public')->exists($s->receipt_pdf)) {
+        \App\Support\Deliveries\SignedReceipt::make($s);
+        $s->refresh();
+    }
+    if ($s->receipt_pdf && \Illuminate\Support\Facades\Storage::disk('public')->exists($s->receipt_pdf)) {
+        return response(\Illuminate\Support\Facades\Storage::disk('public')->get($s->receipt_pdf), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="receipt-'.($s->tripinvoice?->invoice ?? $s->invoice_id).'.pdf"',
+            'Cache-Control' => 'private, max-age=600',
+            'X-Robots-Tag' => 'noindex',
+        ]);
+    }
 
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NAME="${NAME:-wmsv2-worker}"
-CONF="/etc/supervisor/conf.d/${NAME}.conf"
-ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
-info() { printf '  %s\n' "$*"; }
-fail() { printf '\033[31m✗\033[0m %s\n' "$*"; exit 1; }
+    return response(\App\Support\Deliveries\SignedReceipt::html($s))->header('X-Robots-Tag', 'noindex');
+})->where('token', '[A-Za-z0-9]{10}')->middleware('throttle:30,1')->name('signed-receipt');
+DISPATCH_FILE_END_28
 
-[ "$(id -u)" -eq 0 ] || fail "Run it as root: sudo bash setup-worker.sh"
-[ -f "$APP_DIR/artisan" ] || fail "artisan not found in $APP_DIR (run it from the wmsv2 folder)"
-
-# 1 · The user that owns the site (Plesk system user), never root
-RUN_AS="$(stat -c '%U' "$APP_DIR")"
-[ "$RUN_AS" != "root" ] || RUN_AS="$(stat -c '%U' "$APP_DIR/storage")"
-ok "Site user: $RUN_AS"
-
-# 2 · PHP: PHP=/path/to/php to choose; else the newest Plesk PHP; else php
-PHP_BIN="${PHP:-}"
-if [ -z "$PHP_BIN" ] && [ -d /opt/plesk/php ]; then
-  for v in $(ls -1 /opt/plesk/php | sort -rV); do
-    if [ -x "/opt/plesk/php/$v/bin/php" ]; then PHP_BIN="/opt/plesk/php/$v/bin/php"; break; fi
-  done
-fi
-PHP_BIN="${PHP_BIN:-$(command -v php || true)}"
-[ -n "$PHP_BIN" ] && [ -x "$PHP_BIN" ] || fail "PHP not found. Run: PHP=/opt/plesk/php/8.3/bin/php bash setup-worker.sh"
-"$PHP_BIN" -r 'exit(version_compare(PHP_VERSION, "8.2", "<") ? 1 : 0);' || fail "$PHP_BIN is older than 8.2. Run: PHP=/opt/plesk/php/8.3/bin/php bash setup-worker.sh"
-ok "PHP: $PHP_BIN ($("$PHP_BIN" -r 'echo PHP_VERSION;'))"
-
-# 3 · The queue uses the database
-ENV_FILE="$APP_DIR/.env"
-if grep -qE '^QUEUE_CONNECTION=database\s*$' "$ENV_FILE"; then
-  ok "QUEUE_CONNECTION=database"
-else
-  cp "$ENV_FILE" "$ENV_FILE.before-worker-$(date +%Y%m%d%H%M%S)"
-  if grep -qE '^QUEUE_CONNECTION=' "$ENV_FILE"; then
-    sed -i 's/^QUEUE_CONNECTION=.*/QUEUE_CONNECTION=database/' "$ENV_FILE"
-  else
-    printf '\nQUEUE_CONNECTION=database\n' >> "$ENV_FILE"
-  fi
-  sudo -u "$RUN_AS" "$PHP_BIN" "$APP_DIR/artisan" config:cache >/dev/null 2>&1 || true
-  ok "QUEUE_CONNECTION set to database (old .env kept as a backup)"
-fi
-
-# 4 · Supervisor
-if ! command -v supervisorctl >/dev/null 2>&1; then
-  info "Installing Supervisor…"
-  if command -v apt-get >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq supervisor
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y -q supervisor
-  elif command -v yum >/dev/null 2>&1; then
-    yum install -y -q supervisor
-  else
-    fail "Could not install Supervisor (no apt-get, dnf or yum). Install it, then run this again."
-  fi
-fi
-for svc in supervisor supervisord; do
-  systemctl enable --now "$svc" >/dev/null 2>&1 && break || true
-done
-ok "Supervisor installed and on"
-
-# RHEL keeps the programs in /etc/supervisord.d
-if [ ! -d /etc/supervisor/conf.d ] && [ -d /etc/supervisord.d ]; then CONF="/etc/supervisord.d/${NAME}.ini"; fi
-mkdir -p "$(dirname "$CONF")"
-
-# 5 · The worker
-NEW_CONF="[program:${NAME}]
-command=${PHP_BIN} ${APP_DIR}/artisan queue:work --sleep=3 --tries=3 --timeout=600 --max-time=3600
-directory=${APP_DIR}
-user=${RUN_AS}
-numprocs=2
-process_name=%(program_name)s_%(process_num)02d
-autostart=true
-autorestart=true
-stopasgroup=true
-killasgroup=true
-stopwaitsecs=620
-redirect_stderr=true
-stdout_logfile=${APP_DIR}/storage/logs/worker.log
-stdout_logfile_maxbytes=5MB
-stdout_logfile_backups=2
-"
-if [ -f "$CONF" ] && [ "$(cat "$CONF")" = "$(printf '%s' "$NEW_CONF")" ]; then
-  ok "Worker config already set ($CONF)"
-else
-  printf '%s' "$NEW_CONF" > "$CONF"
-  ok "Worker config written ($CONF)"
-fi
-touch "$APP_DIR/storage/logs/worker.log" && chown "$RUN_AS" "$APP_DIR/storage/logs/worker.log" || true
-
-supervisorctl reread >/dev/null
-supervisorctl update >/dev/null
-sudo -u "$RUN_AS" "$PHP_BIN" "$APP_DIR/artisan" queue:restart >/dev/null 2>&1 || true
-# Supervisor counts a worker as RUNNING after a few seconds: wait up to 20 s
-for _ in $(seq 1 10); do
-  sleep 2
-  supervisorctl status "${NAME}:*" 2>/dev/null | grep -q STARTING || break
-done
-supervisorctl status "${NAME}:*" || true
-
-if supervisorctl status "${NAME}:*" 2>/dev/null | grep -q RUNNING; then
-  ok "Done. The worker starts by itself after a reboot."
-  info "After each Part script:  php artisan queue:restart"
-  info "Log: ${APP_DIR}/storage/logs/worker.log"
-else
-  fail "The worker is not RUNNING. See: tail -50 ${APP_DIR}/storage/logs/worker.log"
-fi
-DISPATCH_FILE_END_37
-
-# ---------------------------------------------------------------- tests/Feature/PhotoStorageTest.php
+# ---------------------------------------------------------------- tests/Feature/DamagedDeliveryTest.php
 mkdir -p 'tests/Feature'
-cat > 'tests/Feature/PhotoStorageTest.php' <<'DISPATCH_FILE_END_38'
+cat > 'tests/Feature/DamagedDeliveryTest.php' <<'DISPATCH_FILE_END_29'
 <?php
 
-use App\Filament\Pages\PhotoStorage;
-use App\Models\AppSetting;
-use App\Models\Photos\PhotoFile;
-use App\Models\Photos\PhotoTask;
+use App\Enums\FailedDeliveryReason;
+use App\Filament\Delivery\Pages\Dashboard;
+use App\Filament\Pages\Redelivery;
+use App\Http\Controllers\InvoiceController;
+use App\Models\DeliveryAttempt;
+use App\Models\DeliverySignature;
+use App\Models\Deliverylog;
+use App\Models\Invoice;
+use App\Models\Invoiceissue;
+use App\Models\Sms\SmsMessage;
+use App\Models\Tripinvoice;
 use App\Models\User;
-use App\Support\Photos\Storage\OldSystem;
-use App\Support\Photos\Storage\PhotoStore;
-use App\Support\Photos\Storage\PhotoWork;
+use App\Services\TripAssignment;
+use App\Support\Deliveries\NextTry;
+use App\Support\Deliveries\SignedReceipt;
+use App\Support\Sms\SmsSettings;
+use Carbon\Carbon;
 use Database\Seeders\DemoSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 
@@ -14615,206 +10803,189 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->seed(DemoSeeder::class);
-    $this->admin = User::where('email', 'admin@example.com')->firstOrFail();
-    $this->actingAs($this->admin);
-    Filament::setCurrentPanel(Filament::getPanel('admin'));
-    PhotoStore::$fake = true;
-    PhotoStore::forgetMemo();
-    $this->root = storage_path('framework/testing/photostore-'.getmypid());
-    File::deleteDirectory($this->root);
-    // the server folders behind the routed disks, in a test folder
-    config(['filesystems.disks.public.inner.root' => $this->root.'/public', 'filesystems.disks.box.inner.root' => $this->root.'/private']);
-    Storage::forgetDisk(['public', 'box']);
-    File::deleteDirectory(storage_path('framework/testing/buckets'));
+    Storage::fake('public');
+    SignedReceipt::$fake = true;
+    $this->driver = User::where('email', 'driver@example.com')->firstOrFail();
+    $this->trip = Deliverylog::firstOrFail();
+    $this->box = Tripinvoice::where('deliverylog_id', $this->trip->id)->where('is_delivered', false)->firstOrFail();
+    Invoice::whereKey($this->box->invoice_id)->update(['receiver_mobile_no' => '0917 123 4567', 'receiver_name' => 'juan dela cruz']);
+    $img = imagecreatetruecolor(120, 40);
+    imageline($img, 5, 30, 110, 8, imagecolorallocate($img, 255, 255, 255));
+    ob_start();
+    imagepng($img);
+    $this->sig = 'data:image/png;base64,'.base64_encode(ob_get_clean());
 });
 
-afterEach(function () {
-    PhotoStore::$fake = false;
-    File::deleteDirectory($this->root);
-    File::deleteDirectory(storage_path('framework/testing/buckets'));
-});
+afterEach(fn () => SignedReceipt::$fake = false);
 
-function bucketOn(string $slot = 'tmp', string $name = 'negosmart'): void
+function driverPage()
 {
-    PhotoStore::bucket($slot)->fill(['provider' => 'r2', 'account_id' => 'acc123', 'bucket' => $name, 'access_key' => 'key', 'secret' => 's3cret'])->save();
-    PhotoStore::forgetMemo();
-    expect(PhotoStore::test($slot)[0])->toBeTrue();
-    PhotoStore::forgetMemo();
+    Filament::setCurrentPanel(Filament::getPanel('delivery'));
+    test()->actingAs(test()->driver);
+
+    return Livewire::test(Dashboard::class)->call('scan', test()->box->invoice)->call('startDeliver');
 }
 
-it('saves on the server like before until a bucket is chosen', function () {
-    Storage::disk('public')->put('shipments/a.jpg', 'AAA');
-    expect(File::exists($this->root.'/public/shipments/a.jpg'))->toBeTrue()
-        ->and(PhotoFile::count())->toBe(0)
-        ->and(Storage::disk('public')->url('shipments/a.jpg'))->toEndWith('/storage/shipments/a.jpg');
+function photo(string $n = 'p.jpg')
+{
+    return UploadedFile::fake()->image($n, 800, 600);
+}
+
+it('hands over a damaged box: 2 photos, what is damaged, the receiver signs, office and receiver told', function () {
+    SmsSettings::putKey('semaphore', 'sema-key');
+    Http::fake(fn (Request $r) => Http::response([['message_id' => 1, 'status' => 'Pending']]));
+
+    $page = driverPage()
+        ->assertSet('signName', 'Juan Dela Cruz')->assertSee('Box condition')->assertSee('📄 Paper receipt')
+        ->call('setCondition', 'damaged')->assertSet('receipt', 'phone')
+        ->assertSee('Damaged: 2 photos needed')->assertSee('Damaged: the receiver signs on this phone')
+        ->set('upload', photo())->call('savePhoto')
+        ->assertSee('Take 2 photos');
+
+    // one photo is not enough
+    $page->call('confirmDelivered');
+    expect($this->box->fresh()->is_delivered)->toBeFalse();
+
+    $page->set('upload', photo('b.jpg'))->call('savePhoto')
+        ->call('toggleDamage', 'torn')->call('toggleDamage', 'crushed')
+        ->set('signName', 'Maria Dela Cruz')->set('signRel', 'Sibling')
+        ->assertSee('Ask the receiver to sign')
+        ->set('signature', $this->sig)
+        ->assertSee('Delivered · damaged · signed · 2 photos')
+        ->call('confirmDelivered')
+        ->assertSee('📄 Show the receipt to the receiver');
+
+    $box = $this->box->fresh();
+    $s = DeliverySignature::firstOrFail();
+    expect($box->is_delivered)->toBeTrue()
+        ->and($s->why)->toBe('damaged')->and($s->recipient_name)->toBe('Maria Dela Cruz')->and($s->relationship)->toBe('Sibling')
+        ->and($s->damage)->toBe(['torn', 'crushed'])->and($s->damageText())->toBe('Torn, Crushed')
+        ->and(Storage::disk('public')->exists($s->signature))->toBeTrue()
+        ->and($s->receipt_pdf)->toEndWith('.pdf')->and($s->receipt_jpg)->toEndWith('.jpg')
+        ->and($box->delivery_picture)->toHaveCount(3)->and(collect($box->delivery_picture)->last())->toBe($s->receipt_jpg);
+
+    $issue = Invoiceissue::findOrFail($s->invoiceissue_id);
+    expect($issue->boxissue->issue_type)->toBe('Damaged on delivery')->and($issue->remarks)->toContain('Torn, Crushed')->toContain('Maria Dela Cruz');
+
+    $sms = SmsMessage::where('kind', 'delivered_damaged')->firstOrFail();
+    expect($sms->message)->toContain('Maria Dela Cruz')->toContain('torn, crushed')->toContain('/r/'.$s->token)
+        ->and($s->fresh()->sms_message_id)->toBe($sms->id);
 });
 
-it('saves new photos of every disk to the chosen bucket and keeps old ones opening', function () {
-    Storage::disk('public')->put('fuel/old.jpg', 'OLD');
-    bucketOn();
-    PhotoStore::setTarget('tmp');
-    PhotoStore::forgetMemo();
+it('lets a receiver who cannot sign be written on the receipt', function () {
+    driverPage()->call('setCondition', 'damaged')
+        ->set('upload', photo())->call('savePhoto')->set('upload', photo('b.jpg'))->call('savePhoto')
+        ->call('toggleDamage', 'wet')->set('cantSign', true)->call('confirmDelivered');
 
-    Storage::disk('public')->put('fuel/new.jpg', 'NEW');
-    Storage::disk('box')->put('box-photos/2026/11/x.jpg', 'BOX');
-    Storage::disk('public')->put('logo/company.png', 'LOGO'); // logos stay on the server
-
-    expect(File::exists($this->root.'/public/fuel/new.jpg'))->toBeFalse()
-        ->and(PhotoFile::where('place', 'tmp')->pluck('path')->sort()->values()->all())->toBe(['box-photos/2026/11/x.jpg', 'fuel/new.jpg'])
-        ->and(Storage::disk('public')->get('fuel/new.jpg'))->toBe('NEW')
-        ->and(Storage::disk('public')->get('fuel/old.jpg'))->toBe('OLD')
-        ->and(Storage::disk('box')->get('box-photos/2026/11/x.jpg'))->toBe('BOX')
-        ->and(Storage::disk('public')->exists('fuel/new.jpg'))->toBeTrue()
-        ->and(Storage::disk('public')->url('fuel/new.jpg'))->toContain('/photo-storage/fake/tmp/fuel/new.jpg')
-        ->and(File::exists($this->root.'/public/logo/company.png'))->toBeTrue();
-
-    // a file upload (Filament / Livewire) goes the same way
-    Storage::disk('public')->putFileAs('unmanifested', UploadedFile::fake()->image('p.jpg'), 'p.jpg');
-    expect(PhotoStore::placeOf('public', 'unmanifested/p.jpg'))->toBe('tmp');
-
-    Storage::disk('public')->delete('fuel/new.jpg');
-    expect(PhotoFile::where('path', 'fuel/new.jpg')->exists())->toBeFalse();
+    expect(DeliverySignature::firstOrFail())->cant_sign->toBeTrue()->signature->toBeNull()
+        ->and(SignedReceipt::html(DeliverySignature::first()))->toContain('The receiver could not sign.');
 });
 
-it('keeps the photo on the server when the bucket does not answer', function () {
-    bucketOn();
-    PhotoStore::setTarget('tmp');
-    PhotoStore::bucket('tmp')->update(['bucket' => '']); // broken details: not usable
-    PhotoStore::forgetMemo();
-    Storage::disk('public')->put('fuel/z.jpg', 'Z');
-    expect(File::exists($this->root.'/public/fuel/z.jpg'))->toBeTrue();
+it('signs on the phone when there is no paper receipt, without a damage issue or text', function () {
+    $page = driverPage()->set('upload', photo())->call('savePhoto')
+        ->call('setReceipt', 'phone')->assertSee('Why no paper?')->assertSee('Left at the hub')
+        ->set('signature', $this->sig)->assertSee('Tap why there is no paper');
+    $page->call('confirmDelivered');
+    expect($this->box->fresh()->is_delivered)->toBeFalse();
+
+    $page->set('paperWhy', 'left_at_hub')->call('confirmDelivered');
+    $s = DeliverySignature::firstOrFail();
+    expect($this->box->fresh()->is_delivered)->toBeTrue()->and($s->why)->toBe('no_paper')->and($s->paper_reason)->toBe('left_at_hub')
+        ->and($s->invoiceissue_id)->toBeNull()->and(SmsMessage::where('kind', 'delivered_damaged')->exists())->toBeFalse();
 });
 
-it('moves the server photos, then switches to the real bucket and turns Temporary off', function () {
-    Storage::disk('public')->put('shipments/1.jpg', 'ONE');
-    Storage::disk('box')->put('box-photos/2026/11/2.jpg', 'TWO');
-    bucketOn();
-    PhotoStore::setTarget('tmp');
-    PhotoStore::forgetMemo();
+it('keeps the normal delivery with the paper receipt as it is', function () {
+    driverPage()->set('upload', photo())->call('savePhoto')->assertSee('The receiver signs your paper receipt, like today.')
+        ->assertSee('Delivered · 1 photo')->call('confirmDelivered');
 
-    $move = PhotoWork::startMove('tmp');
-    expect($move->total)->toBe(2);
-    PhotoWork::work(10);
-    expect($move->fresh()->status)->toBe('done')
-        ->and(File::exists($this->root.'/public/shipments/1.jpg'))->toBeFalse()
-        ->and(Storage::disk('public')->get('shipments/1.jpg'))->toBe('ONE')
-        ->and(Storage::disk('box')->get('box-photos/2026/11/2.jpg'))->toBe('TWO');
-
-    bucketOn('real', 'icargo-photos');
-    $sw = PhotoWork::startSwitch(true);
-    PhotoWork::work(10);
-    PhotoStore::forgetMemo();
-    expect($sw->fresh()->status)->toBe('done')
-        ->and(PhotoStore::target())->toBe('real')
-        ->and(PhotoStore::countIn('tmp'))->toBe(0)
-        ->and(PhotoStore::bucket('tmp')->is_off)->toBeTrue()
-        ->and(Storage::disk('public')->get('shipments/1.jpg'))->toBe('ONE')
-        ->and(PhotoStore::placeOf('box', 'box-photos/2026/11/2.jpg'))->toBe('real');
+    expect($this->box->fresh()->is_delivered)->toBeTrue()->and(DeliverySignature::count())->toBe(0);
 });
 
-it('copies the old system photos with the same path, smaller, and skips what is there', function () {
-    // the old site next to wmsv2, same database
-    $old = $this->root.'/wms';
-    File::ensureDirectoryExists($old.'/storage/app/public/photos/pod');
-    File::put($old.'/artisan', '');
-    $c = config('database.connections.'.config('database.default'));
-    File::put($old.'/.env', "APP_URL=https://wms.example.test\nDB_HOST=".($c['host'] ?? '')."\nDB_DATABASE=".($c['database'] ?? '')."\n");
-    $im = imagecreatetruecolor(2400, 1600); // noise: a big photo
-    for ($i = 0; $i < 60000; $i++) {
-        imagefilledrectangle($im, $x = random_int(0, 2390), $y = random_int(0, 1590), $x + 9, $y + 9, random_int(0, 0xFFFFFF));
-    }
-    ob_start();
-    imagejpeg($im, null, 95);
-    $img = (string) ob_get_clean();
-    expect(strlen($img))->toBeGreaterThan(400 * 1024);
-    File::put($old.'/storage/app/public/photos/pod/INV-1.jpg', $img);
-    AppSetting::put('photos.old_folder', $old);
-    DB::table('fuel_fills')->exists() || true;
-    $u = User::first();
-    DB::table('users')->where('id', $u->id)->update(['profile_picture' => 'photos/pod/INV-1.jpg']);
-    DB::table('users')->where('id', '!=', $u->id)->limit(1)->update(['profile_picture' => 'photos/pod/GONE.jpg']);
+it('fills only the blank lines of your own receipt', function () {
+    $inv = Invoice::findOrFail($this->box->invoice_id);
+    $plain = view('invoices.pdfinvoice', InvoiceController::receiptData($inv))->render();
+    expect($plain)->not->toContain('checked')->not->toContain('data:image/png');
 
-    $find = OldSystem::find();
-    expect($find['found'])->toBeTrue()->and($find['same'])->toBeTrue()
-        ->and(OldSystem::columns()->firstWhere('column', 'profile_picture'))->not->toBeNull();
+    driverPage()->call('setCondition', 'damaged')
+        ->set('upload', photo())->call('savePhoto')->set('upload', photo('b.jpg'))->call('savePhoto')
+        ->call('toggleDamage', 'torn')->set('signName', 'Maria Dela Cruz')->set('signRel', 'Sibling')->set('signature', $this->sig)
+        ->call('confirmDelivered');
+    $html = SignedReceipt::html(DeliverySignature::firstOrFail());
 
-    bucketOn();
-    $task = OldSystem::scan();
-    $byPath = $task->items()->get()->keyBy('path');
-    expect($byPath['photos/pod/INV-1.jpg']->found)->toBe('wms')
-        ->and($byPath['photos/pod/GONE.jpg']->status)->toBe('missing');
-
-    $task->update(['status' => 'running']);
-    PhotoWork::work(15);
-    $task->refresh();
-    $item = $task->items()->where('path', 'photos/pod/INV-1.jpg')->first();
-    // put in the new folders (board 67): people/…, and the record now points there
-    expect($task->status)->toBe('done')->and($item->status)->toBe('done')->and($item->checked)->toBeTrue()
-        ->and($item->size_after)->toBeLessThan($item->size_before)
-        ->and($item->new_path)->toBe('people/INV-1.jpg')
-        ->and(DB::table('users')->where('id', $u->id)->value('profile_picture'))->toBe('people/INV-1.jpg')
-        ->and(PhotoStore::placeOf('public', 'people/INV-1.jpg'))->toBe('tmp')
-        ->and(Storage::disk('public')->exists('people/INV-1.jpg'))->toBeTrue()
-        ->and(File::exists($old.'/storage/app/public/photos/pod/INV-1.jpg'))->toBeTrue(); // the old site is never touched
-
-    // copy again: nothing new
-    OldSystem::scan()->update(['status' => 'running']);
-    PhotoWork::work(5);
-    expect($task->fresh()->items()->where('path', 'photos/pod/INV-1.jpg')->value('status'))->toBe('done');
+    // the same template: same text, only the blanks filled
+    expect($html)->toContain('Acknowledgement Receipt')->toContain('STATUS OF THE BOX UPON DELIVERY')
+        ->toContain('Maria Dela Cruz')->toContain('Sibling')->toContain('Damaged: Torn. The receiver saw the damage before signing.')
+        ->toContain('data:image/png;base64,')->toContain(now()->format('M j, Y'))
+        ->and(preg_match_all('/name="sixside"\s+checked/', $html))->toBe(2)
+        ->and(preg_match_all('/name="good"\s+checked/', $html))->toBe(0);
 });
 
-it('shows the photo storage page with its tabs and saves a bucket', function () {
-    Livewire::test(PhotoStorage::class)
-        ->assertSee('Setup checklist')->assertSee('Copy from the old system')
-        ->call('setTab', 'bucket')->assertSee('New photos go to')->assertSee('Temporary bucket')
-        ->set('form.tmp.account_id', 'acc9')->set('form.tmp.bucket', 'negosmart')->set('form.tmp.access_key', 'AK')->set('form.tmp.secret', 'SEC')
-        ->call('saveBucket', 'tmp')->assertSee('Uploaded, read and deleted a test file')
-        ->call('setTarget', 'tmp')
-        ->call('turnOff', 'tmp')->assertSee('new photos still go here')
-        ->call('setTab', 'work')->assertSee('Run here');
-    expect(PhotoStore::target())->toBe('tmp')
-        ->and(PhotoStore::bucket('tmp')->secret)->toBe('SEC')
-        ->and(DB::table('storage_buckets')->value('secret'))->not->toBe('SEC'); // kept encrypted
+it('opens the signed receipt from the SMS link', function () {
+    driverPage()->set('upload', photo())->call('savePhoto')->call('setReceipt', 'phone')->set('paperWhy', 'no_more')
+        ->set('signature', $this->sig)->call('confirmDelivered');
+    $s = DeliverySignature::firstOrFail();
+    auth()->logout();
+
+    $this->get('/r/'.$s->token)->assertOk()->assertHeader('Content-Type', 'application/pdf');
+    $this->get('/r/abcdefghij')->assertNotFound();
 });
 
+it('sets the next try from the reason, and the office takes over after 3 tries', function () {
+    Carbon::setTestNow(Carbon::parse('2026-11-28 10:00')); // a Saturday: the next working day is Monday
+    $t = app(TripAssignment::class);
 
-it('saves new photos in the tidy folders, at most 200 KB', function () {
-    expect(\App\Support\Photos\Storage\PhotoFolders::dir('delivery', '0144033', '2026-11-20'))->toBe('delivery/2026/11/0144033')
-        ->and(\App\Support\Photos\Storage\PhotoFolders::dir('trucks', 'ABC 1234'))->toBe('trucks/ABC-1234');
-    $im = imagecreatetruecolor(2000, 1500);
-    for ($i = 0; $i < 40000; $i++) {
-        imagefilledrectangle($im, $x = random_int(0, 1990), $y = random_int(0, 1490), $x + 9, $y + 9, random_int(0, 0xFFFFFF));
-    }
-    ob_start();
-    imagejpeg($im, null, 92);
-    $big = (string) ob_get_clean();
-    Storage::disk('public')->put('delivery/2026/11/1/a.jpg', $big);
-    expect(strlen(Storage::disk('public')->get('delivery/2026/11/1/a.jpg')))->toBeLessThan(strlen($big))
-        ->and(strlen(Storage::disk('public')->get('delivery/2026/11/1/a.jpg')))->toBeLessThanOrEqual(320 * 1024); // pure noise; a real photo ends near 200 KB
+    $a = $t->recordFailedAttempt($this->box, $this->driver, FailedDeliveryReason::NoOneHome, null, ['gate.jpg']);
+    expect($a->next_try_on)->toStartWith('2026-11-30')->and($a->needs_office)->toBeFalse();
 
-    $box = \App\Models\Invoice::firstOrFail();
-    $p = \App\Support\Photos\BoxPhotos::store(UploadedFile::fake()->image('b.jpg', 800, 600), 'unload', $box, [], $this->admin);
-    expect($p->path)->toStartWith('scan/unload/'.now()->format('Y/m').'/'.$box->invoice.'/')
-        ->and(Storage::disk('box')->exists($p->path))->toBeTrue();
+    $b = $t->recordFailedAttempt($this->box, $this->driver, FailedDeliveryReason::Rescheduled, 'Wednesday please', [], '2026-12-02');
+    expect($b->next_try_on)->toStartWith('2026-12-02');
+
+    $c = $t->recordFailedAttempt($this->box, $this->driver, FailedDeliveryReason::NoOneHome, null, ['gate.jpg']);
+    expect($c->needs_office)->toBeTrue()->and($c->next_try_on)->toBeNull();
+
+    expect(NextTry::plan(FailedDeliveryReason::Refused, 1)['office'])->toBeTrue()
+        ->and(NextTry::plan(FailedDeliveryReason::AreaInaccessible, 1)['on']->toDateString())->toBe('2026-12-01');
+    Carbon::setTestNow();
 });
 
-it('moves the server photos into the tidy folders and changes the path in the record', function () {
-    $trip = \App\Models\Tripinvoice::firstOrFail();
-    Storage::disk('public')->put('0144033/pod.jpg', 'POD');
-    DB::table('tripinvoices')->where('id', $trip->id)->update(['delivery_picture' => json_encode(['0144033/pod.jpg']), 'delivered_at' => '2025-08-14 10:00:00']);
-    bucketOn();
-    PhotoStore::setTarget('tmp');
-    PhotoStore::forgetMemo();
+it('shows the next try when the driver cannot deliver, and the 2nd try after', function () {
+    Filament::setCurrentPanel(Filament::getPanel('delivery'));
+    $this->actingAs($this->driver);
 
-    $move = PhotoWork::startMove('tmp', true);
-    PhotoWork::work(10);
-    $new = 'delivery/2025/08/'.\App\Support\Photos\Storage\PhotoFolders::clean($trip->invoice).'/pod.jpg';
-    expect($move->fresh()->status)->toBe('done')
-        ->and(json_decode(DB::table('tripinvoices')->where('id', $trip->id)->value('delivery_picture'), true))->toBe([$new])
-        ->and(Storage::disk('public')->get($new))->toBe('POD')
-        ->and(File::exists($this->root.'/public/0144033/pod.jpg'))->toBeFalse();
+    Livewire::test(Dashboard::class)->call('scan', $this->box->invoice)->call('startMiss')
+        ->assertSee('Next try: '.NextTry::workday()->format('D M j'))
+        ->set('reason', FailedDeliveryReason::Rescheduled->value)->assertSee('Which day did they ask for?')
+        ->set('nextOn', NextTry::workday(null, 3)->toDateString())->assertSee('Next try: '.NextTry::workday(null, 3)->format('D M j'))
+        ->set('note', 'Asked for later')
+        ->call('saveMissed')
+        ->call('scan', $this->box->invoice)->assertSee('2nd try')->assertSee('Last time')->assertSee('Asked for another day');
+
+    expect(DeliveryAttempt::first()->next_try_on)->toStartWith(NextTry::workday(null, 3)->toDateString());
 });
-DISPATCH_FILE_END_38
+
+it('lists the boxes to try again for the office', function () {
+    $admin = User::where('email', 'admin@example.com')->firstOrFail();
+    $admin->assignRole('super_admin');
+    $t = app(TripAssignment::class);
+    $a = $t->recordFailedAttempt($this->box, $this->driver, FailedDeliveryReason::NoOneHome, null, ['gate.jpg']);
+    $a->update(['next_try_on' => today()->toDateString()]);
+    $other = Tripinvoice::where('deliverylog_id', $this->trip->id)->where('is_delivered', false)->where('id', '!=', $this->box->id)->firstOrFail();
+    $b = $t->recordFailedAttempt($other, $this->driver, FailedDeliveryReason::AddressNotFound, 'No such street', ['street.jpg']);
+
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $this->actingAs($admin);
+    $page = Livewire::test(Redelivery::class)
+        ->assertSee('Due today')->assertSee('Needs office')->assertSee($this->box->invoice)->assertDontSee($other->invoice)
+        ->call('setTab', 'office')->assertSee($other->invoice)->assertSee('Office decides');
+
+    $page->call('setDay', $b->id, NextTry::workday()->toDateString());
+    expect($b->fresh()->needs_office)->toBeFalse()->and($b->fresh()->next_try_on)->toStartWith(NextTry::workday()->toDateString());
+
+    $page->call('close', $a->id);
+    expect($a->fresh()->handled_at)->not->toBeNull()
+        ->and(NextTry::open()->pluck('id')->all())->toBe([$b->id]);
+});
+DISPATCH_FILE_END_29
 
 echo "▶ Updating the database (keeps your data)"
 php artisan migrate --force

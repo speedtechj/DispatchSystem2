@@ -122,6 +122,8 @@ class AppServiceProvider extends ServiceProvider
             Js::make('driver-offline', resource_path('js/driver-offline.js')),
             // Check photos: full screen with zoom, and Use photo / Retake right after a photo (board 68).
             Js::make('photo-viewer', resource_path('js/photo-viewer.js')),
+            // The receiver signs on the driver's phone (Part 44).
+            Js::make('sign-pad', resource_path('js/sign-pad.js')),
             // Maps & routes: the stops map (Leaflet 1.9.4 + OpenStreetMap), only on the pages that show it.
             // Kept in resources/vendor so the server does not need node_modules (composer runs
             // filament:upgrade, which publishes these files, before any npm step).

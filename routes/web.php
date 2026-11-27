@@ -101,3 +101,22 @@ if (app()->environment('local') && env('PHOTOS_FAKE_BUCKETS')) {
         return response(\App\Support\Photos\Storage\PhotoStore::fs($slot)->get($key) ?? abort(404), 200, ['Content-Type' => 'image/jpeg']);
     })->where('key', '.*');
 }
+
+// Part 44: the signed delivery receipt, from the link in the receiver's SMS (no sign-in; the 10-letter code is the key).
+Route::get('/r/{token}', function (string $token) {
+    $s = \App\Models\DeliverySignature::where('token', strtolower($token))->firstOrFail();
+    if (! $s->receipt_pdf || ! \Illuminate\Support\Facades\Storage::disk('public')->exists($s->receipt_pdf)) {
+        \App\Support\Deliveries\SignedReceipt::make($s);
+        $s->refresh();
+    }
+    if ($s->receipt_pdf && \Illuminate\Support\Facades\Storage::disk('public')->exists($s->receipt_pdf)) {
+        return response(\Illuminate\Support\Facades\Storage::disk('public')->get($s->receipt_pdf), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="receipt-'.($s->tripinvoice?->invoice ?? $s->invoice_id).'.pdf"',
+            'Cache-Control' => 'private, max-age=600',
+            'X-Robots-Tag' => 'noindex',
+        ]);
+    }
+
+    return response(\App\Support\Deliveries\SignedReceipt::html($s))->header('X-Robots-Tag', 'noindex');
+})->where('token', '[A-Za-z0-9]{10}')->middleware('throttle:30,1')->name('signed-receipt');
