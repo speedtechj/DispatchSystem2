@@ -10,7 +10,16 @@ use App\Models\Invoice;
 use App\Support\Photos\BoxAlbum;
 use BackedEnum;
 use Filament\Actions\Action;
+use App\Support\Ai\Ai;
+use App\Support\Ai\AiUnavailable;
+use App\Support\Ai\BoxEmailWriter;
+use App\Support\Ai\EmailLanguages;
+use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\TagsInput;
+use Filament\Forms\Components\Toggle;
+use Filament\Forms\Components\ToggleButtons;
+use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
@@ -85,9 +94,11 @@ abstract class BoxPhotosPage extends Page
         }
     }
 
+    /** Part 45: the search runs on Enter, the 🔍 button, a scan or a Recent chip, never on every key. */
     public function searchFor(string $q): void
     {
-        $this->q = $q;
+        $this->q = mb_substr(trim($q), 0, 60);
+        $this->selected = [];
         $this->updatedQ();
     }
 
@@ -107,9 +118,9 @@ abstract class BoxPhotosPage extends Page
     }
 
     /** One photo downloads as is; several come as one ZIP file. */
-    public function downloadSelected(): ?Response
+    public function downloadSelected(array $keys = []): ?Response
     {
-        $items = $this->selectedItems();
+        $items = $keys ? $this->album()->resolve(array_map('strval', $keys)) : $this->selectedItems();
         if ($items->isEmpty()) {
             Notification::make()->title('Select photos first')->warning()->send();
 
@@ -140,37 +151,90 @@ abstract class BoxPhotosPage extends Page
         return $boxes->map(fn (Invoice $b) => $b->consolidator ?? $b->container?->consolidator)->filter()->first();
     }
 
+    /** Part 45 (board 73): photos of one box (✉ on the box or in the viewer), else the selected ones. */
+    protected function emailItems(array $arguments = []): Collection
+    {
+        $keys = array_values(array_filter(array_map('strval', (array) ($arguments['keys'] ?? []))));
+
+        return $keys ? $this->album()->resolve($keys) : $this->selectedItems();
+    }
+
+    protected function plainMessage(Collection $items): string
+    {
+        $boxes = $items->pluck('invoice')->filter()->unique();
+        $bad = $items->whereIn('condition', ['damaged', 'wet', 'open'])->pluck('invoice')->unique()->filter();
+
+        return "Hello,\n\nAttached are the photos of ".($boxes->count() === 1 ? 'box '.$boxes->first() : $boxes->count().' boxes')
+            .'. Each file name starts with the invoice number.'
+            .($bad->isNotEmpty() ? "\nPlease check: ".$bad->join(', ').'.' : '')."\n\nThank you.";
+    }
+
     public function emailAction(): Action
     {
         return Action::make('email')
             ->label('Email to consolidator')
             ->icon(Heroicon::OutlinedEnvelope)
-            ->modalHeading('Email photos to consolidator')
+            ->modalHeading(function (array $arguments) {
+                $boxes = $this->emailItems($arguments)->pluck('invoice')->filter()->unique();
+
+                return 'Email photos'.($boxes->count() === 1 ? ' · '.$boxes->first() : ' · '.$boxes->count().' boxes');
+            })
             ->modalSubmitActionLabel('Send email')
-            ->modalWidth('xl')
-            ->fillForm(function () {
-                $items = $this->selectedItems();
+            ->modalWidth('3xl')
+            ->fillForm(function (array $arguments) {
+                $items = $this->emailItems($arguments);
                 $con = $this->consolidatorFor($items);
                 $boxes = $items->pluck('invoice')->filter()->unique();
-                $bad = $items->whereIn('condition', ['damaged', 'wet', 'open'])->pluck('invoice')->unique()->filter();
 
                 return [
                     'to' => array_values(array_filter([$con?->email])),
+                    'lang' => EmailLanguages::for($con?->id),
+                    'english' => false,
                     'subject' => 'Photos · '.$boxes->take(3)->join(', ').($boxes->count() > 3 ? ' +'.($boxes->count() - 3) : '').' · '.$items->count().' '.str('photo')->plural($items->count()),
-                    'message' => "Hello,\n\nAttached are the photos of ".($boxes->count() === 1 ? 'box '.$boxes->first() : $boxes->count().' boxes')
-                        .'. Each file name starts with the invoice number.'
-                        .($bad->isNotEmpty() ? "\nPlease check: ".$bad->join(', ').'.' : '')."\n\nThank you.",
+                    'message' => $this->plainMessage($items),
+                    'keys' => $items->pluck('key')->all(),
                 ];
             })
-            ->schema([
+            ->schema(fn (array $arguments) => [
                 TagsInput::make('to')->label('To')->placeholder('Add an email and press Enter')
                     ->helperText("Filled from the consolidator's email. You can add more.")
                     ->nestedRecursiveRules(['email'])->required(),
+                ToggleButtons::make('lang')->label('Language of the email')->options(EmailLanguages::options())->inline()->live()
+                    ->helperText(fn (Get $get) => in_array($get('lang'), EmailLanguages::CHECK, true)
+                        ? 'The AI writes this language less surely: read it before sending, or tick Add English below.'
+                        : 'Remembered for this consolidator.'),
+                Toggle::make('english')->label('Add English below')->inline(),
                 TextInput::make('subject')->required()->maxLength(200),
-                Textarea::make('message')->rows(6),
+                Textarea::make('message')->rows(10)
+                    ->hintAction(Action::make('aiWrite')->label('✨ Write with AI')->color('info')
+                        ->visible(fn () => Ai::switchedOn('issues'))
+                        ->action(function (Get $get, Set $set) use ($arguments) {
+                            $items = $this->emailItems($arguments)->whereIn('key', (array) $get('keys'))->values();
+                            if ($items->isEmpty()) {
+                                $items = $this->emailItems($arguments);
+                            }
+                            try {
+                                $d = BoxEmailWriter::draft($items, (string) $get('lang'), (bool) $get('english'));
+                            } catch (AiUnavailable $e) {
+                                Notification::make()->title('The AI helper is not available')->body($e->getMessage())->warning()->send();
+
+                                return;
+                            }
+                            if ($d['body'] !== '') {
+                                $set('message', $d['body']);
+                            }
+                            if ($d['subject'] !== '') {
+                                $set('subject', $d['subject']);
+                            }
+                        })),
+                CheckboxList::make('keys')->label('Photos to attach')->allowHtml()->columns(4)->bulkToggleable()
+                    ->options(fn () => $this->emailItems($arguments)->mapWithKeys(fn ($i) => [$i['key'] => '<span style="display:flex;gap:.5rem;align-items:center">'
+                        .'<img src="'.e($i['url']).'" alt="" style="width:3.4rem;height:2.6rem;object-fit:cover;border-radius:.4rem">'
+                        .'<span style="font-size:.75rem;line-height:1.2"><b>'.e($i['invoice']).'</b><br>'.e($i['label']).' · '.max(1, (int) round($i['size'] / 1024)).' KB</span></span>'])->all())
+                    ->required(),
             ])
-            ->action(function (array $data): void {
-                $items = $this->selectedItems();
+            ->action(function (array $data, array $arguments): void {
+                $items = $this->emailItems($arguments)->whereIn('key', (array) ($data['keys'] ?? []))->values();
                 if ($items->isEmpty()) {
                     Notification::make()->title('Select photos first')->warning()->send();
 
@@ -183,10 +247,12 @@ abstract class BoxPhotosPage extends Page
 
                     return;
                 }
+                $con = $this->consolidatorFor($items);
+                EmailLanguages::remember($con?->id, (string) ($data['lang'] ?? 'en'));
 
                 $log = BoxPhotoEmail::create([
                     'user_id' => Auth::id(),
-                    'consolidator_id' => $this->consolidatorFor($items)?->id,
+                    'consolidator_id' => $con?->id,
                     'recipients' => array_values($data['to']),
                     'subject' => $data['subject'],
                     'message' => $data['message'] ?? null,
@@ -242,9 +308,11 @@ abstract class BoxPhotosPage extends Page
     protected function getViewData(): array
     {
         $boxes = collect();
+        $match = null;
         if (trim($this->q) !== '') {
             $album = $this->album();
-            $boxes = $album->boxes($album->find($this->q))
+            $match = $album->match($this->q);
+            $boxes = $album->boxes($match['ids'])
                 ->filter(fn ($b) => $b['items']->contains(fn ($i) => ($this->place === '' || $i['step'] === $this->place)
                     && ($this->cond === '' || $i['condition'] === $this->cond)))
                 ->values();
@@ -254,6 +322,7 @@ abstract class BoxPhotosPage extends Page
 
         return [
             'boxes' => $boxes,
+            'match' => $match['kind'] ?? null,
             'arrange' => $this->arrange === 'all' ? 'all' : 'box',
             'days' => $boxes->flatMap(fn ($b) => $b['items'])->sortByDesc(fn ($i) => $i['at']?->timestamp ?? 0)
                 ->groupBy(fn ($i) => $i['at'] ? ($i['at']->isToday() ? 'Today · '.$i['at']->format('D d M Y') : $i['at']->format('D d M Y')) : 'No date', true),

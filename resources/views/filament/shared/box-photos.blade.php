@@ -33,20 +33,31 @@
             </div>
         </header>
 
-        <label class="ds-bp__search">
+        {{-- Part 45 (board 72): nothing is searched while typing; Enter, 🔍 Search or the scanner (it sends Enter) starts it --}}
+        <form class="ds-bp__search" x-data="{ draft: @js($q), get waiting() { return this.draft.trim() !== (this.$wire.q ?? '').trim() && this.draft.trim() !== '' } }"
+              x-init="$watch('$wire.q', (v) => draft = v ?? '')" x-on:submit.prevent="$wire.searchFor(draft)" role="search">
             <x-filament::icon icon="heroicon-o-magnifying-glass" class="h-5 w-5" />
-            <input type="search" wire:model.live.debounce.400ms="q" placeholder="Invoice, container or trip number…" autocomplete="off" autofocus aria-label="Search box photos">
+            <input type="search" x-model="draft" enterkeyhint="search" placeholder="Invoice, container or trip number…" autocomplete="off" autofocus aria-label="Search box photos">
+            <span class="rounded-lg bg-[#fff6d6] px-2.5 py-1 text-[0.75rem] font-bold whitespace-nowrap text-[#8a6400]" x-show="waiting" x-cloak>Press Enter to search</span>
             @if ($q !== '')
-                <button type="button" wire:click="clearSearch" class="ds-bp__clear" aria-label="Clear search">✕</button>
+                <button type="button" x-on:click="draft = ''; $wire.clearSearch()" class="ds-bp__clear" aria-label="Clear search">✕</button>
             @endif
-            <span class="ds-bp__hint">Type or scan</span>
-        </label>
+            <span class="ds-bp__hint" x-show="! waiting">Type or scan</span>
+            <button type="submit" class="h-10 shrink-0 rounded-xl px-4 text-[0.85rem] font-extrabold transition"
+                    x-bind:class="draft.trim().length >= 3 ? 'bg-[#0e2433] text-white dark:bg-white dark:text-[#0e2433]' : 'bg-black/5 text-black/35 dark:bg-white/10 dark:text-white/40'">🔍 Search</button>
+        </form>
 
-        @if (trim($q) === '')
+        @if ($match === 'short')
+            <section class="ds-bp__empty">
+                <span class="grid size-12 place-items-center rounded-full bg-[#fff6d6] text-xl text-[#8a6400]">↵</span>
+                <h2>Type at least 3 letters or numbers</h2>
+                <p>Short searches would show almost every box. Finish the number, then press Enter.</p>
+            </section>
+        @elseif (trim($q) === '')
             <section class="ds-bp__empty">
                 <span class="ds-bp__empty-icon"><x-filament::icon icon="heroicon-o-magnifying-glass" class="h-8 w-8" /></span>
                 <h2>Search a box to see its photos</h2>
-                <p>Type or scan an invoice number, a container number or a trip number. Photos stay hidden until you search.</p>
+                <p>Type or scan an invoice, container or trip number, then press Enter. Photos stay hidden until you search.</p>
                 @if ($recent)
                     <div class="ds-bp__recent">
                         <span>Recent</span>
@@ -92,7 +103,7 @@
             @else
                 {{-- Board 71: the photos as a gallery (rows that follow each photo), by box or all photos by day --}}
                 <div class="flex flex-wrap items-center justify-between gap-3">
-                    <p class="ds-bp__count">{{ $boxes->count() }} {{ str('box')->plural($boxes->count()) }} · {{ $photoCount }} {{ str('photo')->plural($photoCount) }} · newest first</p>
+                    <p class="ds-bp__count">@if ($match)<span @class(['mr-1.5 rounded-full px-2 py-0.5 text-[0.7rem] font-extrabold', 'bg-[#fff6d6] text-[#8a6400]' => $match === 'like', 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300' => $match !== 'like'])>{{ ['exact' => 'Exact box', 'trip' => 'Trip', 'container' => 'Container', 'like' => 'Similar numbers'][$match] ?? '' }}</span>@endif{{ $boxes->count() }} {{ str('box')->plural($boxes->count()) }} · {{ $photoCount }} {{ str('photo')->plural($photoCount) }} · newest first</p>
                     <div class="flex items-center gap-2">
                         <span class="flex h-9 rounded-full bg-(--bp-surf) p-0.5 shadow-[inset_0_0_0_1px_var(--bp-line)]" role="group" aria-label="How to show the photos">
                             <button type="button" wire:click="$set('arrange', 'box')" @class(['rounded-full px-4 text-[0.8rem] font-bold', 'bg-(--bp-pill-on) text-(--bp-pill-on-text)' => $arrange !== 'all', 'text-(--bp-text)' => $arrange === 'all'])>By box</button>
@@ -135,6 +146,14 @@
                                     <span class="ds-bp__n">{{ $b['items']->count() }} {{ str('photo')->plural($b['items']->count()) }}</span>
                                     <span class="ds-bp__who">{{ collect([$inv->receiver_name, $inv->receiver_barangay, $inv->receiver_city])->filter()->map(fn ($p) => \Illuminate\Support\Str::title($p))->join(' · ') }}</span>
                                 </button>
+
+                                {{-- Part 45 (board 73): email or download the photos of this box in one tap --}}
+                                <div class="flex flex-wrap gap-2">
+                                    <button type="button" class="inline-flex h-9 items-center gap-1.5 rounded-full bg-[#f6be00] px-4 text-[0.8rem] font-extrabold text-[#0e2433]"
+                                            x-on:click="$wire.mountAction('email', { keys: @js($b['items']->keys()->values()) })">✉ Email photos</button>
+                                    <button type="button" class="inline-flex h-9 items-center gap-1.5 rounded-full bg-(--bp-raised) px-4 text-[0.8rem] font-bold text-(--bp-text) shadow-[inset_0_0_0_1px_var(--bp-line)]"
+                                            x-on:click="$wire.downloadSelected(@js($b['items']->keys()->values()))">↓ Download</button>
+                                </div>
 
                                 <ol class="ds-bp__journey" aria-label="Where this box has been">
                                     @foreach ($b['journey'] as $j)
@@ -220,6 +239,7 @@
                         <button type="button" class="h-10 rounded-full px-4 text-[0.8rem] font-extrabold" x-show="strip.length > 1" x-on:click="play(! playing)"
                                 x-bind:class="playing ? 'bg-(--bp-gold) text-[#0e2433]' : 'bg-white/10 hover:bg-white/20'" x-text="playing ? '❚❚ Pause' : '▶ Slideshow'"></button>
                         <a class="grid size-10 place-items-center rounded-full bg-white/10 hover:bg-white/20" x-bind:href="it?.dl" x-bind:download="it?.name" aria-label="Download">⬇</a>
+                        <button type="button" class="h-10 rounded-full bg-[#f6be00] px-4 text-[0.8rem] font-extrabold text-[#0e2433]" x-on:click="const k = cur; close(); $wire.mountAction('email', { keys: [k] })">✉ Email this photo</button>
                         <button type="button" class="h-10 rounded-full px-4 text-[0.8rem] font-extrabold" x-on:click="toggle(cur)"
                                 x-bind:class="isSel(cur) ? 'bg-(--bp-gold) text-[#0e2433]' : 'bg-white/10 hover:bg-white/20'" x-text="isSel(cur) ? '✓ Selected' : 'Select'"></button>
                         <button type="button" class="grid size-10 place-items-center rounded-full bg-white/10 hover:bg-white/20" x-on:click="close()" aria-label="Close">✕</button>

@@ -35,7 +35,7 @@ class SearchinvResource extends Resource
 
     public static function table(Table $table): Table
     {
-        return SearchinvsTable::configure($table);
+        return SearchinvsTable::configure($table)->searchOnBlur(); // Part 45: search when Enter is pressed, not on every key
     }
 
     public static function getRelations(): array

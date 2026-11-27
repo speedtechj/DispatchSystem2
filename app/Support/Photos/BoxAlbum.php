@@ -62,6 +62,37 @@ class BoxAlbum
         return $this->allowed($ids);
     }
 
+    /**
+     * Part 45 (board 72): an exact box, trip or container number first; similar numbers only when nothing is exact.
+     *
+     * @return array{kind: string, ids: Collection}  kind: short | exact | trip | container | like
+     */
+    public function match(string $q): array
+    {
+        $q = trim($q);
+        if (mb_strlen($q) < 3) {
+            return ['kind' => 'short', 'ids' => collect()];
+        }
+        $exact = Invoice::query()->where('invoice', $q)->limit(20)->pluck('id');
+        if ($exact->isNotEmpty()) {
+            return ['kind' => 'exact', 'ids' => $this->allowed($exact)];
+        }
+        $trips = Deliverylog::where('trip_number', $q)->pluck('id');
+        $whTrips = Whdeliverylog::where('trip_number', $q)->pluck('id');
+        if ($trips->isNotEmpty() || $whTrips->isNotEmpty()) {
+            $ids = Tripinvoice::query()->where(fn ($t) => $t->whereIn('deliverylog_id', $trips)->orWhereIn('deliveryloghub_id', $trips))->limit(1000)->pluck('invoice_id')
+                ->merge(Whtripinvoice::query()->whereIn('whdeliverylog_id', $whTrips)->limit(1000)->pluck('invoice_id'))->filter()->unique()->values();
+
+            return ['kind' => 'trip', 'ids' => $this->allowed($ids)];
+        }
+        $cont = Invoice::query()->whereHas('container', fn ($c) => $c->where('container_no', $q))->limit(1000)->pluck('id');
+        if ($cont->isNotEmpty()) {
+            return ['kind' => 'container', 'ids' => $this->allowed($cont)];
+        }
+
+        return ['kind' => 'like', 'ids' => $this->find($q)];
+    }
+
     /** The boxes of these that this user may see. */
     public function allowed(Collection $ids): Collection
     {

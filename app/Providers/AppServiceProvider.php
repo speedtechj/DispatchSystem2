@@ -124,6 +124,8 @@ class AppServiceProvider extends ServiceProvider
             Js::make('photo-viewer', resource_path('js/photo-viewer.js')),
             // The receiver signs on the driver's phone (Part 44).
             Js::make('sign-pad', resource_path('js/sign-pad.js')),
+            // Table searches wait for Enter or the scanner (Part 45).
+            Js::make('search-enter', resource_path('js/search-enter.js')),
             // Maps & routes: the stops map (Leaflet 1.9.4 + OpenStreetMap), only on the pages that show it.
             // Kept in resources/vendor so the server does not need node_modules (composer runs
             // filament:upgrade, which publishes these files, before any npm step).

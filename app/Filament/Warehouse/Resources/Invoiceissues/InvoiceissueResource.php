@@ -41,7 +41,7 @@ class InvoiceissueResource extends Resource
 
     public static function table(Table $table): Table
     {
-        return InvoiceissuesTable::configure($table);
+        return InvoiceissuesTable::configure($table)->searchOnBlur(); // Part 45: search when Enter is pressed, not on every key
     }
 
     public static function getRelations(): array
