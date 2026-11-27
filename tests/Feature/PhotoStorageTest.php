@@ -220,3 +220,24 @@ it('moves the server photos into the tidy folders and changes the path in the re
         ->and(Storage::disk('public')->get($new))->toBe('POD')
         ->and(File::exists($this->root.'/public/0144033/pod.jpg'))->toBeFalse();
 });
+
+it('sends a bucket photo straight from the bucket and lists bucket photos without asking the bucket', function () {
+    bucketOn();
+    PhotoStore::setTarget('tmp');
+    PhotoStore::forgetMemo();
+    $box = \App\Models\Invoice::firstOrFail();
+    $p = \App\Support\Photos\BoxPhotos::store(UploadedFile::fake()->image('b.jpg', 800, 600), 'unload', $box, [], $this->admin);
+    expect(PhotoStore::placeOf('box', $p->path))->toBe('tmp');
+
+    $r = $this->get($p->url());
+    expect($r->status())->toBe(302)->and($r->headers->get('Location'))->toContain('/photo-storage/fake/tmp/');
+
+    // a delivery photo in the bucket: shown with its link, its size from the record (no call to the bucket)
+    $trip = \App\Models\Tripinvoice::where('invoice_id', $box->id)->first() ?? \App\Models\Tripinvoice::firstOrFail();
+    Storage::disk('public')->put('delivery/x/pod.jpg', str_repeat('x', 2048));
+    DB::table('tripinvoices')->where('id', $trip->id)->update(['delivery_picture' => json_encode(['delivery/x/pod.jpg']), 'is_delivered' => true, 'invoice_id' => $box->id]);
+    PhotoStore::forgetMemo();
+    $items = (new \App\Support\Photos\BoxAlbum($this->admin))->forInvoice($box->id);
+    $pod = $items->firstWhere('path', 'delivery/x/pod.jpg');
+    expect($pod)->not->toBeNull()->and($pod['url'])->toContain('/photo-storage/fake/tmp/');
+});

@@ -63,3 +63,9 @@ it('gives the full-screen viewer a strip, a slideshow and download in galleries'
     $js = file_get_contents(resource_path('js/photo-viewer.js'));
     expect($js)->toContain('dspv__strip')->toContain('▶ Slideshow')->toContain('⬇ Save');
 });
+
+it('reads the photo list again after every search, so the viewer never shows an empty photo', function () {
+    ($this->photo)('unload');
+    Livewire::test(BoxPhotos::class)->call('searchFor', $this->box->invoice)
+        ->assertSeeHtml('x-ref="bpdata"')->assertSeeHtml('get items()')->assertSee('Loading photo…');
+});

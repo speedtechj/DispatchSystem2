@@ -134,7 +134,11 @@ abstract class BoxPhotosPage extends Page
         $zip = new ZipArchive;
         $zip->open($tmp, ZipArchive::OVERWRITE);
         foreach ($items as $i) {
-            $zip->addFile(Storage::disk($i['disk'])->path($i['path']), $i['name']);
+            // Part 46: read through the disk, so photos in the bucket (R2) are in the ZIP too
+            $bytes = rescue(fn () => Storage::disk($i['disk'])->get($i['path']), null, false);
+            if ($bytes !== null) {
+                $zip->addFromString($i['name'], $bytes);
+            }
         }
         $zip->close();
 

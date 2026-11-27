@@ -4,7 +4,9 @@
 <x-filament-panels::page>
     <div class="ds-bp" wire:key="bp-{{ md5($q.'|'.$place.'|'.$cond.'|'.implode(',', array_keys($viewer))) }}"
          x-data="{
-            items: @js($viewer),
+            {{-- Part 46: the photos come from the data block below, read again after every search (never an old list) --}}
+            _raw: null, _items: {},
+            get items() { const t = this.$refs.bpdata?.textContent || '{}'; if (t !== this._raw) { this._raw = t; try { this._items = JSON.parse(t) } catch (e) { this._items = {} } } return this._items },
             cur: null, open: false, zoom: 1, playing: null, picking: false,
             sel: $wire.entangle('selected'),
             isSel(k) { return this.sel.includes(k) },
@@ -14,12 +16,13 @@
             get pos() { return this.strip.indexOf(this.cur) + 1 },
             get selSize() { const b = this.sel.reduce((s, k) => s + (this.items[k]?.size || 0), 0); return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB' },
             step(d) { const s = this.strip; const i = s.indexOf(this.cur); if (s.length) { this.cur = s[(i + d + s.length) % s.length]; this.zoom = 1 } },
-            show(k) { if (this.picking) { this.toggle(k); return } this.cur = k; this.zoom = 1; this.open = true },
+            show(k) { if (this.picking) { this.toggle(k); return } if (! this.items[k]) { return } this.cur = k; this.zoom = 1; this.open = true },
             close() { this.open = false; this.zoom = 1; this.play(false) },
             play(on) { clearInterval(this.playing); this.playing = null; if (on) this.playing = setInterval(() => this.step(1), 3000) },
             fit(e) { const i = e.target; if (i.naturalWidth && i.naturalHeight) { const r = Math.min(2.4, Math.max(0.5, i.naturalWidth / i.naturalHeight)); i.closest('[data-tile]').style.flex = Math.round(r * 100) + ' 1 ' + Math.round(r * 9.5) + 'rem' } },
          }"
          x-on:keydown.arrow-right.window="open && step(1)" x-on:keydown.arrow-left.window="open && step(-1)" x-on:keydown.escape.window="open && close()">
+        <script type="application/json" x-ref="bpdata">{!! json_encode($viewer, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) !!}</script>
 
         <header class="ds-bp__head">
             <div>
@@ -246,8 +249,9 @@
                     </div>
                     <div class="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3 sm:px-16"
                          x-data="{ sx: null }" x-on:touchstart="sx = $event.touches[0].clientX" x-on:touchend="if (sx !== null && zoom === 1) { const dx = $event.changedTouches[0].clientX - sx; if (Math.abs(dx) > 60) step(dx < 0 ? 1 : -1) } sx = null">
+                        <span class="absolute inset-0 grid place-items-center text-sm text-white/50" aria-hidden="true">Loading photo…</span>
                         <img x-bind:src="it?.src" x-bind:alt="it?.name" x-on:dblclick="zoom = zoom > 1 ? 1 : 2.5"
-                             class="max-h-full max-w-full select-none object-contain transition-transform duration-200" x-bind:style="'transform: scale(' + zoom + ')'" x-bind:class="zoom > 1 ? 'cursor-zoom-out' : 'cursor-zoom-in'">
+                             class="relative max-h-full max-w-full select-none object-contain transition-transform duration-200" x-bind:style="'transform: scale(' + zoom + ')'" x-bind:class="zoom > 1 ? 'cursor-zoom-out' : 'cursor-zoom-in'">
                         <button type="button" class="absolute left-3 top-1/2 grid size-12 -translate-y-1/2 place-items-center rounded-full bg-white/12 text-2xl hover:bg-white/25" x-show="strip.length > 1" x-on:click="step(-1)" aria-label="Previous photo">‹</button>
                         <button type="button" class="absolute right-3 top-1/2 grid size-12 -translate-y-1/2 place-items-center rounded-full bg-white/12 text-2xl hover:bg-white/25" x-show="strip.length > 1" x-on:click="step(1)" aria-label="Next photo">›</button>
                         <span class="absolute inset-x-0 bottom-0 h-1 bg-white/10" x-show="playing"><span class="block h-full w-full origin-left animate-pulse bg-(--bp-gold)"></span></span>

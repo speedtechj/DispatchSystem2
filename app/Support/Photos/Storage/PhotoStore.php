@@ -185,6 +185,38 @@ class PhotoStore
         return $place === 'server' || ! static::readable($place) ? 'server' : $place;
     }
 
+    /**
+     * Part 46: look up where many photos are with one query (a page of photos asked one by one was slow).
+     * Also keeps their size, so nobody asks the bucket for it.
+     */
+    public static function preload(string $disk, array $paths): void
+    {
+        $paths = array_values(array_unique(array_filter($paths)));
+        if ($paths === [] || ! static::any()) {
+            return;
+        }
+        static::memo();
+        foreach (array_chunk($paths, 500) as $chunk) {
+            $rows = PhotoFile::where('disk', $disk)->whereIn('path', $chunk)->get(['path', 'place', 'size'])->keyBy('path');
+            foreach ($chunk as $path) {
+                static::$memo['place'][$disk.'|'.$path] = $rows[$path]->place ?? 'server';
+                static::$memo['size'][$disk.'|'.$path] = $rows[$path]->size ?? null;
+            }
+        }
+    }
+
+    /** The size kept in photo_files (null when not known). */
+    public static function knownSize(string $disk, string $path): ?int
+    {
+        static::memo();
+        if (! array_key_exists($disk.'|'.$path, static::$memo['size'] ?? [])) {
+            static::preload($disk, [$path]);
+        }
+        $v = static::$memo['size'][$disk.'|'.$path] ?? null;
+
+        return $v === null ? null : (int) $v;
+    }
+
     /** Where a new photo goes. */
     public static function targetFor(string $disk, string $path): string
     {

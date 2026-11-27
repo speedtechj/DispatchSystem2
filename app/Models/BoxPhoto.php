@@ -131,9 +131,9 @@ class BoxPhoto extends Model
     }
 
     /** INV004521_unload_2.jpg — position among the photos of this box at this step. */
-    public function fileName(): string
+    public function fileName(?int $n = null): string
     {
-        $n = static::where('invoice_id', $this->invoice_id)->where('step', $this->step)->where('is_batch', $this->is_batch)
+        $n ??= static::where('invoice_id', $this->invoice_id)->where('step', $this->step)->where('is_batch', $this->is_batch)
             ->where('id', '<=', $this->id)->count();
         $base = $this->is_batch ? 'batch_'.str($this->reference())->slug('_') : ($this->invoice ?: 'box');
 

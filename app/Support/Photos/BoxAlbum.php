@@ -130,10 +130,22 @@ class BoxAlbum
         $attempts = DeliveryAttempt::with('user:id,first_name,last_name', 'deliverylog:id,trip_number')
             ->whereIn('invoice_id', $invoices->keys())->orderBy('created_at')->get()->groupBy('invoice_id');
 
+        // Part 46: where every photo is (server or bucket), in two queries instead of one per photo
+        \App\Support\Photos\Storage\PhotoStore::preload('box', $scan->flatten()->pluck('path')->all());
+        \App\Support\Photos\Storage\PhotoStore::preload('public', $trips->flatten()->flatMap(fn ($t) => (array) $t->delivery_picture)
+            ->merge($attempts->flatten()->flatMap(fn ($a) => (array) $a->photos))->filter()->values()->all());
+
         return $invoices->map(function (Invoice $box) use ($scan, $trips, $attempts) {
             $items = collect();
+            // file names (INV_unload_2.jpg) numbered here, not with one query per photo
+            $seq = [];
+            $nums = [];
+            foreach ($scan->get($box->id, collect())->sortBy('id') as $p) {
+                $k = $p->step.'|'.(int) $p->is_batch;
+                $nums[$p->id] = $seq[$k] = ($seq[$k] ?? 0) + 1;
+            }
             foreach ($scan->get($box->id, collect()) as $p) {
-                $items->push($this->scanItem($p));
+                $items->push($this->scanItem($p, $nums[$p->id] ?? null));
             }
 
             $missCards = collect();
@@ -215,14 +227,14 @@ class BoxAlbum
             ->filter(fn ($i) => $keys->contains($i['key']))->values();
     }
 
-    protected function scanItem(BoxPhoto $p): array
+    protected function scanItem(BoxPhoto $p, ?int $n = null): array
     {
         return [
             'key' => 'p:'.$p->id, 'kind' => 'scan', 'step' => $p->step,
             'label' => BoxPhoto::SHORT[$p->step] ?? $p->step,
             'condition' => $p->condition, 'note' => $p->note,
             'ref' => $p->reference(), 'place' => $p->place(), 'who' => $p->user?->full_name, 'at' => $p->taken_at,
-            'url' => $p->url(), 'download' => $p->downloadUrl(), 'name' => $p->fileName(),
+            'url' => $p->url(), 'download' => $p->downloadUrl(), 'name' => $n ? $p->fileName($n) : $p->fileName(),
             'disk' => 'box', 'path' => $p->path, 'size' => (int) $p->size,
             'invoice' => $p->invoice, 'photo' => $p,
         ];
@@ -231,9 +243,14 @@ class BoxAlbum
     protected function publicItem(string $key, Invoice $box, string $step, string $path, int $n, int $of, array $meta): ?array
     {
         $disk = Storage::disk('public');
-        if (! $disk->exists($path)) {
+        // Part 46: a photo in the bucket is not asked for (one slow call to R2 per photo); a photo on this server is checked here.
+        $place = \App\Support\Photos\Storage\PhotoStore::placeOf('public', $path);
+        if ($place === 'server' && ! Storage::disk('public')->exists($path)) {
             return null;
         }
+        $size = $place === 'server'
+            ? (int) rescue(fn () => $disk->size($path), 0, false)
+            : (int) (\App\Support\Photos\Storage\PhotoStore::knownSize('public', $path) ?? 180 * 1024);
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION)) ?: 'jpg';
 
         return [
@@ -242,7 +259,7 @@ class BoxAlbum
             'condition' => null, 'note' => $meta['note'], 'n' => $n, 'of' => $of,
             'ref' => $meta['ref'], 'place' => null, 'who' => $meta['who'], 'at' => $meta['at'],
             'url' => $disk->url($path), 'download' => $disk->url($path), 'name' => $box->invoice.'_'.$step.'_'.$n.'.'.$ext,
-            'disk' => 'public', 'path' => $path, 'size' => (int) rescue(fn () => $disk->size($path), 0, false),
+            'disk' => 'public', 'path' => $path, 'size' => $size,
             'invoice' => $box->invoice, 'photo' => null,
         ];
     }
