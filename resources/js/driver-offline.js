@@ -532,7 +532,12 @@
         state.online = true; render();
         const changed = await flush();
         // back on the full app: reload it so its numbers include what was just sent
-        if (!document.getElementById('dso-shell') && changed) setTimeout(() => location.reload(), 900);
+        // Board 68: never while a box sheet or a photo is open; it reloads once they are closed.
+        if (!document.getElementById('dso-shell') && changed) {
+            const busy = () => document.querySelector('.ds-sa__sheet, .dspv, input[type=file]:focus');
+            const later = () => (busy() ? setTimeout(later, 1500) : location.reload());
+            setTimeout(later, 900);
+        }
         else render();
     });
 

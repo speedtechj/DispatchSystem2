@@ -134,7 +134,7 @@
                                         <div class="ds-slider__card">
                                             <div class="ds-slider__photo">
                                                 @if ($photo['url'])
-                                                    <a href="{{ $photo['url'] }}" target="_blank" rel="noopener"><img src="{{ $photo['url'] }}" alt="Photo of {{ $photo['title'] }}" loading="lazy"></a>
+                                                    <a data-ds-photo href="{{ $photo['url'] }}" target="_blank" rel="noopener"><img src="{{ $photo['url'] }}" alt="Photo of {{ $photo['title'] }}" loading="lazy"></a>
                                                 @else
                                                     <span class="ds-board__photo-none">No photo</span>
                                                 @endif

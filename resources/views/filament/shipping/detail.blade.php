@@ -237,9 +237,9 @@
             @endif
             @if ($s->seal_photo || $s->port_receipt || ($s->pickup_photo ?? null))
                 <span class="ds-sp__pics">
-                    @if ($s->seal_photo)<a href="{{ $s->fileUrl($s->seal_photo) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->seal_photo) }}" alt="Seal"><small>Seal</small></a>@endif
-                    @if ($s->port_receipt)<a href="{{ $s->fileUrl($s->port_receipt) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->port_receipt) }}" alt="Port receipt"><small>{{ $s->mode === 'lcl' ? 'Forwarder receipt' : 'Port receipt' }}</small></a>@endif
-                    @if ($s->pickup_photo ?? null)<a href="{{ $s->fileUrl($s->pickup_photo) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->pickup_photo) }}" alt="Release at pick-up"><small>Release at pick-up</small></a>@endif
+                    @if ($s->seal_photo)<a data-ds-photo href="{{ $s->fileUrl($s->seal_photo) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->seal_photo) }}" alt="Seal"><small>Seal</small></a>@endif
+                    @if ($s->port_receipt)<a data-ds-photo href="{{ $s->fileUrl($s->port_receipt) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->port_receipt) }}" alt="Port receipt"><small>{{ $s->mode === 'lcl' ? 'Forwarder receipt' : 'Port receipt' }}</small></a>@endif
+                    @if ($s->pickup_photo ?? null)<a data-ds-photo href="{{ $s->fileUrl($s->pickup_photo) }}" target="_blank" rel="noopener"><img src="{{ $s->fileUrl($s->pickup_photo) }}" alt="Release at pick-up"><small>Release at pick-up</small></a>@endif
                 </span>
             @endif
         </section>

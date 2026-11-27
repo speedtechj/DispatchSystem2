@@ -377,25 +377,28 @@
                             <input type="text" class="ds-sa__note-in" wire:model.blur="note" maxlength="250" placeholder="What is wrong? (optional)" aria-label="What is wrong?">
                         @endif
 
-                        <div class="ds-sa__photos ds-snap" wire:ignore
+                        <div class="ds-sa__photos ds-snap" wire:ignore data-ds-gallery
                              x-data="{ rendered: @js($shots->pluck('id')->all()), inv: {{ (int) $box->id }}, code: @js($box->invoice), busy: false, msg: null,
                                 mine() { return window.dsPhotos ? window.dsPhotos.of(this.inv).filter((i) => ! this.rendered.includes(i.serverId)) : [] },
                                 info() { return { invoiceId: this.inv, code: this.code, condition: $wire.condition, note: $wire.note, url: @js(route('scan.box-photo')) } },
                                 async here() {
                                     if (this.busy || ! window.dsScanner) return; this.busy = true; this.msg = null;
                                     const f = await window.dsScanner.snapPhoto();
+                                    if (! f) { this.busy = false; this.msg = 'The camera is off. Use Camera app.'; return; }
+                                    // Board 68: the photo big first · Retake or Use photo (used by itself after the set seconds)
+                                    const said = window.dsPhotoCheck ? await window.dsPhotoCheck(f, { auto: {{ (int) \App\Models\AppSetting::get('photos.auto_use', 3) }} }) : 'use';
                                     this.busy = false;
-                                    if (! f) { this.msg = 'The camera is off. Use Camera app.'; return; }
-                                    window.dsPhotos.add(f, this.info());
+                                    if (said === 'use') window.dsPhotos.add(f, this.info());
+                                    else this.msg = 'Not saved. Aim and tap Take photo here again.';
                                 },
                                 app() { window.dispatchEvent(new CustomEvent('ds-scanner', { detail: { release: true } })); this.$refs.file.value = ''; this.$refs.file.click() },
                                 picked(e) { const f = e.target.files[0]; if (f) window.dsPhotos.add(f, this.info()) } }">
                             <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="picked($event)">
                             @foreach ($shots as $shot)
-                                <a href="{{ $shot->url() }}" target="_blank" class="ds-sa__shot"><img src="{{ $shot->url() }}" alt="Photo {{ $loop->iteration }}"><b class="is-done">✓</b></a>
+                                <span class="ds-sa__shot" data-ds-photo="{{ $shot->url() }}"><img src="{{ $shot->url() }}" alt="Photo {{ $loop->iteration }}"><b class="is-done">✓</b></span>
                             @endforeach
                             <template x-for="it in mine()" :key="it.id">
-                                <span class="ds-sa__shot" x-on:click="it.failed && window.dsPhotos.retry(it)"><img :src="it.thumb" alt="Photo"><b :class="{ 'is-done': it.done, 'is-bad': it.failed }" x-text="it.failed ? 'Retry' : (it.done ? '✓' : it.p + '%')"></b></span>
+                                <span class="ds-sa__shot" x-bind:data-ds-photo="it.failed ? null : it.thumb" x-on:click="it.failed && window.dsPhotos.retry(it)"><img :src="it.thumb" alt="Photo"><b :class="{ 'is-done': it.done, 'is-bad': it.failed }" x-text="it.failed ? 'Retry' : (it.done ? '✓' : it.p + '%')"></b></span>
                             </template>
                             <button type="button" class="ds-snap__here" x-on:click="here()" x-bind:disabled="busy">📷 Take photo here</button>
                             <button type="button" class="ds-snap__app" x-on:click="app()">Camera app<small>close-up</small></button>

@@ -33,6 +33,9 @@ class BoxPhotoSettings extends Page
 
     public int $keepMonths = 6;
 
+    /** Board 68: Scan app · the photo is used by itself after … seconds (0 = wait for Use photo). */
+    public int $autoUse = 3;
+
     public static function canAccess(): bool
     {
         return (bool) Auth::user()?->hasRole('super_admin');
@@ -51,17 +54,20 @@ class BoxPhotoSettings extends Page
         }
         $this->batchEvery = $s->batch_every;
         $this->keepMonths = $s->keep_months;
+        $this->autoUse = (int) \App\Models\AppSetting::get('photos.auto_use', 3);
     }
 
     public function save(): void
     {
-        $this->validate(['batchEvery' => 'required|integer|min:0|max:500', 'keepMonths' => 'required|integer|min:0|max:120']);
+        $this->validate(['batchEvery' => 'required|integer|min:0|max:500', 'keepMonths' => 'required|integer|min:0|max:120', 'autoUse' => 'required|integer|min:0|max:10']);
 
         PhotoSetting::current()->update([
             'places' => array_map('boolval', array_intersect_key($this->places, BoxPhoto::STEPS)),
             'batch_every' => $this->batchEvery,
             'keep_months' => $this->keepMonths,
         ]);
+
+        \App\Models\AppSetting::put('photos.auto_use', $this->autoUse);
 
         Notification::make()->title('Box photo settings saved')->success()->send();
     }

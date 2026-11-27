@@ -54,7 +54,7 @@
         <section class="ds-fu__fills">
             @forelse ($fills as $f)
                 <article class="ds-board__panel ds-fu__fill" wire:key="fill-{{ $f->id }}">
-                    @if ($f->receiptUrl())<a href="{{ $f->receiptUrl() }}" target="_blank" rel="noopener" class="ds-fu__photo"><img src="{{ $f->receiptUrl() }}" alt="Receipt" loading="lazy"></a>@else<span class="ds-fu__photo is-none">no photo</span>@endif
+                    @if ($f->receiptUrl())<a data-ds-photo href="{{ $f->receiptUrl() }}" target="_blank" rel="noopener" class="ds-fu__photo"><img src="{{ $f->receiptUrl() }}" alt="Receipt" loading="lazy"></a>@else<span class="ds-fu__photo is-none">no photo</span>@endif
                     <span class="ds-fu__fillmain">
                         <b>{{ $f->truck?->plate_no }} · {{ $f->station ?: 'Station not read' }}</b>
                         <small>{{ $f->filled_at->format('M j, g:i A') }} · {{ $f->driver?->full_name ?? '—' }}{{ $f->trip ? ' · trip '.$f->trip->trip_number : '' }}</small>

@@ -23,7 +23,7 @@
                                     <strong>{{ $event['title'] }}</strong>
                                     @if ($event['detail']) <span>{{ $event['detail'] }}</span> @endif
                                     @if ($event['photo'] ?? null)
-                                        <a href="{{ $event['photo'] }}" target="_blank" rel="noopener"><img src="{{ $event['photo'] }}" alt="Photo: {{ $event['title'] }}" loading="lazy"></a>
+                                        <a data-ds-photo href="{{ $event['photo'] }}" target="_blank" rel="noopener"><img src="{{ $event['photo'] }}" alt="Photo: {{ $event['title'] }}" loading="lazy"></a>
                                     @endif
                                 </span>
                                 <time class="ds-board__muted">

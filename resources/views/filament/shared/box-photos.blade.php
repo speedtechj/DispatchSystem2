@@ -5,7 +5,7 @@
     <div class="ds-bp" wire:key="bp-{{ md5($q.'|'.$place.'|'.$cond.'|'.implode(',', array_keys($viewer))) }}"
          x-data="{
             items: @js($viewer),
-            cur: @js(array_key_first($viewer)),
+            cur: null, open: false, zoom: 1, playing: null, picking: false,
             sel: $wire.entangle('selected'),
             isSel(k) { return this.sel.includes(k) },
             toggle(k) { this.sel = this.isSel(k) ? this.sel.filter(x => x !== k) : [...this.sel, k] },
@@ -13,9 +13,13 @@
             get strip() { const inv = this.it?.invoice; return Object.keys(this.items).filter(k => this.items[k].invoice === inv) },
             get pos() { return this.strip.indexOf(this.cur) + 1 },
             get selSize() { const b = this.sel.reduce((s, k) => s + (this.items[k]?.size || 0), 0); return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB' },
-            step(d) { const s = this.strip; const i = s.indexOf(this.cur); if (s.length) this.cur = s[(i + d + s.length) % s.length] },
+            step(d) { const s = this.strip; const i = s.indexOf(this.cur); if (s.length) { this.cur = s[(i + d + s.length) % s.length]; this.zoom = 1 } },
+            show(k) { if (this.picking) { this.toggle(k); return } this.cur = k; this.zoom = 1; this.open = true },
+            close() { this.open = false; this.zoom = 1; this.play(false) },
+            play(on) { clearInterval(this.playing); this.playing = null; if (on) this.playing = setInterval(() => this.step(1), 3000) },
+            fit(e) { const i = e.target; if (i.naturalWidth && i.naturalHeight) { const r = Math.min(2.4, Math.max(0.5, i.naturalWidth / i.naturalHeight)); i.closest('[data-tile]').style.flex = Math.round(r * 100) + ' 1 ' + Math.round(r * 9.5) + 'rem' } },
          }"
-         x-on:keydown.arrow-right.window="step(1)" x-on:keydown.arrow-left.window="step(-1)">
+         x-on:keydown.arrow-right.window="open && step(1)" x-on:keydown.arrow-left.window="open && step(-1)" x-on:keydown.escape.window="open && close()">
 
         <header class="ds-bp__head">
             <div>
@@ -86,15 +90,41 @@
                     <p>Check the number, or clear the filters. Photos appear here when staff add them while scanning, and when drivers deliver.</p>
                 </section>
             @else
-                <p class="ds-bp__count">{{ $boxes->count() }} {{ str('box')->plural($boxes->count()) }} · {{ $photoCount }} {{ str('photo')->plural($photoCount) }} · newest first</p>
+                {{-- Board 71: the photos as a gallery (rows that follow each photo), by box or all photos by day --}}
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <p class="ds-bp__count">{{ $boxes->count() }} {{ str('box')->plural($boxes->count()) }} · {{ $photoCount }} {{ str('photo')->plural($photoCount) }} · newest first</p>
+                    <div class="flex items-center gap-2">
+                        <span class="flex h-9 rounded-full bg-(--bp-surf) p-0.5 shadow-[inset_0_0_0_1px_var(--bp-line)]" role="group" aria-label="How to show the photos">
+                            <button type="button" wire:click="$set('arrange', 'box')" @class(['rounded-full px-4 text-[0.8rem] font-bold', 'bg-(--bp-pill-on) text-(--bp-pill-on-text)' => $arrange !== 'all', 'text-(--bp-text)' => $arrange === 'all'])>By box</button>
+                            <button type="button" wire:click="$set('arrange', 'all')" @class(['rounded-full px-4 text-[0.8rem] font-bold', 'bg-(--bp-pill-on) text-(--bp-pill-on-text)' => $arrange === 'all', 'text-(--bp-text)' => $arrange !== 'all'])>All photos</button>
+                        </span>
+                        <button type="button" x-on:click="picking = ! picking" class="h-9 rounded-full px-4 text-[0.8rem] font-extrabold transition"
+                                x-bind:class="picking ? 'bg-(--bp-gold) text-[#0e2433]' : 'bg-(--bp-surf) text-(--bp-text) shadow-[inset_0_0_0_1px_var(--bp-line)]'"
+                                x-text="picking ? 'Done' : '☑ Select'"></button>
+                    </div>
+                </div>
 
-                <div class="ds-bp__layout">
-                    <div class="ds-bp__list">
+                @if ($arrange === 'all')
+                    <div class="flex flex-col gap-5">
+                        @foreach ($days as $day => $list)
+                            <section class="flex flex-col gap-2" wire:key="day-{{ $day }}">
+                                <h3 class="m-0 flex items-baseline gap-2 text-[0.95rem] font-extrabold">{{ $day }} <small class="text-[0.78rem] font-semibold text-(--bp-muted)">{{ $list->count() }} {{ str('photo')->plural($list->count()) }}</small></h3>
+                                <div class="flex flex-wrap gap-2">
+                                    @foreach ($list as $i)
+                                        @include('filament.partials.box-photo-thumb', ['key' => $i['key'], 'i' => $i])
+                                    @endforeach
+                                    <span class="grow-[1000]" aria-hidden="true"></span>
+                                </div>
+                            </section>
+                        @endforeach
+                    </div>
+                @else
+                    <div class="flex flex-col gap-3.5">
                         @foreach ($boxes as $b)
                             @php($inv = $b['invoice'])
                             @php($scan = $b['items']->where('kind', 'scan'))
-                            <article class="ds-bp__box" wire:key="box-{{ $inv->id }}" x-bind:class="{ 'is-open': it && it.invoice === @js($inv->invoice) }">
-                                <button type="button" class="ds-bp__boxhead" x-on:click="cur = @js($b['items']->keys()->last())">
+                            <article class="ds-bp__box" wire:key="box-{{ $inv->id }}">
+                                <button type="button" class="ds-bp__boxhead" x-on:click="show(@js($b['items']->keys()->last()))">
                                     <span class="ds-bp__inv">{{ $inv->invoice }}</span>
                                     @if ($b['worst'])
                                         <span @class(['ds-bp__chip', 'is-'.$condColor[$b['worst']]])>{{ $conditions[$b['worst']] }}</span>
@@ -114,10 +144,14 @@
                                 </ol>
 
                                 @if ($scan->isNotEmpty())
-                                    <div class="ds-bp__thumbs">
-                                        @foreach ($scan as $key => $i)
-                                            @include('filament.partials.box-photo-thumb', ['key' => $key, 'i' => $i])
-                                        @endforeach
+                                    <div class="flex flex-col gap-2 rounded-2xl bg-(--bp-raised) p-2.5">
+                                        <span class="flex items-center gap-2 px-0.5 text-[0.82rem]"><b>Scan photos</b><small class="text-(--bp-muted)">{{ $scan->count() }} {{ str('photo')->plural($scan->count()) }} · warehouse and hub</small></span>
+                                        <div class="flex flex-wrap gap-2">
+                                            @foreach ($scan as $key => $i)
+                                                @include('filament.partials.box-photo-thumb', ['key' => $key, 'i' => $i])
+                                            @endforeach
+                                            <span class="grow-[1000]" aria-hidden="true"></span>
+                                        </div>
                                     </div>
                                 @endif
 
@@ -130,10 +164,11 @@
                                         </div>
                                         @if ($a['note'])<p class="ds-bp__cardnote">“{{ $a['note'] }}”</p>@endif
                                         @if ($a['keys'])
-                                            <div class="ds-bp__thumbs">
+                                            <div class="flex flex-wrap gap-2">
                                                 @foreach ($a['keys'] as $key)
                                                     @include('filament.partials.box-photo-thumb', ['key' => $key, 'i' => $b['items'][$key]])
                                                 @endforeach
+                                                <span class="grow-[1000]" aria-hidden="true"></span>
                                             </div>
                                         @endif
                                     </div>
@@ -147,10 +182,11 @@
                                             <em>{{ count($d['keys']) }} {{ str('photo')->plural(count($d['keys'])) }}</em>
                                         </div>
                                         @if ($d['keys'])
-                                            <div class="ds-bp__thumbs">
+                                            <div class="flex flex-wrap gap-2">
                                                 @foreach ($d['keys'] as $key)
                                                     @include('filament.partials.box-photo-thumb', ['key' => $key, 'i' => $b['items'][$key]])
                                                 @endforeach
+                                                <span class="grow-[1000]" aria-hidden="true"></span>
                                             </div>
                                         @else
                                             <p class="ds-bp__cardnote">No delivery photo was taken.</p>
@@ -160,37 +196,48 @@
                             </article>
                         @endforeach
                     </div>
+                @endif
 
-                    <aside class="ds-bp__viewer" x-show="it" x-cloak>
-                        <div class="ds-bp__big">
-                            <img x-bind:src="it?.src" x-bind:alt="it?.name">
-                            <span class="ds-bp__pos" x-text="pos + ' / ' + strip.length"></span>
-                            <button type="button" class="ds-bp__nav is-prev" x-on:click="step(-1)" aria-label="Previous photo" x-show="strip.length > 1">‹</button>
-                            <button type="button" class="ds-bp__nav is-next" x-on:click="step(1)" aria-label="Next photo" x-show="strip.length > 1">›</button>
-                        </div>
-                        <div class="ds-bp__strip">
-                            <template x-for="k in strip" x-bind:key="k">
-                                <button type="button" x-on:click="cur = k" x-bind:class="{ 'is-on': k === cur }"><img x-bind:src="items[k].src" alt=""></button>
-                            </template>
-                        </div>
-                        <div class="ds-bp__vhead">
-                            <span><strong x-text="it?.title"></strong><small x-text="it?.ref"></small></span>
-                            <span class="ds-bp__chip" x-show="it?.condLabel" x-text="it?.condLabel" x-bind:class="{ 'is-ok': it?.cond === 'good', 'is-bad': it?.cond === 'damaged', 'is-wet': it?.cond === 'wet', 'is-warn': it?.cond === 'open' }"></span>
-                        </div>
-                        <blockquote class="ds-bp__quote" x-show="it?.note" x-text="it?.note"></blockquote>
-                        <dl class="ds-bp__meta">
-                            <dt>Taken by</dt><dd x-text="it?.who || '—'"></dd>
-                            <dt>When</dt><dd x-text="it?.when"></dd>
-                            <dt>File</dt><dd class="is-mono" x-text="it?.name"></dd>
-                        </dl>
-                        <div class="ds-bp__vactions">
-                            <a x-bind:href="it?.dl" x-bind:download="it?.name">↓ Download</a>
-                            <button type="button" x-on:click="toggle(cur)" x-text="isSel(cur) ? '✓ Selected' : 'Select'"></button>
-                        </div>
+                {{-- Board 71 C: full-screen viewer with a strip of the box's photos, slideshow, zoom, download --}}
+                <div class="fixed inset-0 z-[60] flex flex-col bg-[#05090d] text-[#eef3f6]" x-show="open" x-cloak x-transition.opacity
+                     x-effect="document.documentElement.style.overflow = open ? 'hidden' : ''" role="dialog" aria-modal="true" aria-label="Photo">
+                    <div class="flex flex-wrap items-center gap-2 px-4 py-3 sm:px-6">
+                        <span class="flex min-w-0 flex-1 flex-col">
+                            <strong class="truncate text-[0.98rem]" x-text="it?.title"></strong>
+                            <small class="truncate text-[0.78rem] text-white/65" x-text="[it?.ref, it?.when, it?.who].filter(Boolean).join(' · ')"></small>
+                        </span>
+                        <span class="ds-bp__chip" x-show="it?.condLabel" x-text="it?.condLabel" x-bind:class="{ 'is-ok': it?.cond === 'good', 'is-bad': it?.cond === 'damaged', 'is-wet': it?.cond === 'wet', 'is-warn': it?.cond === 'open' }"></span>
+                        <span class="rounded-full bg-white/10 px-3 py-1 text-[0.75rem] font-extrabold tabular-nums" x-text="pos + ' / ' + strip.length"></span>
+                        <button type="button" class="grid size-10 place-items-center rounded-full bg-white/10 hover:bg-white/20" x-on:click="zoom = zoom >= 2.5 ? 1 : zoom + 0.75" aria-label="Zoom">🔍</button>
+                        <button type="button" class="h-10 rounded-full px-4 text-[0.8rem] font-extrabold" x-show="strip.length > 1" x-on:click="play(! playing)"
+                                x-bind:class="playing ? 'bg-(--bp-gold) text-[#0e2433]' : 'bg-white/10 hover:bg-white/20'" x-text="playing ? '❚❚ Pause' : '▶ Slideshow'"></button>
+                        <a class="grid size-10 place-items-center rounded-full bg-white/10 hover:bg-white/20" x-bind:href="it?.dl" x-bind:download="it?.name" aria-label="Download">⬇</a>
+                        <button type="button" class="h-10 rounded-full px-4 text-[0.8rem] font-extrabold" x-on:click="toggle(cur)"
+                                x-bind:class="isSel(cur) ? 'bg-(--bp-gold) text-[#0e2433]' : 'bg-white/10 hover:bg-white/20'" x-text="isSel(cur) ? '✓ Selected' : 'Select'"></button>
+                        <button type="button" class="grid size-10 place-items-center rounded-full bg-white/10 hover:bg-white/20" x-on:click="close()" aria-label="Close">✕</button>
+                    </div>
+                    <div class="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3 sm:px-16"
+                         x-data="{ sx: null }" x-on:touchstart="sx = $event.touches[0].clientX" x-on:touchend="if (sx !== null && zoom === 1) { const dx = $event.changedTouches[0].clientX - sx; if (Math.abs(dx) > 60) step(dx < 0 ? 1 : -1) } sx = null">
+                        <img x-bind:src="it?.src" x-bind:alt="it?.name" x-on:dblclick="zoom = zoom > 1 ? 1 : 2.5"
+                             class="max-h-full max-w-full select-none object-contain transition-transform duration-200" x-bind:style="'transform: scale(' + zoom + ')'" x-bind:class="zoom > 1 ? 'cursor-zoom-out' : 'cursor-zoom-in'">
+                        <button type="button" class="absolute left-3 top-1/2 grid size-12 -translate-y-1/2 place-items-center rounded-full bg-white/12 text-2xl hover:bg-white/25" x-show="strip.length > 1" x-on:click="step(-1)" aria-label="Previous photo">‹</button>
+                        <button type="button" class="absolute right-3 top-1/2 grid size-12 -translate-y-1/2 place-items-center rounded-full bg-white/12 text-2xl hover:bg-white/25" x-show="strip.length > 1" x-on:click="step(1)" aria-label="Next photo">›</button>
+                        <span class="absolute inset-x-0 bottom-0 h-1 bg-white/10" x-show="playing"><span class="block h-full w-full origin-left animate-pulse bg-(--bp-gold)"></span></span>
+                    </div>
+                    <blockquote class="mx-4 my-0 rounded-lg border-l-3 border-(--bp-gold) bg-white/6 px-3 py-2 text-[0.85rem] italic sm:mx-6" x-show="it?.note" x-text="it?.note"></blockquote>
+                    <div class="flex gap-2 overflow-x-auto px-4 py-3 sm:px-6" x-show="strip.length > 1">
+                        <template x-for="k in strip" x-bind:key="k">
+                            <button type="button" x-on:click="cur = k; zoom = 1" class="h-14 w-20 shrink-0 overflow-hidden rounded-md transition"
+                                    x-bind:class="k === cur ? 'opacity-100 ring-3 ring-(--bp-gold)' : 'opacity-45 hover:opacity-80'"><img x-bind:src="items[k].src" alt="" class="size-full object-cover" loading="lazy"></button>
+                        </template>
+                    </div>
+                    <div class="flex items-center justify-between gap-3 border-t border-white/10 px-4 py-2.5 text-[0.75rem] text-white/55 sm:px-6">
+                        <span class="truncate font-mono" x-text="it?.name"></span>
+                        <span class="hidden sm:inline">Swipe or ‹ › · double-tap or 🔍 to zoom · Esc to close</span>
                         @if (auth()->user()?->hasRole('super_admin'))
-                            <button type="button" class="ds-bp__del" x-show="it?.scan" x-on:click="$wire.mountAction('delete', { key: cur })">Delete this photo</button>
+                            <button type="button" class="text-(--bp-bad) underline" x-show="it?.scan" x-on:click="close(); $wire.mountAction('delete', { key: cur })">Delete this photo</button>
                         @endif
-                    </aside>
+                    </div>
                 </div>
             @endif
         @endif

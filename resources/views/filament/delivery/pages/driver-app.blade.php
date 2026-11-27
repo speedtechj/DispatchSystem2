@@ -4,6 +4,7 @@
     $user = auth()->user();
     $initials = mb_strtoupper(mb_substr($user?->first_name ?? '', 0, 1).mb_substr($user?->last_name ?? '', 0, 1)) ?: '·';
     $photoJs = "{ busy: false, failed: false, pct: 0,
+        view(i, urls) { window.dsPhotoViewer && window.dsPhotoViewer.open(urls, i, { onDelete: (k) => \$wire.removePhoto(k), onRetake: (k) => \$wire.removePhoto(k).then(() => this.take()) }) },
         take() { this.failed = false; window.dispatchEvent(new CustomEvent('ds-scanner', { detail: { release: true } })); this.\$refs.file.value = ''; this.\$refs.file.click() },
         async send(e) {
             const files = [...e.target.files]; if (! files.length) return;
@@ -303,10 +304,13 @@
                 <div class="ds-sa__sheet" wire:key="deliver-{{ $box->id }}">
                     <span class="ds-sa__grab"></span>
                     <span class="ds-dr__sheethead"><small>{{ $box->invoice }} · {{ \Illuminate\Support\Str::title($box->invdata?->receiver_name) }}</small><strong>Proof of delivery</strong><span>Take as many photos as you need: the house, the box at the door, the receiver.</span></span>
-                    <div class="ds-dr__grid" x-data="{{ $photoJs }}">
+                    @if ($otherCode)
+                        <div class="ds-dr__other" role="status"><span><b>Another box read: {{ $otherCode }}</b><small>This delivery stays open.</small></span><button type="button" wire:click="openOther">Open it</button><button type="button" class="is-x" wire:click="$set('otherCode', null)" aria-label="Stay on this box">✕</button></div>
+                    @endif
+                    <div class="ds-dr__grid is-big" x-data="{{ $photoJs }}">
                         <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
                         @foreach ($photoUrls as $i => $url)
-                            <span class="ds-dr__proof" wire:key="ph-{{ $i }}-{{ md5($url) }}"><img src="{{ $url }}" alt="Photo {{ $i + 1 }}"><b>{{ $i + 1 }}</b><button type="button" wire:click="removePhoto({{ $i }})" aria-label="Remove photo {{ $i + 1 }}">✕</button></span>
+                            <span class="ds-dr__proof" wire:key="ph-{{ $i }}-{{ md5($url) }}"><img src="{{ $url }}" alt="Photo {{ $i + 1 }}" x-on:click="view({{ $i }}, @js(array_values($photoUrls)))"><b>{{ $i + 1 }} / {{ count($photoUrls) }}</b><em x-on:click="view({{ $i }}, @js(array_values($photoUrls)))">⤢ Open</em><button type="button" wire:click="removePhoto({{ $i }})" aria-label="Remove photo {{ $i + 1 }}">✕</button></span>
                         @endforeach
                         <button type="button" class="ds-dr__add" x-on:click="take()" x-bind:disabled="busy">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
@@ -355,10 +359,13 @@
                         </div>
                     @endif
                     <input type="text" class="ds-sa__note-in" wire:model.blur="note" maxlength="500" placeholder="{{ $reasonCase?->notePrompt() ?? 'Note' }}{{ $reasonCase?->requiresNote() ? '' : ' (optional)' }}" aria-label="Note">
+                    @if ($otherCode)
+                        <div class="ds-dr__other" role="status"><span><b>Another box read: {{ $otherCode }}</b><small>This box stays open.</small></span><button type="button" wire:click="openOther">Open it</button><button type="button" class="is-x" wire:click="$set('otherCode', null)" aria-label="Stay on this box">✕</button></div>
+                    @endif
                     <div class="ds-sa__photos" x-data="{{ $photoJs }}">
                         <input type="file" accept="image/*" capture="environment" x-ref="file" class="hidden" x-on:change="send($event)">
                         @foreach ($photoUrls as $i => $url)
-                            <span class="ds-sa__shot ds-dr__proof is-small"><img src="{{ $url }}" alt=""><button type="button" wire:click="removePhoto({{ $i }})" aria-label="Remove photo">✕</button></span>
+                            <span class="ds-sa__shot ds-dr__proof is-small"><img src="{{ $url }}" alt="Photo {{ $i + 1 }}" x-on:click="view({{ $i }}, @js(array_values($photoUrls)))"><button type="button" wire:click="removePhoto({{ $i }})" aria-label="Remove photo">✕</button></span>
                         @endforeach
                         @if (count($photoUrls) < 3)
                             <button type="button" class="ds-sa__addphoto" x-on:click="take()" x-bind:disabled="busy">

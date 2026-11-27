@@ -38,7 +38,7 @@
             @if ($attempt->photos)
                 <div class="ds-attempts__photos">
                     @foreach ($attempt->photos as $photo)
-                        <a href="{{ Storage::disk('public')->url($photo) }}" target="_blank" rel="noopener">
+                        <a data-ds-photo href="{{ Storage::disk('public')->url($photo) }}" target="_blank" rel="noopener">
                             <img src="{{ Storage::disk('public')->url($photo) }}" alt="Photo from this delivery">
                         </a>
                     @endforeach

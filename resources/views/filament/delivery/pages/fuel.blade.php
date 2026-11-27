@@ -49,7 +49,7 @@
         {{-- ============ 2. check ============ --}}
         @if ($step === 'check')
             @if ($receiptUrl)
-                <a href="{{ $receiptUrl }}" target="_blank" rel="noopener" class="ds-fd__thumb"><img src="{{ $receiptUrl }}" alt="Receipt"><span>{{ $aiRead ? '✨ Read from the photo · check it' : 'Type what the receipt says' }}</span></a>
+                <a data-ds-photo href="{{ $receiptUrl }}" target="_blank" rel="noopener" class="ds-fd__thumb"><img src="{{ $receiptUrl }}" alt="Receipt"><span>{{ $aiRead ? '✨ Read from the photo · check it' : 'Type what the receipt says' }}</span></a>
             @endif
             @if ($wrongFuel)
                 <div class="ds-fd__warn is-bad">⛽ This truck uses <b>{{ $truck->fuel_type }}</b>, the receipt says <b>{{ $f['fuel_type'] }}</b>. Check the receipt, or tell the office right away.</div>

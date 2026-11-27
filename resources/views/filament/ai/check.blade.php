@@ -44,7 +44,7 @@
 
         @if ($cur)
             <section class="ds-ai__card ds-ai__detail" wire:key="sel-{{ $cur->id }}">
-                <a href="{{ $cur->url() }}" target="_blank" rel="noopener" class="ds-ai__photo"><img src="{{ $cur->url() }}" alt="Photo of box {{ $cur->invoice }}"><span>{{ \App\Models\Ai\AiPhotoCheck::stepLabel($cur->step) }}</span></a>
+                <a data-ds-photo href="{{ $cur->url() }}" target="_blank" rel="noopener" class="ds-ai__photo"><img src="{{ $cur->url() }}" alt="Photo of box {{ $cur->invoice }}"><span>{{ \App\Models\Ai\AiPhotoCheck::stepLabel($cur->step) }}</span></a>
                 <div class="ds-ai__detail-head"><b>Box {{ $cur->invoice }}</b><small>{{ $cur->created_at->format('M j, g:i A') }}</small></div>
                 <div class="ds-ai__said"><span class="ds-ai__badge">AI</span><span><b>{{ $cur->label() }} · {{ $cur->confidence }}% sure</b><small>{{ $cur->note ?: '—' }}</small></span></div>
                 @if ($cur->source === 'scan')<p class="ds-board__muted">Worker marked it <b>{{ ucfirst($cur->worker_said ?: 'good') }}</b>.</p>@endif

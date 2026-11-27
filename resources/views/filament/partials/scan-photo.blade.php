@@ -40,7 +40,7 @@
             @if ($shots->isNotEmpty())
                 <div class="ds-ph__shots">
                     @foreach ($shots as $shot)
-                        <a href="{{ $shot->url() }}" target="_blank" title="{{ $shot->fileName() }}"><img src="{{ $shot->url() }}" alt="Photo {{ $loop->iteration }} of {{ $shot->invoice }}" loading="lazy"></a>
+                        <a data-ds-photo href="{{ $shot->url() }}" target="_blank" title="{{ $shot->fileName() }}"><img src="{{ $shot->url() }}" alt="Photo {{ $loop->iteration }} of {{ $shot->invoice }}" loading="lazy"></a>
                     @endforeach
                     <span>{{ $shots->count() }} {{ str('photo')->plural($shots->count()) }} saved</span>
                 </div>

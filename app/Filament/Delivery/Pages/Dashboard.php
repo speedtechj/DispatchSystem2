@@ -66,6 +66,9 @@ class Dashboard extends BaseDashboard
     /** The scanned number while asking Which one? */
     public ?string $whichCode = null;
 
+    /** Board 68: another box was read while a delivery was open; the open sheet stays. */
+    public ?string $otherCode = null;
+
     /** Photos already uploaded for the open sheet (paths on the public disk). */
     #[Locked]
     public array $photos = [];
@@ -128,7 +131,18 @@ class Dashboard extends BaseDashboard
     public function closeSheet(): void
     {
         $this->deleteUnusedPhotos();
-        $this->reset('boxId', 'sheet', 'wrongText', 'photos', 'upload', 'reason', 'note', 'whichIds', 'whichCode');
+        $this->reset('boxId', 'sheet', 'wrongText', 'photos', 'upload', 'reason', 'note', 'whichIds', 'whichCode', 'otherCode');
+    }
+
+    /** Board 68: the driver chose to leave the open delivery and open the other box that was read. */
+    public function openOther(): void
+    {
+        $code = $this->otherCode;
+        $this->otherCode = null;
+        if ($code) {
+            $this->closeSheet();
+            $this->scan($code);
+        }
     }
 
     /** Board 62: the RoRo driver pressed the next step (Leaving for the port, On the ship, Off the ship, Arrived at a hub). */
@@ -166,6 +180,18 @@ class Dashboard extends BaseDashboard
     {
         $code = trim(preg_replace('/[\x00-\x1F\x7F]+/u', '', $code));
         if ($code === '') {
+            return;
+        }
+
+        // Board 68: a box read by accident never closes a delivery that is being done.
+        if (in_array($this->sheet, ['deliver', 'miss'], true) && ($open = $this->box())) {
+            $same = strcasecmp($code, (string) $open->invoice) === 0
+                || strcasecmp($code, (string) $open->invdata?->invoice) === 0;
+            if (! $same) {
+                $this->otherCode = $code;
+                $this->dispatch('driver-app-buzz', ok: false);
+            }
+
             return;
         }
 

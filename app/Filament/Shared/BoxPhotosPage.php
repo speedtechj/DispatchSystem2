@@ -59,6 +59,10 @@ abstract class BoxPhotosPage extends Page
     #[Url]
     public string $cond = '';
 
+    /** Board 71: 'box' = a card for each box, 'all' = one gallery of all photos by day. */
+    #[Url]
+    public string $arrange = 'box';
+
     /** @var list<string> keys like p:12, d:5:0, a:3:1 */
     public array $selected = [];
 
@@ -250,6 +254,9 @@ abstract class BoxPhotosPage extends Page
 
         return [
             'boxes' => $boxes,
+            'arrange' => $this->arrange === 'all' ? 'all' : 'box',
+            'days' => $boxes->flatMap(fn ($b) => $b['items'])->sortByDesc(fn ($i) => $i['at']?->timestamp ?? 0)
+                ->groupBy(fn ($i) => $i['at'] ? ($i['at']->isToday() ? 'Today · '.$i['at']->format('D d M Y') : $i['at']->format('D d M Y')) : 'No date', true),
             'photoCount' => $items->count(),
             'viewer' => $items->mapWithKeys(fn ($i) => [$i['key'] => [
                 'src' => $i['url'], 'dl' => $i['download'], 'name' => $i['name'], 'invoice' => $i['invoice'],

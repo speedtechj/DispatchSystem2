@@ -111,7 +111,7 @@
                                         <strong>{{ $area['boxes'] }}</strong>
                                         <span>{{ trans_choice('{1} 1 stop|[2,*] :count stops', $area['stops']->count(), ['count' => $area['stops']->count()]) }}</span>
                                     </span>
-                                    <x-filament::icon icon="heroicon-m-chevron-down" class="ds-driver__chev h-5 w-5" x-bind:class="{ 'is-open': open === @js($area['key']) }" />
+                                    <x-filament::icon icon="heroicon-m-chevron-down" class="ds-driver__chev h-5 w-5" x-bind:class="{ 'is-open': open === {{ \Illuminate\Support\Js::from($area['key']) }} }" />
                                 </button>
                                 <div x-show="open === @js($area['key'])" x-collapse class="ds-driver__stops">
                                     @foreach ($area['stops'] as $stop)
@@ -146,7 +146,7 @@
                     @foreach ($delivered as $box)
                         <div class="ds-driver__done-row">
                             @if ($box['photo'])
-                                <a href="{{ $box['photo'] }}" target="_blank" rel="noopener"><img src="{{ $box['photo'] }}" alt="Delivery photo for {{ $box['invoice'] }}"></a>
+                                <a data-ds-photo href="{{ $box['photo'] }}" target="_blank" rel="noopener"><img src="{{ $box['photo'] }}" alt="Delivery photo for {{ $box['invoice'] }}"></a>
                             @else
                                 <span class="ds-driver__nophoto" aria-hidden="true"><x-filament::icon icon="heroicon-o-camera" class="h-5 w-5" /></span>
                             @endif

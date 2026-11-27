@@ -16,6 +16,7 @@
             <div class="ds-gm__grid">
                 <label class="ds-gm__field"><span>Batch photo reminder every … boxes (0 = off)</span><input type="number" min="0" wire:model="batchEvery"></label>
                 <label class="ds-gm__field"><span>Keep photos for … months (0 = keep forever)</span><input type="number" min="0" wire:model="keepMonths"></label>
+                <label class="ds-gm__field"><span>Scan app: use the photo by itself after … seconds (0 = wait for Use photo)</span><input type="number" min="0" max="10" wire:model="autoUse"></label>
             </div>
             <p class="ds-board__muted">Used now: {{ number_format($count) }} photos · {{ number_format($bytes / 1048576, 1) }} MB. Photos are made smaller (about 200 KB) before upload. Photos of a box with an open Invoice Issue are never deleted.</p>
         </section>
