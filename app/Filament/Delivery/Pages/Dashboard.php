@@ -728,7 +728,7 @@ class Dashboard extends BaseDashboard
             'reasons' => FailedDeliveryReason::cases(),
             'reasonCase' => $reasonCase = FailedDeliveryReason::tryFrom((string) $this->reason),
             'tryNo' => $tryNo = $box ? $box->deliveryAttempts()->count() + 1 : 1,
-            'lastTry' => $box && $tryNo > 1 ? $box->latestDeliveryAttempt()->with('user:id,full_name')->first() : null,
+            'lastTry' => $box && $tryNo > 1 ? $box->latestDeliveryAttempt()->with('user')->first() : null,
             'nextPlan' => $box && $reasonCase && $this->sheet === 'miss' ? \App\Support\Deliveries\NextTry::plan($reasonCase, $tryNo, $this->nextOn) : null,
             'nextChoices' => $this->sheet === 'miss' ? \App\Support\Deliveries\NextTry::choices() : [],
             'damageList' => \App\Models\DeliverySignature::DAMAGE,

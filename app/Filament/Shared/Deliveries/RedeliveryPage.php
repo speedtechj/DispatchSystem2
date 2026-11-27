@@ -87,7 +87,7 @@ class RedeliveryPage extends Page
 
     protected function getViewData(): array
     {
-        $all = NextTry::open()->with(['invoice:id,invoice,receiver_name,receiver_barangay,receiver_city,receiver_mobile_no', 'user:id,full_name', 'deliverylog:id,trip_number'])
+        $all = NextTry::open()->with(['invoice:id,invoice,receiver_name,receiver_barangay,receiver_city,receiver_mobile_no', 'user', 'deliverylog:id,trip_number'])
             ->orderBy('next_try_on')->orderBy('id')->get();
         $tries = DeliveryAttempt::whereIn('invoice_id', $all->pluck('invoice_id'))->selectRaw('invoice_id, count(*) n')->groupBy('invoice_id')->pluck('n', 'invoice_id');
         $rows = $all->filter(fn ($a) => NextTry::tab($a) === $this->tab)->values();
