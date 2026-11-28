@@ -231,3 +231,80 @@ it('turns the hold off with its rule', function () {
     app(TripAssignment::class)->markDelivered($this->box, ['d.jpg'], $this->driver);
     expect(ConnectorEvent::sole()->state)->toBe('ready');
 });
+
+it('adds our standard statuses: theirs where similar, ours where missing, then maps and saves', function () {
+    pairLink();
+    $list = [
+        ['id' => 6, 'description' => 'Unloaded in Philippine Warehouse', 'branch_id' => 2, 'is_active' => 1],
+        ['id' => 7, 'description' => 'Loaded to Truck for Delivery', 'branch_id' => 2, 'is_active' => 1],
+        ['id' => 15, 'description' => 'Delivered', 'branch_id' => 2, 'is_active' => 1],
+    ];
+    Http::fake([
+        '*/api/v1/statuses' => function (Request $r) use (&$list) {
+            if ($r->method() === 'GET') {
+                return Http::response(['ph_branch_id' => 2, 'statuses' => $list, 'mapping' => []]);
+            }
+            $out = [];
+            foreach ($r['statuses'] as $i => $s) {
+                $id = 58 + $i;
+                $list[] = ['id' => $id, 'description' => $s['name'], 'branch_id' => 2, 'is_active' => 1];
+                $out[] = ['name' => $s['name'], 'key' => $s['key'], 'id' => $id, 'result' => 'added'];
+            }
+
+            return Http::response(['added' => count($out), 'statuses' => $out], 201);
+        },
+        '*/api/v1/mapping' => Http::response(['saved' => 15, 'retried' => 0]),
+    ]);
+    \App\Support\Connectors\Sender::refreshStatuses(ConnectorLink::sole());
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $this->actingAs($this->admin);
+
+    $page = Livewire::test(ConsolidatorConnections::class, ['con' => $this->con->id])->set('tab', 'map')
+        ->call('openStandard')->assertSee('Add our standard statuses')->assertSee('Already there · #15');
+    $rows = collect($page->instance()->standardRows())->keyBy('code');
+    expect($rows['ds.unloaded']['choice'])->toBe('theirs')->and($rows['ds.unloaded']['similar']['id'])->toBe(6)
+        ->and($rows['ds.delivered']['choice'])->toBe('exact')
+        ->and($rows['ds.waiting_next_try']['choice'])->toBe('ours');
+
+    $page->call('setStd', 'ds.load.1', 'ours')->call('addStandard');
+    Http::assertSent(fn (Request $r) => $r->method() === 'POST' && str_ends_with($r->url(), '/api/v1/statuses')
+        && collect($r['statuses'])->pluck('name')->contains('Out for delivery')
+        && ! collect($r['statuses'])->pluck('name')->contains('Delivered')
+        && ! collect($r['statuses'])->pluck('name')->contains('Arrived at Philippine Warehouse'));
+    $m = ConnectorLink::sole()->mappings()->pluck('trackstatus_id', 'key');
+    expect($m['ds.unloaded'])->toBe(6)->and($m['ds.delivered'])->toBe(15)->and($m['ds.delivered_damaged'])->toBe(15)
+        ->and($m['ds.load.1'])->toBeGreaterThanOrEqual(58)->and($m['ds.back_to_hub.3'])->toBe($m['ds.back_to_hub.2']);
+    Http::assertSent(fn (Request $r) => $r->method() === 'PUT');
+});
+
+it('shows the GRANT line when their connector may not add statuses', function () {
+    pairLink(['statuses' => ['ph_branch_id' => 2, 'list' => [['id' => 15, 'name' => 'Delivered', 'code' => null, 'branch_id' => 2, 'active' => true]], 'mapping' => []]]);
+    Http::fake(['*/api/v1/statuses' => Http::response(['message' => 'No INSERT', 'grant' => "GRANT INSERT ON `cms`.`trackstatuses` TO 'dc'@'localhost';"], 403)]);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $this->actingAs($this->admin);
+    Livewire::test(ConsolidatorConnections::class, ['con' => $this->con->id])->set('tab', 'map')
+        ->call('openStandard')->call('addStandard')->assertSet('stdGrant', "GRANT INSERT ON `cms`.`trackstatuses` TO 'dc'@'localhost';")
+        ->assertSee('GRANT INSERT ON');
+    expect(ConnectorLink::sole()->mappings()->count())->toBe(0);
+});
+
+it('asks to update an old connector that cannot add statuses', function () {
+    pairLink(['statuses' => ['ph_branch_id' => 2, 'list' => [['id' => 15, 'name' => 'Delivered', 'code' => null, 'branch_id' => 2, 'active' => true]], 'mapping' => []]]);
+    Http::fake(['*/api/v1/statuses' => Http::response(['message' => 'Not Found'], 404)]);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $this->actingAs($this->admin);
+    Livewire::test(ConsolidatorConnections::class, ['con' => $this->con->id])->set('tab', 'map')
+        ->call('openStandard')->call('addStandard')->assertNotified('Update their connector first');
+});
+
+it('hides the place rows until asked, and says which address failed', function () {
+    pairLink(['statuses' => ['ph_branch_id' => 2, 'list' => [['id' => 15, 'name' => 'Delivered', 'code' => null, 'branch_id' => 2, 'active' => true]], 'mapping' => []]]);
+    \App\Models\Warehouse::query()->first()?->update(['name' => 'Zamboanga Test Warehouse']);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    $this->actingAs($this->admin);
+    Livewire::test(ConsolidatorConnections::class, ['con' => $this->con->id])->set('tab', 'map')
+        ->assertDontSee('Zamboanga Test Warehouse')->call('togglePlaces')->assertSee('Zamboanga Test Warehouse');
+
+    expect(\App\Support\Connectors\Client::short('cURL error 6: Could not resolve host: x.test (see https://curl.se)', 'https://x.test/api/v1/pair'))
+        ->toContain('x.test was not found (DNS)')->toContain('[cURL 6: Could not resolve host: x.test');
+});

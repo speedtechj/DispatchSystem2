@@ -34,7 +34,7 @@ class Client
                 'dispatch_name' => (string) config('app.name', 'Dispatch System'),
             ]);
         } catch (\Illuminate\Http\Client\ConnectionException $e) {
-            throw new RuntimeException(static::short($e->getMessage()), 0, $e);
+            throw new RuntimeException(static::short($e->getMessage(), static::base($url)), 0, $e);
         }
         if ($res->status() !== 201) {
             throw new RuntimeException($res->json('message') ?: 'The connector answered HTTP '.$res->status());
@@ -83,27 +83,32 @@ class Client
                 default => $req->withBody($body, 'application/json')->send($method, $url),
             };
         } catch (\Illuminate\Http\Client\ConnectionException $e) {
-            throw new RuntimeException(static::short($e->getMessage()), 0, $e);
+            throw new RuntimeException(static::short($e->getMessage(), $url), 0, $e);
         }
         if ($res->status() === 401) {
             throw new RuntimeException('The connector refused our token or signature: '.($res->json('message') ?: 'HTTP 401'));
         }
         if (! $res->successful() && $res->status() !== 503) {
-            throw new RuntimeException($res->json('message') ?: 'The connector answered HTTP '.$res->status());
+            throw new ConnectorError($res->json('message') ?: 'The connector answered HTTP '.$res->status().' for '.parse_url($url, PHP_URL_PATH), $res->status(), $res->json() ?: []);
         }
 
         return $res;
     }
 
-    /** A cURL error in plain words. */
-    public static function short(string $error): string
+    /** A cURL error in plain words, with the address that was tried and the original reason. */
+    public static function short(string $error, ?string $url = null): string
     {
-        return match (true) {
-            str_contains($error, 'cURL error 6') => 'The connector address was not found (DNS)',
-            str_contains($error, 'cURL error 7') => 'Could not connect to the connector (server down or port closed)',
-            str_contains($error, 'cURL error 28') => 'The connector did not answer in time',
-            str_contains($error, 'cURL error 35'), str_contains($error, 'cURL error 60') => 'HTTPS problem on the connector (certificate)',
-            default => mb_substr($error, 0, 160),
+        $host = $url ? (parse_url($url, PHP_URL_HOST) ?: $url) : 'the connector';
+        $why = match (true) {
+            str_contains($error, 'cURL error 6') => "$host was not found (DNS): this server cannot look up that name yet",
+            str_contains($error, 'cURL error 7') => "Could not connect to $host (server down or port closed)",
+            str_contains($error, 'cURL error 28') => "$host did not answer in time",
+            str_contains($error, 'cURL error 60'), str_contains($error, 'cURL error 35') => "HTTPS problem on $host: its certificate is not trusted from this server (often the chain, the CA bundle, is missing)",
+            default => null,
         };
+        preg_match('/cURL error (\d+): ([^(]{0,120})/', $error, $m);
+        $raw = $m ? ' [cURL '.$m[1].': '.trim($m[2]).']' : '';
+
+        return $why ? $why.$raw : mb_substr($error, 0, 200);
     }
 }

@@ -34,7 +34,30 @@ class Codes
         'ds.waiting_next_try' => ['Waiting at hub for next try', 'Delivery', null, 'hold'],
         'ds.delivered' => ['Delivered', 'Delivery', null, 'hold'],
         'ds.delivered_damaged' => ['Delivered · damaged (signed)', 'Delivery', null, 'hold'],
-        'ds.correction' => ['Correction (undo, no earlier status)', 'Other', null, 'now'],
+        'ds.correction' => ['Correction (rarely used: an undo when nothing was sent before)', 'Other', null, 'now'],
+    ];
+
+    /**
+     * Dispatch System's standard status names (board 85): written for the customer,
+     * the same at every consolidator. "Add our standard statuses" adds the missing ones.
+     * Delivered · damaged is plain "Delivered" for the customer.
+     */
+    public const STANDARD = [
+        'ds.unloaded' => 'Arrived at Philippine Warehouse',
+        'ds.transfer' => 'In transit to provincial hub',
+        'ds.return_to_warehouse' => 'Returned to warehouse',
+        'ds.to_port' => 'Preparing for inter-island shipment',
+        'ds.sailing' => 'Shipped to island (in transit by sea)',
+        'ds.arrived_port' => 'Arrived at island port',
+        'ds.partner_hub' => 'Arrived at local hub',
+        'ds.load.1' => 'Out for delivery',
+        'ds.load.2' => 'Out for delivery (2nd attempt)',
+        'ds.load.3' => 'Out for delivery (3rd attempt)',
+        'ds.back_to_hub.2' => 'Delivery rescheduled',
+        'ds.back_to_hub.3' => 'Delivery rescheduled',
+        'ds.waiting_next_try' => 'Waiting for next delivery schedule',
+        'ds.delivered' => 'Delivered',
+        'ds.delivered_damaged' => 'Delivered',
     ];
 
     public static function label(string $code, ?string $place = null): string
@@ -60,9 +83,12 @@ class Codes
     /** Places for a place kind (the rows of the mapping table). @return list<string> */
     public static function places(?string $kind): array
     {
-        static $memo = [];
+        static $memo = [], $app = null;
         if ($kind === null) {
             return [];
+        }
+        if ($app !== spl_object_id(app())) { // a new app (worker restart, test) reads them again
+            [$memo, $app] = [[], spl_object_id(app())];
         }
 
         return $memo[$kind] ??= match ($kind) {

@@ -161,12 +161,52 @@
                         <span class="rounded-full bg-[#d64236]/12 px-3 py-1 text-[12.5px] font-extrabold text-[#d64236]">{{ $nEmpty }} need mapping</span>
                         <span class="rounded-full bg-slate-100 px-3 py-1 text-[12.5px] font-extrabold text-slate-500">{{ $nSkip }} not sent</span>
                         <span class="ml-auto flex flex-wrap gap-2">
+                            <button type="button" wire:click="openStandard" class="h-9 rounded-lg bg-[#0e2433] px-3.5 text-[13px] font-extrabold text-white">＋ Add our standard statuses</button>
+                            <x-filament::button color="gray" size="sm" wire:click="acceptAll">✓ Accept all suggestions</x-filament::button>
                             <x-filament::button color="gray" size="sm" wire:click="refreshStatuses">↻ Read their statuses</x-filament::button>
-                            <x-filament::button color="gray" size="sm" wire:click="suggestAll">✨ Suggest all empty</x-filament::button>
                             <x-filament::button color="gray" size="sm" wire:click="clearAll" wire:confirm="Clear the whole mapping? Nothing is saved until you press Save.">Clear all</x-filament::button>
                             <x-filament::button size="sm" wire:click="saveMapping">Save mapping{{ $draftChanged ? ' •' : '' }}</x-filament::button>
                         </span>
                     </div>
+                    @if ($stdOpen)
+                        <div class="flex flex-col gap-3 rounded-xl bg-[#f6f8fa] p-4 ring-1 ring-slate-200 dark:bg-white/5 dark:ring-white/10">
+                            <b class="text-[14.5px]">＋ Add our standard statuses · preview, nothing changes until you press Add</b>
+                            <small class="text-[12.5px] text-slate-600"><b>Theirs</b> = keep using their similar status (their customers keep seeing what they know). <b>Ours (new)</b> = add Dispatch System's standard name to their CMS, the same at every consolidator. A name that is exactly the same is always theirs, never added twice. Only adds: their old statuses and the old rows of every box are never changed.</small>
+                            <div class="overflow-x-auto rounded-xl bg-white ring-1 ring-slate-200 dark:bg-transparent">
+                                <div class="min-w-[760px]">
+                                    <div class="grid grid-cols-[1fr_1.1fr_1.5fr] bg-[#f6f8fa] px-4 py-2 text-[12px] font-bold text-slate-500 dark:bg-white/5"><span>Our event</span><span>Standard name</span><span>Use</span></div>
+                                    @foreach ($std as $s)
+                                        <div class="grid grid-cols-[1fr_1.1fr_1.5fr] items-center gap-2 border-t border-slate-100 px-4 py-1.5 text-[13px] dark:border-white/5" wire:key="std-{{ $s['code'] }}">
+                                            <span class="text-slate-600">{{ $s['label'] }}</span><b>{{ $s['name'] }}</b>
+                                            <span class="flex flex-wrap items-center gap-1.5">
+                                                @if ($s['choice'] === 'exact')
+                                                    <span class="rounded-full bg-[#17895e]/12 px-2.5 py-0.5 text-[11.5px] font-extrabold text-[#17895e]">Already there · #{{ $s['exact']['id'] }}</span>
+                                                @else
+                                                    @if ($s['similar'])
+                                                        <button type="button" wire:click="setStd('{{ $s['code'] }}', 'theirs')" @class(['h-8 rounded-lg px-2.5 text-[12px] font-bold', 'bg-[#0e2433] text-white' => $s['choice'] === 'theirs', 'bg-white ring-1 ring-slate-200 dark:bg-white/5' => $s['choice'] !== 'theirs'])>Theirs: #{{ $s['similar']['id'] }} {{ \Illuminate\Support\Str::limit($s['similar']['name'], 34) }}</button>
+                                                    @endif
+                                                    <button type="button" wire:click="setStd('{{ $s['code'] }}', 'ours')" @class(['h-8 rounded-lg px-2.5 text-[12px] font-bold', 'bg-[#0e2433] text-white' => $s['choice'] === 'ours', 'bg-white ring-1 ring-slate-200 dark:bg-white/5' => $s['choice'] !== 'ours'])>Ours (new)</button>
+                                                @endif
+                                            </span>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </div>
+                            @php($nAdd = collect($std)->where('choice', 'ours')->pluck('name')->unique()->count())
+                            <div class="flex flex-wrap items-center gap-3">
+                                <span class="flex-1 text-[13px] text-slate-600">Adds <b>{{ $nAdd }}</b> new {{ $nAdd === 1 ? 'status' : 'statuses' }} to their Philippines list (active), uses {{ count($std) - collect($std)->where('choice', 'ours')->count() }} of theirs, then maps and saves everything. Their staff will see the new names in their CMS too.</span>
+                                <x-filament::button color="gray" size="sm" wire:click="openStandard">Cancel</x-filament::button>
+                                <x-filament::button wire:click="addStandard" wire:loading.attr="disabled">{{ $nAdd ? 'Add '.$nAdd.' and map' : 'Map to theirs' }}</x-filament::button>
+                            </div>
+                            @if ($stdGrant)
+                                <div class="flex flex-col gap-1.5 rounded-xl bg-[#fff6d6] px-4 py-3 ring-1 ring-[#e7c766]">
+                                    <b class="text-[13.5px] text-[#8a6400]">Their connector may not add statuses yet (no INSERT on trackstatuses)</b>
+                                    <span class="text-[12.5px] text-[#8a6400]">Their IT runs this once as the MySQL admin (Plesk → Databases → phpMyAdmin → SQL, or plesk db), then press Add again:</span>
+                                    <code class="select-all rounded-lg bg-white px-3 py-2 font-mono text-[12.5px] ring-1 ring-[#e7c766] dark:bg-black/30">{{ $stdGrant }}</code>
+                                </div>
+                            @endif
+                        </div>
+                    @endif
                     <small class="text-[12.5px] text-slate-500">1) Tap a row on the left. 2) Tap their status on the right, or a ✨ suggestion. A place row left empty uses the "any place" row. "Needs mapping": those statuses wait at the connector and nothing is lost; they go when you save.</small>
 
                     <div class="grid items-start gap-5 2xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
@@ -179,19 +219,21 @@
                                         <button type="button" wire:click="selectRow('{{ $r['key'] }}')" wire:key="m-{{ $r['key'] }}"
                                             @class(['grid w-full grid-cols-[1.25fr_0.8fr_1.55fr_104px] items-center gap-2 border-t border-slate-100 px-4 py-2 text-left text-[13px] dark:border-white/5',
                                                 'bg-[#fff6d6] ring-2 ring-inset ring-[#f6be00]' => $sel && $sel['key'] === $r['key'],
-                                                'bg-[#d64236]/4' => ! ($sel && $sel['key'] === $r['key']) && ! $r['set'] && ! $r['place']])>
+                                                'bg-[#d64236]/4' => ! ($sel && $sel['key'] === $r['key']) && ! $r['set'] && ! $r['place'] && $r['tag'] !== 'Optional'])>
                                             <b>{{ $r['label'] }}</b>
                                             <span class="text-slate-500">{{ $r['place'] ?? 'any' }}</span>
-                                            <span @class(['truncate', 'text-[#d64236]' => ! $r['set'] && ! $r['place'], 'text-slate-400' => ! $r['set'] && $r['place'], 'text-slate-500 line-through' => $r['skip']])>{{ $r['their'] ?? ($r['place'] ? '(same as any place)' : '— choose their status —') }}</span>
+                                            <span @class(['truncate', 'text-[#d64236]' => ! $r['set'] && ! $r['place'] && $r['tag'] !== 'Optional', 'text-slate-400' => ! $r['set'] && $r['place'], 'text-slate-500 line-through' => $r['skip']])>{{ $r['their'] ?? ($r['place'] ? '(same as any place)' : '— choose their status —') }}</span>
                                             <span class="flex justify-end">@if ($r['set'] || ! $r['place'])<span @class(['whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-extrabold',
                                                 'bg-[#fff6d6] text-[#8a6400]' => $r['tag'] === 'Suggested',
                                                 'bg-[#17895e]/12 text-[#17895e]' => $r['tag'] === 'Saved' || $r['tag'] === 'On their side',
-                                                'bg-[#e8f1fb] text-[#2f6fb0]' => $r['tag'] === 'Changed',
+                                                'bg-[#e8f1fb] text-[#2f6fb0]' => in_array($r['tag'], ['Changed', 'Accepted', 'Standard'], true),
                                                 'bg-[#d64236]/12 text-[#d64236]' => $r['tag'] === 'Needs mapping',
+                                                'bg-slate-100 text-slate-500' => $r['tag'] === 'Optional',
                                                 ])>{{ $r['tag'] }}</span>@endif</span>
                                         </button>
                                     @endforeach
                                 @endforeach
+                                <button type="button" wire:click="togglePlaces" class="flex w-full items-center gap-2 border-t border-slate-100 bg-[#f6f8fa] px-4 py-2.5 text-left text-[13px] font-bold dark:border-white/5 dark:bg-white/5">{{ $showPlaces ? '▾ Hide places' : '▸ Show places' }} ({{ $placeCount }}{{ $placesSet ? ' · '.$placesSet.' with their own status' : '' }})<small class="font-normal text-slate-500">· only when a place has its own status (like Tarlac). Empty = uses the main row.</small></button>
                             </div>
                         </div>
 

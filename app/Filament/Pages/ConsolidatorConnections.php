@@ -8,6 +8,7 @@ use App\Models\Connectors\ConnectorMapping;
 use App\Models\Consolidator;
 use App\Support\Connectors\Client;
 use App\Support\Connectors\Codes;
+use App\Support\Connectors\ConnectorError;
 use App\Support\Connectors\Recorder;
 use App\Support\Connectors\Rules;
 use App\Support\Connectors\Sender;
@@ -69,6 +70,17 @@ class ConsolidatorConnections extends Page
     public ?string $selKey = null;
 
     public string $statusSearch = '';
+
+    /** Rows for each place (Tarlac, Bacolod…) are hidden until asked. */
+    public bool $showPlaces = false;
+
+    /** "Add our standard statuses" (board 85) */
+    public bool $stdOpen = false;
+
+    /** code => ours | theirs */
+    public array $stdChoice = [];
+
+    public ?string $stdGrant = null;
 
     /** @var array<string, bool> */
     public array $rules = [];
@@ -358,6 +370,144 @@ class ConsolidatorConnections extends Page
         $notify && Notification::make()->title($n ? "$n suggestions: check them, then Save" : 'No new suggestions')->info()->send();
     }
 
+    /** ✓ Accept all suggestions: fill the empty rows with the best match (saved with Save). */
+    public function acceptAll(): void
+    {
+        $this->suggestAll(false);
+        foreach ($this->draft as $k => $d) {
+            if (($d['tag'] ?? '') === 'Suggested') {
+                $this->draft[$k]['tag'] = 'Accepted';
+                $this->draftChanged = true;
+            }
+        }
+        $left = collect(Codes::rows())->whereNull('place')->reject(fn ($r) => isset($this->draft[$r['key']]))->count();
+        Notification::make()->title('Suggestions accepted')
+            ->body(($left ? "$left rows still need their status (or use ＋ Add our standard statuses). " : '').'Press Save mapping to keep them.')->success()->send();
+    }
+
+    public function togglePlaces(): void
+    {
+        $this->showPlaces = ! $this->showPlaces;
+    }
+
+    // ---------------------------------------------------------------- ＋ Add our standard statuses (board 85)
+
+    /**
+     * One row per event: the standard name, theirs that is exactly the same, or their
+     * similar one (used by default, so their customers keep seeing what they know).
+     *
+     * @return list<array{code: string, label: string, name: string, exact: ?array, similar: ?array, choice: string}>
+     */
+    public function standardRows(): array
+    {
+        $list = $this->theirStatuses();
+        $byName = collect($list)->keyBy(fn ($s) => mb_strtolower(trim($s['name'])));
+        $rows = [];
+        foreach (Codes::STANDARD as $code => $name) {
+            if ($code === 'ds.delivered_damaged' || $code === 'ds.back_to_hub.3') {
+                continue; // follow Delivered and back to hub (2nd)
+            }
+            $exact = $byName->get(mb_strtolower($name));
+            $now = $this->draft[$code] ?? null;
+            $similar = $exact ? null : (($now && $now['id'] && ! $now['skip']) ? ['id' => $now['id'], 'name' => $now['name']] : (Suggest::for($code, null, $list)[0] ?? null));
+            $choice = $exact ? 'exact' : ($this->stdChoice[$code] ?? ($similar ? 'theirs' : 'ours'));
+            $rows[] = ['code' => $code, 'label' => Codes::label($code), 'name' => $name, 'exact' => $exact, 'similar' => $similar, 'choice' => $choice];
+        }
+
+        return $rows;
+    }
+
+    public function openStandard(): void
+    {
+        $this->stdOpen = ! $this->stdOpen;
+        $this->stdGrant = null;
+    }
+
+    public function setStd(string $code, string $choice): void
+    {
+        if (isset(Codes::STANDARD[$code]) && in_array($choice, ['ours', 'theirs'], true)) {
+            $this->stdChoice[$code] = $choice;
+        }
+    }
+
+    public function addStandard(): void
+    {
+        $link = $this->link();
+        if (! $link?->isPaired() || ! $link->isPush()) {
+            Notification::make()->title('Needs a paired connector in push mode')->danger()->send();
+
+            return;
+        }
+        $rows = $this->standardRows();
+        $send = collect($rows)->where('choice', 'ours')->map(fn ($r) => ['name' => $r['name'], 'key' => $r['code']])->unique('name')->values()->all();
+        $ids = [];
+        $off = [];
+        if ($send) {
+            try {
+                $res = (new Client($link))->send('POST', '/api/v1/statuses', [
+                    'statuses' => $send, 'by' => array_filter(['name' => Auth::user()?->full_name, 'role' => Auth::user() ? Recorder::role(Auth::user()) : null]),
+                ]);
+            } catch (ConnectorError $e) {
+                if ($e->getCode() === 404) {
+                    Notification::make()->title('Update their connector first')->body('Their connector is older than 2.6 (C9) and cannot add statuses yet. Nothing was changed.')->warning()->persistent()->send();
+                } elseif ($e->getCode() === 403) {
+                    $this->stdGrant = (string) ($e->answer['grant'] ?? '');
+                    Notification::make()->title('Their connector may not add statuses yet')->body($e->getMessage())->warning()->send();
+                } else {
+                    Notification::make()->title('Not added')->body($e->getMessage())->danger()->send();
+                }
+
+                return;
+            } catch (Throwable $e) {
+                Notification::make()->title('Not added')->body($e->getMessage())->danger()->send();
+
+                return;
+            }
+            foreach ($res['statuses'] ?? [] as $s) {
+                if (($s['result'] ?? '') === 'exists_off') {
+                    $off[] = '#'.$s['id'].' '.$s['name'];
+                } else {
+                    $ids[mb_strtolower($s['name'])] = ['id' => (int) $s['id'], 'name' => $s['name'], 'added' => ($s['result'] ?? '') === 'added'];
+                }
+            }
+        }
+        try {
+            Sender::refreshStatuses($link);
+        } catch (Throwable) {
+            // the ids from the answer are enough
+        }
+
+        // fill the mapping: ours, theirs or exactly the same
+        $added = 0;
+        foreach ($rows as $r) {
+            $pick = match ($r['choice']) {
+                'exact' => $r['exact'],
+                'theirs' => $r['similar'],
+                default => $ids[mb_strtolower($r['name'])] ?? null,
+            };
+            if (! $pick) {
+                continue;
+            }
+            $added += ($pick['added'] ?? false) ? 1 : 0;
+            $codes = match ($r['code']) {
+                'ds.delivered' => ['ds.delivered', 'ds.delivered_damaged'],
+                'ds.back_to_hub.2' => ['ds.back_to_hub.2', 'ds.back_to_hub.3'],
+                default => [$r['code']],
+            };
+            foreach ($codes as $c) {
+                $this->draft[$c] = ['id' => (int) $pick['id'], 'name' => $pick['name'], 'skip' => false, 'tag' => 'Standard'];
+            }
+        }
+        $this->draftChanged = true;
+        $this->stdOpen = false;
+        $this->stdGrant = null;
+        $this->saveMapping();
+        $n = collect($ids)->where('added', true)->count();
+        Notification::make()->title($n ? "Added $n statuses in their CMS and mapped everything" : 'Mapped to their statuses (nothing new was needed)')
+            ->body($off ? 'Turned off in their CMS, so not used: '.implode(', ', $off).'. Turn it on there, or pick another.' : 'Their old statuses and the old rows of every box were not changed.')
+            ->success()->persistent()->send();
+    }
+
     public function clearAll(): void
     {
         $this->draft = [];
@@ -482,6 +632,7 @@ class ConsolidatorConnections extends Page
             if (! collect(Codes::rows())->contains('key', $this->selKey)) {
                 $this->selKey = $e->code;
             }
+            $this->showPlaces = $this->showPlaces || $this->selKey !== $e->code;
         } elseif ($e->state === 'saved' && ! $e->corrects && ! $e->undone_by) {
             $u = Recorder::undo($e, Auth::user(), 'Undone in Outbox by '.Auth::user()?->full_name);
             Notification::make()->title($u ? 'Undo made: it goes first' : 'Nothing to undo')->success()->send();
@@ -540,9 +691,14 @@ class ConsolidatorConnections extends Page
             $d = $this->draft[$r['key']] ?? null;
 
             return $r + ['their' => $d ? ($d['skip'] ? 'Don\'t send' : '#'.$d['id'].' '.$d['name']) : null,
-                'tag' => $d['tag'] ?? ($r['place'] ? 'Uses "any place"' : 'Needs mapping'), 'skip' => $d['skip'] ?? false, 'set' => (bool) $d];
+                'tag' => $d['tag'] ?? ($r['place'] ? 'Uses "any place"' : ($r['code'] === 'ds.correction' ? 'Optional' : 'Needs mapping')), 'skip' => $d['skip'] ?? false, 'set' => (bool) $d];
         });
         $sel = $this->selKey ? $rows->firstWhere('key', $this->selKey) : null;
+        $placeCount = $rows->whereNotNull('place')->count();
+        $placesSet = $rows->whereNotNull('place')->where('set', true)->count();
+        if (! $this->showPlaces) {
+            $rows = $rows->filter(fn ($r) => $r['place'] === null || $r['set'] || $r['key'] === $this->selKey);
+        }
         $q = Str::lower(trim($this->statusSearch));
 
         return [
@@ -552,7 +708,9 @@ class ConsolidatorConnections extends Page
             'statuses' => collect($list)->filter(fn ($s) => $q === '' || str_contains(Str::lower($s['name']), $q) || (string) $s['id'] === $q),
             'nMapped' => collect($this->draft)->filter(fn ($d) => $d['id'] && ! $d['skip'])->count(),
             'nSkip' => collect($this->draft)->where('skip', true)->count(),
-            'nEmpty' => $rows->whereNull('place')->where('set', false)->count(),
+            'nEmpty' => $rows->whereNull('place')->where('set', false)->where('code', '!=', 'ds.correction')->count(),
+            'placeCount' => $placeCount, 'placesSet' => $placesSet,
+            'std' => $this->stdOpen ? $this->standardRows() : [],
         ];
     }
 
