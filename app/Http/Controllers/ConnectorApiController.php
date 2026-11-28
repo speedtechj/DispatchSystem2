@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\Connectors\ConnectorEvent;
 use App\Models\Connectors\ConnectorLink;
+use App\Support\Ai\Ai;
+use App\Support\Ai\AiUnavailable;
 use App\Support\Connectors\Rules;
 use App\Support\Connectors\Sender;
 use App\Support\Connectors\Signer;
@@ -68,8 +70,43 @@ class ConnectorApiController extends Controller
         return $this->answer($request, [
             'latest_version' => (string) config('connectors.latest_version', '2.5.0'),
             'min_version' => (string) config('connectors.min_version', '2.0.0'),
-            'features' => ['explain' => false],
+            'features' => ['explain' => Ai::switchedOn('conn_explain') && Ai::enabled('conn_explain')],
         ]);
+    }
+
+    /**
+     * POST /api/connector/v1/explain  {topic: health|audit, text, version, location_code}
+     * ✨ Explain on the connector (Settings → AI → Connector: Explain): plain words, with
+     * Dispatch System's key and monthly limit. At most 30 answers an hour per connector.
+     */
+    public function explain(Request $request): Response
+    {
+        $link = $this->check($request);
+        if ($link instanceof Response) {
+            return $link;
+        }
+        $topic = in_array($request->json('topic'), ['health', 'audit'], true) ? $request->json('topic') : 'health';
+        $text = mb_substr(trim((string) $request->json('text')), 0, 4000);
+        if ($text === '') {
+            return $this->answer($request, ['message' => 'Nothing to explain.']);
+        }
+        if (! Ai::enabled('conn_explain')) {
+            return $this->answer($request, ['message' => 'Explain is switched off in Dispatch System (Settings → AI), or its monthly AI limit is reached.']);
+        }
+        $key = 'conn.explain.'.$link->id.'.'.now()->format('YmdH');
+        \Illuminate\Support\Facades\Cache::add($key, 0, now()->addHour());
+        if (\Illuminate\Support\Facades\Cache::increment($key) > 30) {
+            return $this->answer($request, ['message' => 'Too many questions this hour. Try again later.']);
+        }
+        try {
+            $answer = Ai::text('conn_explain', 'You help the IT person of a balikbayan box consolidator. Their "Dispatch connector" receives box statuses from Dispatch System and writes them in their CMS database. '
+                .'Explain the '.($topic === 'audit' ? 'audit log lines' : 'health page').' below in short plain words (at most 6 short sentences or bullets): what is fine, what is wrong, and the exact next step. '
+                .'Never ask for passwords. Do not invent facts.', $text, 'fast', 450);
+        } catch (AiUnavailable $e) {
+            return $this->answer($request, ['message' => $e->getMessage()]);
+        }
+
+        return $this->answer($request, ['answer' => $answer]);
     }
 
     /** The key id, a fresh time and a valid signature, or a refusal. */

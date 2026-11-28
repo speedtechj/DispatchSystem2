@@ -6,6 +6,8 @@ use App\Models\Connectors\ConnectorEvent;
 use App\Models\Connectors\ConnectorLink;
 use App\Models\Connectors\ConnectorMapping;
 use App\Models\Consolidator;
+use App\Support\Ai\Ai;
+use App\Support\Ai\AiUnavailable;
 use App\Support\Connectors\Backfill;
 use App\Support\Connectors\Client;
 use App\Support\Connectors\Codes;
@@ -95,6 +97,9 @@ class ConsolidatorConnections extends Page
     public bool $bfDelivered = false;
 
     public ?array $bfPreview = null;
+
+    /** Outbox "Why?" answers: event id => text */
+    public array $why = [];
 
     /** @var array<string, bool> */
     public array $rules = [];
@@ -399,6 +404,41 @@ class ConsolidatorConnections extends Page
             ->body(($left ? "$left rows still need their status (or use ＋ Add our standard statuses). " : '').'Press Save mapping to keep them.')->success()->send();
     }
 
+    /** ✨ Suggest with AI (Settings → AI → Status mapping with AI): fills the empty main rows. */
+    public function aiSuggest(): void
+    {
+        $list = $this->theirStatuses();
+        $empty = collect(Codes::rows())->whereNull('place')->reject(fn ($r) => isset($this->draft[$r['key']]) || $r['code'] === 'ds.correction');
+        if ($empty->isEmpty() || ! $list) {
+            Notification::make()->title('Nothing to suggest: every main row has a status')->info()->send();
+
+            return;
+        }
+        $ours = $empty->map(fn ($r) => $r['code'].' = '.$r['label'])->implode("\n");
+        $theirs = collect($list)->map(fn ($s) => '#'.$s['id'].' '.$s['name'])->implode("\n");
+        try {
+            $ans = Ai::json('conn_map', 'You map the events of a delivery company (Dispatch System, in the Philippines) to the tracking statuses of a balikbayan box consolidator. '
+                .'For each of our events pick the ONE status of theirs that their customer should see, or null when none fits. Use only the ids given. '
+                .'A 2nd or 3rd try must only get a status that says 2nd or 3rd. Answer as {"ds.code": id or null}.',
+                "Our events:\n$ours\n\nTheir statuses (Philippines, active):\n$theirs", 'fast', 800);
+        } catch (AiUnavailable $e) {
+            Notification::make()->title('AI not available')->body($e->getMessage())->warning()->send();
+
+            return;
+        }
+        $names = $this->theirNames();
+        $n = 0;
+        foreach ($empty as $r) {
+            $id = $ans[$r['code']] ?? null;
+            if (is_numeric($id) && isset($names[(int) $id])) {
+                $this->draft[$r['key']] = ['id' => (int) $id, 'name' => $names[(int) $id], 'skip' => false, 'tag' => 'AI'];
+                $n++;
+            }
+        }
+        $this->draftChanged = $this->draftChanged || $n > 0;
+        Notification::make()->title($n ? "AI filled $n rows: check them, then Save" : 'The AI found nothing that fits')->success()->send();
+    }
+
     public function togglePlaces(): void
     {
         $this->showPlaces = ! $this->showPlaces;
@@ -631,6 +671,30 @@ class ConsolidatorConnections extends Page
         }
     }
 
+    /** "Why?" on a waiting, refused or not-found status (Settings → AI → Outbox: why is it waiting?). */
+    public function askWhy(int $id): void
+    {
+        $link = $this->link();
+        $e = ConnectorEvent::query()->where('connector_link_id', $link?->id)->find($id);
+        if (! $e) {
+            return;
+        }
+        $facts = [
+            'status' => $e->label, 'box' => $e->invoice, 'state' => $e->state, 'connector_answer' => $e->message, 'tries' => $e->tries,
+            'made' => $e->created_at?->toDateTimeString(), 'sends_at' => Sender::sendsAt($e)?->toDateTimeString(), 'happened_at' => $e->happened_at?->toDateTimeString(),
+            'connector' => ['state' => $link->state, 'last_error' => $link->last_error, 'last_seen' => $link->last_seen_at?->diffForHumans(), 'mode' => $link->mode],
+            'mapped' => ConnectorMapping::query()->where('connector_link_id', $link->id)->whereIn('key', [Codes::key($e->code, $e->place), $e->code])->exists(),
+            'backfill' => $e->priority === Backfill::PRIORITY, 'manual' => $e->manual,
+        ];
+        try {
+            $this->why[$id] = Ai::text('conn_why', 'You explain to office staff of a delivery company, in 2 or 3 short plain sentences, why a box status sent to a consolidator\'s connector is waiting, refused or not found, and what to do next. '
+                .'Facts: a 10-minute hold lets mistakes be cancelled; "not_found" means the box is not in their CMS yet and the connector tries again every 10 minutes for 7 days; "needs_mapping" means map the status in Status mapping; '
+                .'a paused or offline connector is tried again by itself; nothing is lost. Do not invent facts.', json_encode($facts, JSON_UNESCAPED_SLASHES), 'fast', 250);
+        } catch (AiUnavailable $ex) {
+            $this->why[$id] = $ex->getMessage();
+        }
+    }
+
     public function rowAction(int $id): void
     {
         $e = ConnectorEvent::query()->where('connector_link_id', $this->link()?->id)->find($id);
@@ -735,6 +799,8 @@ class ConsolidatorConnections extends Page
             'cur' => $con,
             'link' => $link,
             'needs' => $link ? (int) ($counts->get($link->id)->map ?? 0) : 0,
+            'aiMap' => Ai::switchedOn('conn_map'),
+            'aiWhy' => Ai::switchedOn('conn_why'),
             'scheduleOk' => (int) \Illuminate\Support\Facades\Cache::get('connectors.schedule.seen', 0) > time() - 600,
         ] + match ($this->tab) {
             'map' => $this->mapView($link),

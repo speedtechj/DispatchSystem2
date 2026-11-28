@@ -82,6 +82,7 @@ Route::middleware(['throttle:240,1'])->prefix('api/connector/v1')->controller(Ap
         Route::get('/events', 'events')->name('connector-api.events');
         Route::post('/results', 'results')->name('connector-api.results');
         Route::get('/hello', 'hello')->name('connector-api.hello');
+        Route::post('/explain', 'explain')->name('connector-api.explain');
     });
 
 // Fuel › VAT: the month's fuel receipts for the accountant (signed-in staff, their own hub).

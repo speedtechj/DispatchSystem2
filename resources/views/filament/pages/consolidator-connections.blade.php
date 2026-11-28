@@ -163,6 +163,7 @@
                         <span class="ml-auto flex flex-wrap gap-2">
                             <button type="button" wire:click="openStandard" class="h-9 rounded-lg bg-[#0e2433] px-3.5 text-[13px] font-extrabold text-white">＋ Add our standard statuses</button>
                             <x-filament::button color="gray" size="sm" wire:click="acceptAll">✓ Accept all suggestions</x-filament::button>
+                            @if ($aiMap)<x-filament::button color="gray" size="sm" wire:click="aiSuggest" wire:loading.attr="disabled">✨ Suggest with AI</x-filament::button>@endif
                             <x-filament::button color="gray" size="sm" wire:click="refreshStatuses">↻ Read their statuses</x-filament::button>
                             <x-filament::button color="gray" size="sm" wire:click="clearAll" wire:confirm="Clear the whole mapping? Nothing is saved until you press Save.">Clear all</x-filament::button>
                             <x-filament::button size="sm" wire:click="saveMapping">Save mapping{{ $draftChanged ? ' •' : '' }}</x-filament::button>
@@ -227,6 +228,7 @@
                                                 'bg-[#fff6d6] text-[#8a6400]' => $r['tag'] === 'Suggested',
                                                 'bg-[#17895e]/12 text-[#17895e]' => $r['tag'] === 'Saved' || $r['tag'] === 'On their side',
                                                 'bg-[#e8f1fb] text-[#2f6fb0]' => in_array($r['tag'], ['Changed', 'Accepted', 'Standard'], true),
+                                                'bg-[#7c5cff]/12 text-[#5b3fd6]' => $r['tag'] === 'AI',
                                                 'bg-[#d64236]/12 text-[#d64236]' => $r['tag'] === 'Needs mapping',
                                                 'bg-slate-100 text-slate-500' => $r['tag'] === 'Optional',
                                                 ])>{{ $r['tag'] }}</span>@endif</span>
@@ -297,7 +299,7 @@
                     </div>
                     <div class="overflow-x-auto rounded-xl ring-1 ring-slate-200 dark:ring-white/10">
                         <div class="min-w-[820px]">
-                            <div class="grid grid-cols-[70px_82px_1.5fr_1.15fr_1fr_1.3fr_78px] bg-[#f6f8fa] px-4 py-2.5 text-[12px] font-bold text-slate-500 dark:bg-white/5"><span>Made</span><span>Box</span><span>Status → their status</span><span>Who · where</span><span>State</span><span>Answer from the connector</span><span></span></div>
+                            <div class="grid grid-cols-[70px_82px_1.5fr_1.15fr_1fr_1.3fr_128px] bg-[#f6f8fa] px-4 py-2.5 text-[12px] font-bold text-slate-500 dark:bg-white/5"><span>Made</span><span>Box</span><span>Status → their status</span><span>Who · where</span><span>State</span><span>Answer from the connector</span><span></span></div>
                             @forelse ($rows as $r)
                                 @php([$stT, $stC] = $evCls[$r['state']] ?? [$r['state'], 'bg-slate-100 text-slate-500'])
                                 @php($act = match (true) {
@@ -307,7 +309,7 @@
                                     in_array($r['state'], ['failed', 'retry', 'busy', 'not_found', 'refused'], true) => ['Resend', 'bg-white ring-1 ring-slate-200'],
                                     default => null,
                                 })
-                                <div class="grid grid-cols-[70px_82px_1.5fr_1.15fr_1fr_1.3fr_78px] items-center gap-2 border-t border-slate-100 px-4 py-2.5 text-[13px] dark:border-white/5" wire:key="ev-{{ $r['id'] }}">
+                                <div class="grid grid-cols-[70px_82px_1.5fr_1.15fr_1fr_1.3fr_128px] items-center gap-2 border-t border-slate-100 px-4 py-2.5 text-[13px] dark:border-white/5" wire:key="ev-{{ $r['id'] }}">
                                     <span class="text-slate-500">{{ $r['at']->isToday() ? $r['at']->format('g:i A') : $r['at']->format('M j g:i A') }}</span>
                                     <b class="font-mono">{{ $r['box'] }}</b>
                                     <span class="flex flex-col"><b>{{ $r['prio'] ? '⚡ ' : '' }}{{ $r['ev'] }}</b><small class="text-[12px] text-slate-500">{{ $r['their'] }}</small></span>
@@ -315,8 +317,11 @@
                                     <span class="flex flex-col gap-0.5"><span class="w-fit rounded-full px-2.5 py-0.5 text-[11.5px] font-extrabold {{ $stC }}">{{ $r['undone'] ? 'Undone' : $stT }}</span>
                                         @if ($r['sends'])<small class="text-[11.5px] text-slate-500">sends {{ $r['sends']->format('g:i A') }}</small>@endif</span>
                                     <span class="line-clamp-2 text-[12.5px] text-slate-600" title="{{ $r['msg'] }}">{{ $r['msg'] ?: ($r['row'] ? 'row '.$r['row'] : '—') }}{{ $r['ms'] ? ' · '.number_format($r['ms'] / 1000, 1).' s' : '' }}</span>
-                                    <span class="flex justify-end">@if ($act)<button type="button" wire:click="rowAction({{ $r['id'] }})" @if ($act[0] === 'Undo') wire:confirm="Undo this status in their CMS? The connector removes its own row and the box goes back to its last status." @endif class="h-8 rounded-lg px-2.5 text-[12px] font-bold {{ $act[1] }}">{{ $act[0] }}</button>@endif</span>
+                                    <span class="flex justify-end gap-1.5">@if ($aiWhy && ! in_array($r['state'], ['saved', 'cancelled', 'skipped'], true))<button type="button" wire:click="askWhy({{ $r['id'] }})" class="h-8 rounded-lg bg-[#7c5cff]/10 px-2.5 text-[12px] font-bold text-[#5b3fd6]">Why?</button>@endif @if ($act)<button type="button" wire:click="rowAction({{ $r['id'] }})" @if ($act[0] === 'Undo') wire:confirm="Undo this status in their CMS? The connector removes its own row and the box goes back to its last status." @endif class="h-8 rounded-lg px-2.5 text-[12px] font-bold {{ $act[1] }}">{{ $act[0] }}</button>@endif</span>
                                 </div>
+                                @if (isset($why[$r['id']]))
+                                    <div class="border-t border-slate-100 bg-[#faf8ff] px-4 py-2.5 text-[13px] text-[#3f2d99] dark:border-white/5 dark:bg-white/5" wire:key="why-{{ $r['id'] }}">✨ {{ $why[$r['id']] }}</div>
+                                @endif
                             @empty
                                 <p class="border-t border-slate-100 px-4 py-6 text-[13.5px] text-slate-500">Nothing here in the last 7 days.</p>
                             @endforelse

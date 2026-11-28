@@ -52,6 +52,9 @@ class ManualSend
      */
     public static function scope(User $u, string $panel): ?array
     {
+        if ($panel === 'admin') {
+            return null; // the Admin panel sees every box, whatever hub the account is linked to
+        }
         $hub = $u->logistichub_id ? Logistichub::query()->find($u->logistichub_id) : null;
         if ($panel === 'company' || $hub?->is_company) {
             return ['type' => 'hub', 'id' => (int) ($hub?->id ?? -1)];

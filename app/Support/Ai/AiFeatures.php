@@ -24,6 +24,9 @@ class AiFeatures
         'fuel_receipts' => ['Read fuel receipts', 'In the Driver app, reads the fuel receipt photo (station, diesel or gasoline, liters, price, total, VAT, TIN) and the odometer photo, so the driver does not type them.', 'Driver app · Fuel', true],
         'box_sizes' => ['Box sizes: same box, different spelling', 'In Settings → Box sizes, finds box types on the manifests that are the same box written differently ("Bulilit" and "Small", "X-LARGE" and "XL") so you can join them.', 'Admin', true],
         'help_ask' => ['Help answers', 'In the Help guide, staff and drivers ask in their own words (English, Tagalog or Taglish) and get a short answer taken only from the guides, with the right guide to open.', 'Admin · Warehouse · Partner hub · Scan app · Driver app', true],
+        'conn_map' => ['Status mapping with AI', 'In Settings → Consolidator connections → Status mapping, "✨ Suggest with AI" reads the consolidator\'s own status names and picks the best one for each of our events. You still check them and press Save.', 'Admin', true],
+        'conn_why' => ['Outbox: why is it waiting?', 'In the Outbox, "Why?" on a status that waits, was refused or was not found explains in plain words what happened and what to do next.', 'Admin', true],
+        'conn_explain' => ['Connector: Explain', 'On a consolidator\'s connector, ✨ Explain on its Health page and Audit log answers in plain words, with this key and this monthly limit (their staff never see the key). Connectors learn it at their next hourly hello.', 'Consolidator connectors', true],
         'customer_chat' => ['Customer chat', 'A public page where receivers type their box number and ask questions. Answers come from tracking; anything else goes to staff.', 'Receivers · Admin · Partner hub', true],
     ];
 
