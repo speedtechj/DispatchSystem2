@@ -19,6 +19,15 @@ Artisan::command('photos:work {--seconds=50}', function () {
     $n && $this->info($n.' photos moved or copied.');
 })->purpose('Settings → Photo storage: go on with moves and copies (the scheduler runs it every minute)');
 
+Artisan::command('connectors:send {--seconds=50}', function () {
+    if (! \App\Support\Connectors\Recorder::ready()) {
+        return;
+    }
+    \Illuminate\Support\Facades\Cache::put('connectors.schedule.seen', time(), 3600);
+    $r = \App\Support\Connectors\Sender::run((int) $this->option('seconds'));
+    ($r['sent'] || $r['released']) && $this->info("{$r['sent']} statuses sent ({$r['saved']} saved), {$r['released']} out of the hold.");
+})->purpose('Settings → Consolidator connections: send the Outbox to the connectors (the scheduler runs it every minute)');
+
 Schedule::command('photos:prune')->dailyAt('02:30');
 Schedule::command('photos:work')->everyMinute()->withoutOverlapping(10);
 Schedule::command('ai:work')->everyFifteenMinutes()->withoutOverlapping();
@@ -27,3 +36,4 @@ Schedule::command('track:check')->everyFiveMinutes()->withoutOverlapping();
 Schedule::command('sms:work')->everyFiveMinutes()->withoutOverlapping();
 Schedule::command('track:summary')->dailyAt('18:00');
 Schedule::command('photos:shrink')->everyTenMinutes()->withoutOverlapping();
+Schedule::command('connectors:send')->everyMinute()->withoutOverlapping(10);

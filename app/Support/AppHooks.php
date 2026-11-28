@@ -78,6 +78,9 @@ class AppHooks
         });
         DeliveryAttempt::created(fn ($a) => $sms(fn () => SmsEvents::notDelivered($a)));
 
+        // Part 47: what happens here becomes a status in the Outbox for the consolidator's connector.
+        \App\Support\Connectors\Hooks::register();
+
         // Dashboard box counts are kept 60 seconds; forget them when boxes change.
         Tripinvoice::saved(fn () => HubBoxes::forget());
         Tripinvoice::deleted(fn () => HubBoxes::forget());

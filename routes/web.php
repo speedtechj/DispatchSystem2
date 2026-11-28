@@ -75,6 +75,15 @@ Route::middleware(['throttle:600,1'])->match(['get', 'post'], '/track/in/{token}
     ->withoutMiddleware([ValidateCsrfToken::class, VerifyCsrfToken::class, 'Illuminate\Foundation\Http\Middleware\PreventRequestForgery'])
     ->name('track.tracker');
 
+// Part 47 · consolidator connectors call us (pull mode, hello). Signed with the pairing secret, no session.
+Route::middleware(['throttle:240,1'])->prefix('api/connector/v1')->controller(App\Http\Controllers\ConnectorApiController::class)
+    ->withoutMiddleware([ValidateCsrfToken::class, VerifyCsrfToken::class, 'Illuminate\Foundation\Http\Middleware\PreventRequestForgery'])
+    ->group(function () {
+        Route::get('/events', 'events')->name('connector-api.events');
+        Route::post('/results', 'results')->name('connector-api.results');
+        Route::get('/hello', 'hello')->name('connector-api.hello');
+    });
+
 // Fuel › VAT: the month's fuel receipts for the accountant (signed-in staff, their own hub).
 Route::get('/fuel/vat-export', [FuelController::class, 'vatExport'])->middleware(['web', 'auth'])->name('fuel.vat-export');
 
