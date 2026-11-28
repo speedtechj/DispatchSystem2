@@ -6,6 +6,7 @@ use App\Models\Connectors\ConnectorEvent;
 use App\Models\Connectors\ConnectorLink;
 use App\Models\Connectors\ConnectorMapping;
 use App\Models\Consolidator;
+use App\Support\Connectors\Backfill;
 use App\Support\Connectors\Client;
 use App\Support\Connectors\Codes;
 use App\Support\Connectors\ConnectorError;
@@ -81,6 +82,19 @@ class ConsolidatorConnections extends Page
     public array $stdChoice = [];
 
     public ?string $stdGrant = null;
+
+    /** Backfill (board 79, C): way · container · dates */
+    public string $bfMode = 'way';
+
+    public string $bfContainer = '';
+
+    public string $bfFrom = '';
+
+    public string $bfTo = '';
+
+    public bool $bfDelivered = false;
+
+    public ?array $bfPreview = null;
 
     /** @var array<string, bool> */
     public array $rules = [];
@@ -642,6 +656,51 @@ class ConsolidatorConnections extends Page
         }
     }
 
+    // ---------------------------------------------------------------- Backfill (board 79, C)
+
+    public function bfPick(string $mode): void
+    {
+        $this->bfMode = in_array($mode, ['way', 'container', 'dates'], true) ? $mode : 'way';
+        $this->bfPreview = null;
+    }
+
+    public function previewBackfill(): void
+    {
+        $link = $this->link();
+        if (! $link?->isPaired()) {
+            return;
+        }
+        if ($this->bfMode === 'container' && trim($this->bfContainer) === '') {
+            $this->addError('bfContainer', 'Type the container number.');
+
+            return;
+        }
+        $this->bfPreview = Backfill::preview($link, $this->bfMode, $this->bfContainer, $this->bfFrom ?: null, $this->bfTo ?: null, $this->bfDelivered);
+    }
+
+    public function startBackfill(): void
+    {
+        $link = $this->link();
+        if (! $link?->isPaired()) {
+            return;
+        }
+        $n = Backfill::start($link, $this->bfMode, $this->bfContainer, $this->bfFrom ?: null, $this->bfTo ?: null, $this->bfDelivered);
+        $this->bfPreview = null;
+        Notification::make()->title($n ? "Backfill started: $n statuses" : 'Nothing to send: their history is already there')
+            ->body($n ? 'Sent slowly ('.Backfill::PER_MINUTE.' a minute) after the live statuses, oldest first, with their real dates.'.(Rules::on('night') ? ' Only at night (10 PM – 5 AM).' : '') : null)
+            ->success()->send();
+    }
+
+    public function cancelBackfill(): void
+    {
+        $link = $this->link();
+        if ($link) {
+            $n = ConnectorEvent::query()->where('connector_link_id', $link->id)->where('priority', Backfill::PRIORITY)->whereIn('state', ['ready', 'retry', 'busy'])
+                ->update(['state' => 'cancelled', 'message' => 'Backfill stopped', 'updated_at' => now()]);
+            Notification::make()->title("Backfill stopped: $n statuses will not be sent")->success()->send();
+        }
+    }
+
     // ---------------------------------------------------------------- view
 
     protected function getViewData(): array
@@ -717,7 +776,7 @@ class ConsolidatorConnections extends Page
     protected function outboxView(?ConnectorLink $link): array
     {
         if (! $link) {
-            return ['rows' => collect(), 'filters' => []];
+            return ['rows' => collect(), 'filters' => [], 'bfWaiting' => 0];
         }
         $base = ConnectorEvent::query()->where('connector_link_id', $link->id)->where('created_at', '>=', now()->subDays(7));
         $groups = [
@@ -741,6 +800,7 @@ class ConsolidatorConnections extends Page
         $names = $this->theirNames();
 
         return [
+            'bfWaiting' => Backfill::waiting($link),
             'filters' => $filters->values(),
             'rows' => $rows->map(fn (ConnectorEvent $e) => [
                 'id' => $e->id, 'at' => $e->created_at, 'box' => $e->invoice, 'ev' => ($e->corrects ? 'Undo → ' : '').$e->label,

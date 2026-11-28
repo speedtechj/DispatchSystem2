@@ -323,6 +323,40 @@
                         </div>
                     </div>
                     <small class="text-[12.5px] text-slate-500">Each status has its own ID, so sending it twice never makes two rows. Order: oldest first; with "Delivered and undo first" on, those (⚡) jump the line. Last 7 days, at most 150 rows.</small>
+
+                    {{-- C · Backfill (board 79) --}}
+                    <div class="mt-2 flex flex-col gap-4 rounded-xl bg-[#f6f8fa] p-5 ring-1 ring-slate-200 dark:bg-white/5 dark:ring-white/10">
+                        <span class="flex flex-wrap items-center gap-3"><b class="text-[15px]">Backfill: send the history of boxes already on the way</b><small class="text-[12.5px] text-slate-500">once, when a connector is new, so their tracking has no gaps</small>
+                            @if ($bfWaiting)
+                                <span class="ml-auto flex items-center gap-2"><span class="rounded-full bg-[#e8f1fb] px-3 py-1 text-[12.5px] font-extrabold text-[#2f6fb0]">{{ number_format($bfWaiting) }} backfill statuses waiting · about {{ max(1, (int) ceil($bfWaiting / \App\Support\Connectors\Backfill::PER_MINUTE)) }} min</span>
+                                    <x-filament::button color="gray" size="sm" wire:click="cancelBackfill" wire:confirm="Stop the backfill? The statuses not sent yet are cancelled (nothing already saved is changed).">Stop</x-filament::button></span>
+                            @endif
+                        </span>
+                        <div class="flex flex-wrap items-end gap-3">
+                            @foreach (['way' => ['Boxes on the way', 'unloaded, not delivered yet'], 'container' => ['One container', 'type the container no.'], 'dates' => ['Dates', 'boxes unloaded in the range']] as $k => [$t, $d])
+                                <button type="button" wire:click="bfPick('{{ $k }}')" @class(['flex flex-col rounded-xl px-4 py-2.5 text-left ring-1', 'bg-[#e8f1fb] ring-2 ring-[#0e2433]' => $bfMode === $k, 'bg-white ring-slate-200 dark:bg-white/5' => $bfMode !== $k])><b class="text-[13.5px]">{{ $t }}</b><small class="text-[12px] text-slate-500">{{ $d }}</small></button>
+                            @endforeach
+                            @if ($bfMode === 'container')
+                                <label class="flex flex-col gap-1"><small class="text-[12px] font-bold text-slate-500">Container</small><input type="text" wire:model="bfContainer" placeholder="MSKU 482 7716" class="h-10 w-48 rounded-lg border-0 bg-white px-3 font-mono text-[13.5px] ring-1 ring-slate-200 dark:bg-white/5"></label>
+                            @endif
+                            @if ($bfMode === 'dates')
+                                <label class="flex flex-col gap-1"><small class="text-[12px] font-bold text-slate-500">From</small><input type="date" wire:model="bfFrom" class="h-10 rounded-lg border-0 bg-white px-3 text-[13.5px] ring-1 ring-slate-200 dark:bg-white/5"></label>
+                                <label class="flex flex-col gap-1"><small class="text-[12px] font-bold text-slate-500">To</small><input type="date" wire:model="bfTo" class="h-10 rounded-lg border-0 bg-white px-3 text-[13.5px] ring-1 ring-slate-200 dark:bg-white/5"></label>
+                            @endif
+                            <label class="flex h-10 items-center gap-2 text-[13px]"><input type="checkbox" wire:model="bfDelivered" class="rounded"> Delivered boxes too</label>
+                            <x-filament::button wire:click="previewBackfill" color="gray">Preview</x-filament::button>
+                        </div>
+                        @error('bfContainer')<small class="text-[12.5px] text-[#d64236]">{{ $message }}</small>@enderror
+                        @if ($bfPreview)
+                            <div class="grid gap-3 sm:grid-cols-4">
+                                @foreach ([['Boxes', $bfPreview['boxes']], ['Statuses to send', $bfPreview['statuses']], ['Already sent before (left out)', $bfPreview['already']], ['Time at '.\App\Support\Connectors\Backfill::PER_MINUTE.' a minute', max(1, $bfPreview['minutes']).' min']] as [$t, $v])
+                                    <span class="flex flex-col rounded-xl bg-white p-3 ring-1 ring-slate-200 dark:bg-white/5"><small class="text-[12px] text-slate-500">{{ $t }}</small><b class="text-[18px]">{{ is_int($v) ? number_format($v) : $v }}</b></span>
+                                @endforeach
+                            </div>
+                            <span class="flex flex-wrap items-center gap-3"><span class="flex-1 text-[13px] text-slate-600">Sent slowly in the background with their real dates, oldest first, after the live statuses. Statuses their staff already typed the same day are skipped by the connector.{{ $rules['night'] ?? false ? ' Only at night (10 PM – 5 AM).' : '' }}</span>
+                                <button type="button" wire:click="startBackfill" @disabled(! $bfPreview['statuses']) class="h-10 rounded-xl bg-[#f6be00] px-4 text-[13.5px] font-extrabold text-[#0a1219] disabled:opacity-40">Start backfill</button></span>
+                        @endif
+                    </div>
                 @endif
             @endif
         </div>

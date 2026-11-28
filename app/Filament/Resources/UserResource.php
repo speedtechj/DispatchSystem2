@@ -114,6 +114,10 @@ class UserResource extends Resource
                     })
                     ->disabled(fn (Get $get) => People::panelCode((int) $get('panelcategory_id')) === 'drv')
                     ->default(false),
+                Toggle::make('can_send_status')->label('Send status manually')
+                    ->helperText('Part 47: may send a box status to the consolidator by hand (a missed scan). Admins always may; drivers never.')
+                    ->visible(fn (Get $get) => \Illuminate\Support\Facades\Schema::hasColumn('users', 'can_send_status') && People::panelCode((int) $get('panelcategory_id')) !== 'drv')
+                    ->default(false),
                 Select::make('roles')->label('Roles')->multiple()->relationship('roles', 'name')->preload(),
             ]),
 

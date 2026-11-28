@@ -42,7 +42,7 @@ class Sender
                         $r = static::sendBatch($link);
                         $out['sent'] += $r['sent'];
                         $out['saved'] += $r['saved'];
-                    } while ($r['sent'] === Rules::BATCH && ! $r['stop'] && microtime(true) < $stop);
+                    } while ($r['sent'] === Rules::BATCH && ! $r['stop'] && ! $r['backfill'] && microtime(true) < $stop); // backfill: one batch (200) a minute
                 }
                 if (! $link->last_results_at || $link->last_results_at->lt(now()->subMinutes(5))) {
                     $out['results'] += static::pollResults($link);
@@ -86,17 +86,18 @@ class Sender
     public static function waiting(ConnectorLink $link)
     {
         return ConnectorEvent::query()->where('connector_link_id', $link->id)->whereIn('state', ['ready', 'busy', 'retry'])
-            ->where(fn ($q) => $q->whereNull('next_try_at')->orWhere('next_try_at', '<=', now()));
+            ->where(fn ($q) => $q->whereNull('next_try_at')->orWhere('next_try_at', '<=', now()))
+            ->when(! Backfill::allowedNow(), fn ($q) => $q->where('priority', '<', Backfill::PRIORITY));
     }
 
     /**
-     * Send one batch. @return array{sent: int, saved: int, stop: bool, error: ?string}
+     * Send one batch. @return array{sent: int, saved: int, stop: bool, error: ?string, backfill: int}
      */
     public static function sendBatch(ConnectorLink $link): array
     {
         $batch = static::waiting($link)->orderBy('priority')->orderBy('id')->limit(Rules::BATCH)->get();
         if ($batch->isEmpty()) {
-            return ['sent' => 0, 'saved' => 0, 'stop' => true, 'error' => null];
+            return ['sent' => 0, 'saved' => 0, 'stop' => true, 'error' => null, 'backfill' => 0];
         }
 
         $events = $batch->map(fn (ConnectorEvent $e) => static::payload($e))->values()->all();
@@ -106,7 +107,7 @@ class Sender
         } catch (Throwable $e) {
             static::failed($link, $batch, $e->getMessage());
 
-            return ['sent' => 0, 'saved' => 0, 'stop' => true, 'error' => $e->getMessage()];
+            return ['sent' => 0, 'saved' => 0, 'stop' => true, 'error' => $e->getMessage(), 'backfill' => 0];
         }
         $ms = (int) round((microtime(true) - $start) * 1000);
 
@@ -115,7 +116,7 @@ class Sender
             ConnectorEvent::query()->whereKey($batch->modelKeys())->update(['next_try_at' => now()->addSeconds($wait), 'message' => 'Connector busy: sends again in '.$wait.' s', 'updated_at' => now()]);
             static::seen($link);
 
-            return ['sent' => 0, 'saved' => 0, 'stop' => true, 'error' => null];
+            return ['sent' => 0, 'saved' => 0, 'stop' => true, 'error' => null, 'backfill' => 0];
         }
 
         $by = collect($res->json('results') ?? [])->filter(fn ($r) => is_array($r) && filled($r['id'] ?? null))->keyBy('id');
@@ -132,7 +133,8 @@ class Sender
         }
         static::seen($link);
 
-        return ['sent' => $batch->count(), 'saved' => $saved, 'stop' => $by->contains(fn ($r) => ($r['result'] ?? '') === 'busy'), 'error' => null];
+        return ['sent' => $batch->count(), 'saved' => $saved, 'stop' => $by->contains(fn ($r) => ($r['result'] ?? '') === 'busy'), 'error' => null,
+            'backfill' => $batch->where('priority', Backfill::PRIORITY)->count()];
     }
 
     /** The event as it goes: Delivered becomes "Delivered · damaged" when the receiver signed for a damaged box. @return array<string, mixed> */
